@@ -79,7 +79,10 @@ def load_wikitext103(
 
     token_ids = tokenizer.encode(text)
     print(f"Loaded WikiText-103 {split}: {len(token_ids):,} tokens")
-    return TextDataset(token_ids, seq_len=seq_len), tokenizer
+    # Pad partial final chunks with the tokenizer's real pad id (GPT-2 id 0
+    # is a live "!" token; treating it as padding corrupts masking statistics).
+    chunk_pad_id = tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0
+    return TextDataset(token_ids, seq_len=seq_len, pad_id=chunk_pad_id), tokenizer
 
 
 def load_bookcorpus(tokenizer_name="gpt2", seq_len=512, data_dir="/kaggle/input/bookcorpus"):
@@ -106,7 +109,14 @@ def load_bookcorpus(tokenizer_name="gpt2", seq_len=512, data_dir="/kaggle/input/
         return load_wikitext103(tokenizer_name, seq_len, "train", data_dir)
 
 
-def make_dataloader(dataset, batch_size=64, num_workers=2, shuffle=True):
+def make_dataloader(
+    dataset,
+    batch_size=64,
+    num_workers=2,
+    shuffle=True,
+    worker_init_fn=None,
+    generator=None,
+):
     """Create DataLoader with standard settings."""
     return DataLoader(
         dataset,
@@ -115,6 +125,8 @@ def make_dataloader(dataset, batch_size=64, num_workers=2, shuffle=True):
         num_workers=num_workers,
         pin_memory=True,
         drop_last=True,
+        worker_init_fn=worker_init_fn,
+        generator=generator,
     )
 
 

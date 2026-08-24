@@ -23,13 +23,17 @@ class SpanMaskCollator:
         mask_ratio_start=None,
         mask_ratio_end=None,
         curriculum_steps=0,
+        pad_id=0,
     ):
         self.mask_ratio = mask_ratio
         self.span_length_range = span_length_range
         self.max_num_spans = max_num_spans
         self.mask_token_id = mask_token_id
-        self.mask_ratio_start = mask_ratio_start or mask_ratio
-        self.mask_ratio_end = mask_ratio_end or mask_ratio
+        self.pad_id = pad_id
+        # Explicit None checks (not `or`): explicit 0.0 start/end must win
+        # over the static mask_ratio fallback.
+        self.mask_ratio_start = mask_ratio_start if mask_ratio_start is not None else mask_ratio
+        self.mask_ratio_end = mask_ratio_end if mask_ratio_end is not None else mask_ratio
         self.curriculum_steps = curriculum_steps
         self._step = 0
 
@@ -85,7 +89,7 @@ class SpanMaskCollator:
 
         masks = []
         for i in range(B):
-            non_pad = (input_ids[i] != 0).sum().item()
+            non_pad = (input_ids[i] != self.pad_id).sum().item()
             mask = self.generate_mask(non_pad)
             full_mask = np.zeros(T, dtype=np.int32)
             full_mask[:non_pad] = mask
