@@ -16,7 +16,7 @@ setup
 
 ```
 pip install -r requirements.txt
-pip install -e .
+pip install -e ".[dev,eval]"   # dev: pytest/ruff · eval: sklearn/scipy/matplotlib
 ```
 
 python 3.9+, pytorch 2.0+. trains on wikitext-103 out of the box.
@@ -25,12 +25,25 @@ training
 --------
 
 ```
-python -m src.train --fname configs/small-100m.yaml
+# JEPA on WikiText-103 (~100M params)
+python -m src.train --fname config/scaling/small_100m.yaml
+
+# ablations: each toggles one mechanism against defaults.yaml
+python -m src.train --fname config/ablations/swip_on.yaml
+
+# baseline objectives share the same encoder/capacity
+python -m src.train --fname config/wikitext/mlm_wikitext_small.yaml
+python -m src.train --fname config/wikitext/data2vec_wikitext_train.yaml
 ```
 
-resume: set `meta.load_checkpoint: true` in the config. picks up from `checkpoint-latest.pth.tar`.
+configs live under `config/`:
+- `scaling/` — xsmall_30m, small_100m, base_140m, large_300m
+- `wikitext/`, `tinystories/`, `kaggle/` — dataset/model variants
+- `ablations/` — one-mechanism on/off sweeps (deep-merged over defaults.yaml)
 
-configs: `debug.yaml` (something like sanity), `small-100m.yaml` (almost 100M), `base-200m.yaml` (something aroud 140M, but i did it because of GPU efficiency), `large-350m.yaml` (almost 300M), `kaggle.yaml` (created for T4 in Kaggle).
+resume: set `meta.load_checkpoint: true` in the config. picks up from
+`<logging.folder>/checkpoint-latest.pth.tar`. override output dir with
+`--output_dir`; skip the defaults merge with `--no_defaults`.
 
 
 the differences between text-span jepa, data2vec,  and MLM are best understood by reading their respective compute_loss() functions.
