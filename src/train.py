@@ -651,7 +651,11 @@ def _get_all_trainable_params(model):
 
 def main(args):
     # ---- Config ----
-    seed = args.get("meta", {}).get("seed", 42)
+    meta_seed = args.get("meta", {}).get("seed")
+    top_seed = args.get("seed")
+    # Explicit None chain (no falsy-or): seed=0 must be honored; defaults.yaml
+    # documents top-level `seed`, code historically read only meta.seed.
+    seed = meta_seed if meta_seed is not None else (top_seed if top_seed is not None else 42)
     seed_everything(seed)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -692,8 +696,10 @@ def main(args):
             shuffle=False,
             worker_init_fn=lambda wid: worker_init_fn(wid, seed),
         )
-    except Exception:
-        logger.warning("No validation set found — training without validation")
+    except Exception as e:
+        logger.warning(
+            f"Validation unavailable ({type(e).__name__}: {e}) — training without validation"
+        )
         val_dataloader = None
 
     dataloader = make_dataloader(
@@ -713,6 +719,33 @@ def main(args):
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f"Trainable parameters: {trainable:,}")
 
+    # ── Transparency: mechanism loss terms not wired into optimization ──
+    # Audit 2026-08-24: CMC consistency is computed externally but never added
+    # to total_loss; GAC has no backward hook; WSR mode='gradient' receives a
+    # detached Q slice so Q.grad never populates. Warn once instead of failing
+    # silently (main() runs once per process).
+    if model_name == "text_span_jepa":
+        if getattr(model.config, "use_cmc", False):
+            logger.warning(
+                "CMC enabled: consistency loss is NOT added to total_loss — the second "
+                "forward only records overlap stats (wired integration pending)."
+            )
+        if getattr(model.config, "use_gac", False) and getattr(model.config, "lambda_gac", 0.0) > 0:
+            logger.warning(
+                "GAC enabled with lambda_gac>0: no per-dimension gradient hook exists in "
+                "the training loop — the loss term is inert."
+            )
+        if (
+            getattr(model.config, "use_wsr", False)
+            and getattr(model.config, "lambda_wsr", 0.0) > 0
+            and getattr(model.config, "wsr_mode", "gradient") == "gradient"
+        ):
+            logger.warning(
+                "WSR mode='gradient' gets a detached workspace slice "
+                "(jawp.workspace_Q.data); Q.grad never populates — wsr.py silently uses "
+                "its orthonormality-deviation proxy."
+            )
+
     # ---- Mask Collator ----
     # Pass mask curriculum params so mask ratio ramps up during training
     from src.masks.span import SpanMaskCollator
@@ -730,6 +763,8 @@ def main(args):
         mask_ratio_start=mask_ratio_start,
         mask_ratio_end=mask_ratio_end,
         curriculum_steps=curriculum_steps or 0,
+        # GPT-2 id 0 is a live "!" token; pad-aware masking needs the real id.
+        pad_id=tokenizer.pad_token_id if tokenizer.pad_token_id is not None else 0,
     )
 
     # ---- Optimizer + Schedulers ----
@@ -884,6 +919,9 @@ def main(args):
                     and hasattr(model, "cmc")
                     and model.cmc is not None
                     and model.cmc.should_compute(global_step)
+                    # Skip the wasted second forward unless a CMC loss weight is
+                    # actually configured (consistency term itself remains unwired).
+                    and getattr(model.config, "lambda_cmc", 0.0) > 0
                 ):
                     with torch.no_grad():
                         # Generate second mask for same input
