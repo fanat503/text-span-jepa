@@ -660,8 +660,7 @@ class GWP(MechanismBundle):
     s.t. I(f_exo; Z_W) > 0.
 
     Quick start (3 lines):
-        from src.models.mechanisms import GWP
-        gwp = G?WP.from_config(config)
+        gwp = GWP.from_config(config)
         z_out, info = gwp(z, z_target, mask, step=step)
         gwp.retract()
 

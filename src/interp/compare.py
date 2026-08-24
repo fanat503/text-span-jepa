@@ -193,7 +193,10 @@ class RepresentationComparator:
 
         # Token length feature (approximate via token ID magnitude)
         # Short tokens tend to have lower IDs in BPE
-        features["token_magnitude"] = input_ids.float() / input_ids.float().max()
+        _max_id = input_ids.float().max()
+        features["token_magnitude"] = (
+            input_ids.float() / _max_id if _max_id > 0 else torch.zeros_like(input_ids)
+        )
 
         # Position feature
         B, T = input_ids.shape

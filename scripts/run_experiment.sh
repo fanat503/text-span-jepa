@@ -13,7 +13,7 @@
 #   bash scripts/run_experiment.sh ablation
 #   bash scripts/run_experiment.sh index
 
-set -e
+set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 CKPT_DIR="${REPO_ROOT}/checkpoints"

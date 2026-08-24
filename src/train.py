@@ -887,6 +887,9 @@ def main(args):
                     current_step=global_step,
                     total_steps=total_steps,
                 )
+                # Snapshot the PRIMARY pass slot tensor for GAC before a CMC
+                # second forward re-stashes it (restored below the branch).
+                _gac_primary = getattr(model, "_gac_z", None)
 
                 # CMC: Cross-Mask Consistency — optional second forward pass
                 # When enabled, compute consistency loss between predictions
@@ -939,6 +942,10 @@ def main(args):
                     with torch.no_grad():
                         loss_dict["cmc_overlap_count"] = overlap.sum().item()
                         loss_dict["cmc_overlap_ratio"] = overlap.float().mean().item()
+                # Restore GAC's target to the primary pass: the bridge consumes
+                # DETACHED primary slots, so their gradients carry main-loss
+                # signal only — tau_grad semantics stay clean.
+                model._gac_z = _gac_primary
 
                 # Scale loss for gradient accumulation
                 scaled_loss = total_loss / grad_accum_steps
@@ -947,6 +954,7 @@ def main(args):
                 model_name == "text_span_jepa"
                 and getattr(model, "gac", None) is not None
                 and getattr(model.config, "lambda_gac", 0.0) > 0
+                and getattr(model, "_gac_z", None) is not None
             )
             # retain_graph: the GAC exploration backward traverses the same graph
             # as the main loss (live slot predictions); without GAC it frees.
@@ -967,13 +975,18 @@ def main(args):
                         .reshape(-1, z_ref.size(-1))
                         .norm(dim=0)
                     )
-                    loss_gac, gac_info = model.gac(z_ref, g_norms, step=global_step)
-                    if loss_gac.requires_grad:
-                        scaler.scale(loss_gac / grad_accum_steps).backward()
+                    if torch.isfinite(g_norms).all():
+                        loss_gac, gac_info = model.gac(z_ref, g_norms, step=global_step)
+                        if loss_gac.requires_grad:
+                            scaler.scale(loss_gac / grad_accum_steps).backward()
+                        loss_dict["loss_gac"] = float(loss_gac.item())
+                        for _k2, _v2 in gac_info.items():
+                            loss_dict[f"gac_{_k2}"] = _v2
+                    else:
+                        # Overflow micro-batch leaves inf/NaN scaled grads that
+                        # would poison the window via found_inf — skip.
+                        pass
                     z_ref.grad = None  # avoid feedback into next micro-batch read
-                    loss_dict["loss_gac"] = float(loss_gac.item())
-                    for _k2, _v2 in gac_info.items():
-                        loss_dict[f"gac_{_k2}"] = _v2
 
             # Only update weights every grad_accum_steps
             if (itr + 1) % grad_accum_steps == 0:
@@ -998,10 +1011,10 @@ def main(args):
                     _qgrad = model.jawp.workspace_Q.grad
                     if _qgrad is not None:
                         k_active_cap = int(model.jawp.active_k.item())
-                        _sc = scaler.get_scale() if use_bfloat16 else 1.0
-                        model.wsr.set_lagged_gradient(
-                            _qgrad[:, :k_active_cap] / (_sc * grad_accum_steps)
-                        )
+                        # scaler.step() has ALREADY unscaled .grad in-place here;
+                        # only the accumulation factor remains. Dividing by
+                        # get_scale() too would silence mode='gradient' on AMP.
+                        model.wsr.set_lagged_gradient(_qgrad[:, :k_active_cap] / grad_accum_steps)
 
                 # JAWP Stiefel manifold retraction — MUST run after optimizer.step()
                 # and BEFORE zero_grad: its Riemannian correction reads Q.grad

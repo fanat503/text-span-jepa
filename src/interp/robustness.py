@@ -211,7 +211,7 @@ def span_corruption(input_ids, intensity, span_length=5, mask_id=0):
     """
     B, T = input_ids.shape
     result = input_ids.clone()
-    n_spans = max(1, int(T * intensity / span_length))
+    n_spans = int(T * intensity / span_length)  # 0 stays 0: low-intensity end of curves
 
     for b in range(B):
         for _ in range(n_spans):

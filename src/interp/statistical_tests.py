@@ -523,7 +523,7 @@ class MetricComparisonReport:
         n_large_effect = sum(1 for v in results.values() if v.get("effect_size_label") == "large")
 
         results["_summary"] = {
-            "n_metrics": len(results) - 1,  # minus _summary
+            "n_metrics": len(results),  # dict literal evaluates before _summary is inserted
             "n_significant_bh": n_significant_bh,
             "n_large_effect": n_large_effect,
             "alpha": alpha,

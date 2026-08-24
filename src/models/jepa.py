@@ -1009,6 +1009,11 @@ class TextSpanJEPA(nn.Module):
         z2 = _scatter(secondary_pass, live=True)  # live: gradient flows to pass 2
         overlap = self.cmc.compute_overlap_mask(primary_pass["mask"], secondary_pass["mask"])
         overlap = overlap.bool() & _position_valid(primary_pass) & _position_valid(secondary_pass)
+        if int(overlap.sum()) == 0:
+            # Disjoint masks or all-invalid rows: skip instead of letting the
+            # module's masked-mean see an empty reduction.
+            zero = torch.tensor(0.0, device=z2.device)
+            return zero, {"cmc_loss": 0.0, "cmc_skipped": True}
         return self.compute_cmc_loss(z1, z2, overlap)
 
     def get_num_params(self, non_embedding=True):

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import copy
 import math
+import warnings
 
 import torch
 import torch.nn.functional as F
@@ -113,6 +114,12 @@ class Data2VecTextBaseline(nn.Module):
         with torch.no_grad():
             intermediates = self.target_encoder.get_intermediate_layers(original_input_ids)
             k = min(self.average_top_k_layers, len(intermediates))
+            if len(intermediates) < self.average_top_k_layers:
+                warnings.warn(
+                    f"data2vec target depth truncated: encoder exposes "
+                    f"{len(intermediates)} layers, average_top_k_layers="
+                    f"{self.average_top_k_layers}"
+                )
             if k == 0:
                 h_target, _ = self.target_encoder(original_input_ids)
             else:

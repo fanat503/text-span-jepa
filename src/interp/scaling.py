@@ -49,7 +49,6 @@ class ScalingAnalysis:
         log_values = np.log(np.maximum(np.array(metric_values, dtype=float), 1e-10))
 
         # Linear regression: log(metric) = log(a) + b * log(size)
-        len(log_sizes)
         x_mean = log_sizes.mean()
         y_mean = log_values.mean()
 
