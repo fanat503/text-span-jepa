@@ -123,6 +123,7 @@ def make_dataloader(
         batch_size=batch_size,
         shuffle=shuffle,
         num_workers=num_workers,
+        persistent_workers=num_workers > 0,
         pin_memory=True,
         drop_last=True,
         worker_init_fn=worker_init_fn,

@@ -719,32 +719,9 @@ def main(args):
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f"Trainable parameters: {trainable:,}")
 
-    # ── Transparency: mechanism loss terms not wired into optimization ──
-    # Audit 2026-08-24: CMC consistency is computed externally but never added
-    # to total_loss; GAC has no backward hook; WSR mode='gradient' receives a
-    # detached Q slice so Q.grad never populates. Warn once instead of failing
-    # silently (main() runs once per process).
-    if model_name == "text_span_jepa":
-        if getattr(model.config, "use_cmc", False):
-            logger.warning(
-                "CMC enabled: consistency loss is NOT added to total_loss — the second "
-                "forward only records overlap stats (wired integration pending)."
-            )
-        if getattr(model.config, "use_gac", False) and getattr(model.config, "lambda_gac", 0.0) > 0:
-            logger.warning(
-                "GAC enabled with lambda_gac>0: no per-dimension gradient hook exists in "
-                "the training loop — the loss term is inert."
-            )
-        if (
-            getattr(model.config, "use_wsr", False)
-            and getattr(model.config, "lambda_wsr", 0.0) > 0
-            and getattr(model.config, "wsr_mode", "gradient") == "gradient"
-        ):
-            logger.warning(
-                "WSR mode='gradient' gets a detached workspace slice "
-                "(jawp.workspace_Q.data); Q.grad never populates — wsr.py silently uses "
-                "its orthonormality-deviation proxy."
-            )
+    # Mechanism wiring status (round-2 audit): CMC and GAC losses are
+    # wired into the optimization below; WSR mode='gradient' consumes
+    # the one-step-lagged workspace gradient captured post-backward.
 
     # ---- Mask Collator ----
     # Pass mask curriculum params so mask ratio ramps up during training
@@ -914,6 +891,7 @@ def main(args):
                 # CMC: Cross-Mask Consistency — optional second forward pass
                 # When enabled, compute consistency loss between predictions
                 # from the current mask and a second different mask.
+                _cmc_primary = getattr(model, "_cmc_pass", None)
                 if (
                     model_name == "text_span_jepa"
                     and hasattr(model, "cmc")
@@ -947,23 +925,55 @@ def main(args):
                             current_step=global_step,
                             total_steps=total_steps,
                         )
-                    # CMC loss between primary and secondary predictions
-                    # (z_pred_primary comes from the main loss computation above)
-                    # This is a simplified version; full implementation would
-                    # extract per-position predictions. For now, log overlap stats.
+                    # Wire the consistency term: bridge compact slot predictions
+                    # from both passes into full-sequence space and add
+                    # lambda_cmc * L_CMC to the total loss.
+                    _cmc_secondary = getattr(model, "_cmc_pass", None)
+                    if _cmc_primary is not None and _cmc_secondary is not None:
+                        loss_cmc_extra, cmc_info = model.compute_cmc_between_passes(
+                            _cmc_primary, _cmc_secondary
+                        )
+                        total_loss = total_loss + model.config.lambda_cmc * loss_cmc_extra
+                        loss_dict["loss_cmc"] = float(loss_cmc_extra.item())
+                        loss_dict["cmc_skipped"] = cmc_info.get("cmc_skipped", False)
                     with torch.no_grad():
-                        overlap_count = overlap.sum().item()
-                        overlap_ratio = overlap.float().mean().item()
-                        loss_dict["cmc_overlap_count"] = overlap_count
-                        loss_dict["cmc_overlap_ratio"] = overlap_ratio
+                        loss_dict["cmc_overlap_count"] = overlap.sum().item()
+                        loss_dict["cmc_overlap_ratio"] = overlap.float().mean().item()
 
                 # Scale loss for gradient accumulation
                 scaled_loss = total_loss / grad_accum_steps
 
+            gac_wiring = (
+                model_name == "text_span_jepa"
+                and getattr(model, "gac", None) is not None
+                and getattr(model.config, "lambda_gac", 0.0) > 0
+            )
+            # retain_graph: the GAC exploration backward traverses the same graph
+            # as the main loss (live slot predictions); without GAC it frees.
             if use_bfloat16:
-                scaler.scale(scaled_loss).backward()
+                scaler.scale(scaled_loss).backward(retain_graph=gac_wiring)
             else:
-                scaled_loss.backward()
+                scaled_loss.backward(retain_graph=gac_wiring)
+
+            if gac_wiring:
+                z_ref = getattr(model, "_gac_z", None)
+                if z_ref is not None and z_ref.grad is not None:
+                    # Rescale accumulated micro-batch grads back to single-batch
+                    # calibration so tau_grad keeps its documented meaning.
+                    k_micro = (itr % grad_accum_steps) + 1
+                    scale_now = scaler.get_scale() if use_bfloat16 else 1.0
+                    g_norms = (
+                        (z_ref.grad.detach() / (scale_now * k_micro))
+                        .reshape(-1, z_ref.size(-1))
+                        .norm(dim=0)
+                    )
+                    loss_gac, gac_info = model.gac(z_ref, g_norms, step=global_step)
+                    if loss_gac.requires_grad:
+                        scaler.scale(loss_gac / grad_accum_steps).backward()
+                    z_ref.grad = None  # avoid feedback into next micro-batch read
+                    loss_dict["loss_gac"] = float(loss_gac.item())
+                    for _k2, _v2 in gac_info.items():
+                        loss_dict[f"gac_{_k2}"] = _v2
 
             # Only update weights every grad_accum_steps
             if (itr + 1) % grad_accum_steps == 0:
@@ -977,11 +987,25 @@ def main(args):
                     scaler.update()
                 else:
                     optimizer.step()
-                optimizer.zero_grad()
+                # Capture one-step-lagged workspace gradient BEFORE zero_grad
+                # wipes it (set_to_none=True default) — feeds WSR mode='gradient'.
+                if (
+                    model_name == "text_span_jepa"
+                    and getattr(model, "wsr", None) is not None
+                    and getattr(model.wsr, "mode", "") == "gradient"
+                    and model.jawp is not None
+                ):
+                    _qgrad = model.jawp.workspace_Q.grad
+                    if _qgrad is not None:
+                        k_active_cap = int(model.jawp.active_k.item())
+                        _sc = scaler.get_scale() if use_bfloat16 else 1.0
+                        model.wsr.set_lagged_gradient(
+                            _qgrad[:, :k_active_cap] / (_sc * grad_accum_steps)
+                        )
 
-                # JAWP Stiefel manifold retraction — MUST be called
-                # after every optimizer.step() to keep Q orthonormal.
-                # Ref: Absil, Mahony & Sepulchre (2008), §4.1.
+                # JAWP Stiefel manifold retraction — MUST run after optimizer.step()
+                # and BEFORE zero_grad: its Riemannian correction reads Q.grad
+                # (previously ordered after zero_grad, which silenced it — audit).
                 if (
                     model_name == "text_span_jepa"
                     and hasattr(model, "jawp")
@@ -1002,6 +1026,8 @@ def main(args):
                     and model.spc is not None
                 ):
                     model.spc.stiefel_retract()
+
+                optimizer.zero_grad()
 
             # EMA update
             if ema_scheduler is not None:

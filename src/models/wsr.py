@@ -271,6 +271,17 @@ class WorkspaceSharpnessRegularization(nn.Module):
 
         return loss, info
 
+    def set_lagged_gradient(self, grad: torch.Tensor) -> None:
+        """Store a post-backward snapshot of dL/dQ for use in the next forward.
+
+        WSR mode='gradient' runs BEFORE backward, so Q.grad is cleared
+        (zero_grad set_to_none=True) or absent at forward time. The training
+        loop captures the freshly computed workspace gradient here each
+        optimizer step; WSR then consumes a one-step-lagged, correctly-scaled
+        signal (SAM-style perturbation direction).
+        """
+        self._lagged_gradient = grad.detach().clone()
+
     def _gradient_mode(
         self,
         Q: torch.Tensor,
@@ -294,13 +305,16 @@ class WorkspaceSharpnessRegularization(nn.Module):
         """
         _D, k = Q.shape
 
-        # Compute Euclidean gradient of Q (if Q has grad)
-        if Q.grad is not None:
+        # Gradient source priority: (1) one-step-lagged snapshot captured by the
+        # training loop post-backward, (2) live Q.grad if present, (3) proxy from
+        # orthonormality deviation on the very first step.
+        euclidean_grad = None
+        _lagged = getattr(self, "_lagged_gradient", None)
+        if _lagged is not None:
+            euclidean_grad = _lagged.detach().to(Q.dtype)
+        elif Q.is_leaf and Q.grad is not None:
             euclidean_grad = Q.grad.detach()
-        else:
-            # Estimate gradient from Q's current deviation from orthonormality
-            # This serves as a proxy: if Q is far from orthonormal,
-            # the gradient must be large
+        if euclidean_grad is None:
             QQT = Q.T @ Q
             deviation = QQT - torch.eye(k, device=Q.device, dtype=Q.dtype)
             euclidean_grad = Q @ deviation  # proxy gradient

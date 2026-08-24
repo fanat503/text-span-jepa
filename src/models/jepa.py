@@ -559,6 +559,10 @@ class TextSpanJEPA(nn.Module):
         else:
             self.wsr = None
 
+        # Wiring state for externally-orchestrated mechanisms (round-2 audit):
+        self._gac_z = None  # live slot predictions, set when lambda_gac>0
+        self._cmc_pass = None  # per-pass CMC bridge state (slots/idx/valid/mask)
+
     def update_target_encoder(self, tau):
         """EMA update: param_k <- tau * param_k + (1 - tau) * param_q.
 
@@ -620,6 +624,18 @@ class TextSpanJEPA(nn.Module):
         span_preds, _num_masked, valid_mask, future_losses, _future_preds = self.predictor(
             h_online, mask_positions, token_embeds_online, h_target.detach()
         )
+
+        # GAC: expose live slot predictions so the training loop can read
+        # per-dimension gradient norms after backward (only when weighted).
+        self._gac_z = None
+        if (
+            self.gac is not None
+            and self.training
+            and torch.is_grad_enabled()
+            and self.config.lambda_gac > 0
+        ):
+            span_preds.retain_grad()
+            self._gac_z = span_preds
 
         # PCR: Predictive Cascade Refinement — refine predictions in orthogonal subspaces
         # Bypasses information bottleneck of single-pass prediction (Theorem: Cascade Capacity)
@@ -725,7 +741,7 @@ class TextSpanJEPA(nn.Module):
             ws_Q = None
             if self.jawp is not None:
                 k_active = int(self.jawp.active_k.item())
-                ws_Q = self.jawp.workspace_Q.data[:, :k_active]
+                ws_Q = self.jawp.workspace_Q[:, :k_active]  # live view: SWIP may shape Q
             loss_swip, swip_info = self.swip(h_online, workspace_Q=ws_Q)
         else:
             loss_swip = _zero_loss
@@ -766,12 +782,26 @@ class TextSpanJEPA(nn.Module):
             loss_wsd = _zero_loss
             wsd_info = {}
 
-        # CMC: Cross-Mask Consistency Regularization
-        # NOTE: CMC requires a second forward pass with a different mask.
-        # This is handled externally by the training loop (train.py), which
-        # can optionally compute CMC loss by running a second prediction
-        # and calling model.compute_cmc_loss(z_pred_1, z_pred_2, overlap).
-        # Here we set loss_cmc = 0 by default; the training loop adds it.
+        # CMC: Cross-Mask Consistency Regularization.
+        # The training loop runs a second forward with a different mask and calls
+        # compute_cmc_between_passes(); stash what that bridge needs. Primary
+        # slots are detached (module default stop_grad_primary=True keeps them
+        # out of the gradient path anyway); validity uses predictor-side slots.
+        self._cmc_pass = None
+        if self.cmc is not None:
+            _idx = self._slot_indices(mask_positions, span_preds.size(1))
+            _valid_slots = torch.zeros_like(_idx, dtype=torch.bool)
+            _mc = min(_idx.size(1), valid_mask.size(1))
+            _valid_slots[:, :_mc] = valid_mask[:, :_mc]
+            self._cmc_pass = {
+                "slots": span_preds,  # live — secondary pass keeps its graph
+                "slots_det": span_preds.detach(),  # primary side consumes this
+                "idx": _idx,
+                "valid": _valid_slots,
+                "mask": mask_positions.detach(),
+                "T": int(mask_positions.size(1)),
+                "B": int(mask_positions.size(0)),
+            }
         loss_cmc = _zero_loss
         cmc_info = {}
 
@@ -806,7 +836,7 @@ class TextSpanJEPA(nn.Module):
             ws_Q_rdc = None
             if self.jawp is not None:
                 k_active_rdc = int(self.jawp.active_k.item())
-                ws_Q_rdc = self.jawp.workspace_Q.data[:, :k_active_rdc]
+                ws_Q_rdc = self.jawp.workspace_Q[:, :k_active_rdc]  # live view
             loss_rdc, rdc_info = self.rdc(h_online, workspace_Q=ws_Q_rdc, step=current_step)
         else:
             loss_rdc = _zero_loss
@@ -816,7 +846,7 @@ class TextSpanJEPA(nn.Module):
         # Penalizes sharp minima on Gr(k,D) for workspace Q
         if self.wsr is not None and self.jawp is not None:
             k_active_wsr = int(self.jawp.active_k.item())
-            ws_Q_wsr = self.jawp.workspace_Q.data[:, :k_active_wsr]
+            ws_Q_wsr = self.jawp.workspace_Q[:, :k_active_wsr]  # live view: WSR shapes Q
             loss_wsr, wsr_info = self.wsr(ws_Q_wsr, step=current_step)
         else:
             loss_wsr = _zero_loss
@@ -933,6 +963,53 @@ class TextSpanJEPA(nn.Module):
             zero = torch.tensor(0.0, device=z_pred_primary.device)
             return zero, {"cmc_loss": 0.0, "cmc_skipped": True}
         return self.cmc(z_pred_primary, z_pred_secondary, overlap_mask)
+
+    @staticmethod
+    def _slot_indices(mask_positions, num_slots):
+        """(B,T) binary mask -> (B,num_slots) absolute masked positions, -1 padded."""
+        B = mask_positions.size(0)
+        idx = torch.full((B, num_slots), -1, dtype=torch.long, device=mask_positions.device)
+        for b in range(B):
+            mi = mask_positions[b].nonzero(as_tuple=True)[0][:num_slots]
+            idx[b, : mi.numel()] = mi
+        return idx
+
+    def compute_cmc_between_passes(self, primary_pass, secondary_pass):
+        """Bridge two compute_loss_with_targets passes into the CMC loss.
+
+        Both passes store COMPACT slot predictions (B,S,D) ordered by masked
+        position. This scatters them back to full sequence space via advanced
+        indexing (never scatter_: -1 padding would wrap to the last token),
+        restricts the overlap to positions valid in BOTH passes, and delegates
+        to compute_cmc_loss (stop_grad_primary applies there).
+        """
+        B, T = secondary_pass["B"], secondary_pass["T"]
+        D = secondary_pass["slots"].size(-1)
+
+        def _scatter(pass_state, live):
+            key = "slots" if live else "slots_det"
+            z = pass_state[key].float()
+            idx, valid = pass_state["idx"], pass_state["valid"]
+            full = z.new_zeros(pass_state["B"], pass_state["T"], D)
+            b, s = valid.nonzero(as_tuple=True)
+            pos = idx[b, s]
+            ok = pos >= 0
+            full[b[ok], pos[ok]] = z[b[ok], s[ok]]
+            return full
+
+        def _position_valid(pass_state):
+            pv = torch.zeros(pass_state["B"], pass_state["T"], dtype=torch.bool, device=z1.device)
+            b, s = pass_state["valid"].nonzero(as_tuple=True)
+            pos = pass_state["idx"][b, s]
+            ok = pos >= 0
+            pv[b[ok], pos[ok]] = True
+            return pv
+
+        z1 = _scatter(primary_pass, live=False)  # detached snapshot
+        z2 = _scatter(secondary_pass, live=True)  # live: gradient flows to pass 2
+        overlap = self.cmc.compute_overlap_mask(primary_pass["mask"], secondary_pass["mask"])
+        overlap = overlap.bool() & _position_valid(primary_pass) & _position_valid(secondary_pass)
+        return self.compute_cmc_loss(z1, z2, overlap)
 
     def get_num_params(self, non_embedding=True):
         enc = self.encoder.get_num_params(non_embedding)
