@@ -1,5 +1,14 @@
 # STA: Spectral Transport Alignment — Formal Proof
 
+> **IMPLEMENTATION STATUS (audited 2026-08-24)** — see
+> `proofs/IMPLEMENTATION_STATUS.md`.
+> Verified: W1 metric between sorted spectra.
+> DIVERGENT: the Davis-Kahan reduction assumes a spectral gap enforced
+> nowhere; delta refers to a different object than computed; before R11
+> the executed loss was IDENTICALLY ZERO (sync-refresh bug, fixed); even
+> now the signal carries no gradient (buffers under no_grad).
+
+
 ## Problem Statement
 
 During JEPA training, the eigenvalue spectrum of the representation covariance

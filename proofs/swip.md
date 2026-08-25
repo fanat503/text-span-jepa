@@ -1,56 +1,46 @@
 # SWIP: Selective Whitening with Information Preservation
 
-## Statement
+> **IMPLEMENTATION STATUS (audited/reconciled 2026-08-24)** — see
+> `proofs/IMPLEMENTATION_STATUS.md`. Term 2 is IMPLEMENTED as of R15;
+> the v1 scale-invariance property is RETRACTED (fixed σ² target).
 
-**Theorem (Selective Spectral Shaping).**
-Let $Z = [Z_\mathcal{W}, Z_\perp]$ be the decomposition into workspace ($k$ dims) and background ($D-k$ dims). SWIP applies whitening **only** to the background while preserving the workspace eigenvalue hierarchy:
+## Statement (matches `src/models/swip.py` as of R15)
 
-$$\lambda_1(Z_\mathcal{W}) \geq \lambda_2(Z_\mathcal{W}) \geq \cdots \geq \lambda_k(Z_\mathcal{W})$$
+Let λ₁ ≥ λ₂ ≥ … be the workspace eigenvalues (descending) and σᵢ the
+background singular values. The implemented loss is:
 
-The SWIP loss is:
-$$\mathcal{L}_\mathrm{SWIP} = \underbrace{\sum_{i=1}^{D-k} \left(\log \sigma_i(Z_\perp) - \log \sigma_\mathrm{target}\right)^2}_{\text{background whitening}} + \underbrace{\sum_{i=1}^{k-1} \operatorname{ReLU}(\lambda_{i+1} - \lambda_i + \delta)}_{\text{workspace hierarchy}}$$
+$$\mathcal{L}_\mathrm{SWIP} = \underbrace{\sum_{i>k} \left(\log \sigma_i - \log \sigma_\mathrm{target}\right)^2}_{\text{background whitening}} + w_h \underbrace{\sum_{i=1}^{k-1} \operatorname{ReLU}(\lambda_{i+1} - \lambda_i + \delta)}_{\text{workspace hierarchy (R15)}}$$
 
-**Properties:**
-1. $\mathcal{L}_\mathrm{SWIP} \geq 0$ (non-negative, zero at optimum)
-2. Scale-invariant: $\mathcal{L}_\mathrm{SWIP}(\alpha Z) = \mathcal{L}_\mathrm{SWIP}(Z)$ for $\alpha > 0$
-3. At optimum: background is isotropic, workspace eigenvalues are ordered
+with constructor parameters `hierarchy_margin = δ` (default 0.0) and
+`hierarchy_weight = w_h` (default 1.0), applied identically on both code
+paths (JAWP-projected spectrum and top-k PCA spectrum).
 
-## Proof of Non-Negativity
+## Properties that hold
 
-### Background Whitening Term
-For each background dimension $i$:
-$$\left(\log \sigma_i - \log \sigma_\mathrm{target}\right)^2 \geq 0$$
+1. Non-negativity: sum of squared-log deviations and ReLU terms.
+2. Background isotropy at optimum: λ-background term vanishes iff every
+   background log-variance equals log σ².
+3. Ordering enforcement: hierarchy term vanishes iff
+   λ_{i+1} ≤ λ_i − δ for all consecutive pairs.
+4. Operational orthonormality of F ∈ O(D): per-step SVD retraction wired
+   in the training loop; `spc_ortho_error`-style diagnostic `ortho_err`
+   exported every forward.
 
-This is a squared deviation — trivially non-negative. Zero iff $\sigma_i = \sigma_\mathrm{target}$ for all $i$.
+## RETRACTED v1 claims
 
-### Workspace Hierarchy Term
-For each pair $(i, i+1)$:
-$$\operatorname{ReLU}(\lambda_{i+1} - \lambda_i + \delta) = \max(0, \lambda_{i+1} - \lambda_i + \delta)$$
+1. ~~Scale-invariance: L(αZ) = L(Z)~~ — false: σ_target is fixed while a
+   global rescale α multiplies every λᵢ and σᵢ, changing the background
+   term (audit R11). Coordinate-wise convexity of the log-deviation term
+   does hold; the earlier "unique minimizer" statement survives only
+   per-coordinate.
+2. ~~Unconditional "guaranteed orthonormality"~~ — holds operationally
+   (per-step retraction); the pre-R14 fallback path was broken
+   (`torch.linalg.q3r` typo) and could silently drop F off O(D).
 
-This is non-negative by definition of ReLU. Zero iff $\lambda_i \geq \lambda_{i+1} + \delta$, i.e., eigenvalues are **strictly ordered** with gap at least $\delta$.
+## Notes
 
-### Total
-Sum of non-negative terms is non-negative:
-$$\mathcal{L}_\mathrm{SWIP} \geq 0$$
-
-with equality iff both conditions hold simultaneously.
-
-## Comparison with Standard Whitening
-
-| Method | Workspace | Background | Preserves Hierarchy? |
-|--------|-----------|------------|---------------------|
-| W-MSE (ICLR 2021) | Whitened | Whitened | ❌ |
-| VICReg (ICLR 2022) | Equal variance | Equal variance | ❌ |
-| ZCA whitening | Whitened | Whitened | ❌ |
-| **SWIP (ours)** | **Preserved** | **Whitened** | **✅** |
-
-Standard whitening destroys the eigenvalue hierarchy that JAWP creates — workspace dimensions have different importance levels (eigenvalues), and whitening makes them all equal, losing this structure.
-
-SWIP is the **first method** that respects the workspace/background split and selectively whitens only the background.
-
-## Connection to C-JEPA
-C-JEPA uses VICReg to prevent collapse. SWIP generalizes VICReg:
-- VICReg = SWIP with no workspace (k=0, all dims are background)
-- SWIP = VICReg on background + hierarchy preservation on workspace
-
-This makes our approach strictly more general.
+- On the JAWP path the background term uses a trace-based Jensen
+  approximation (documented inline); diagnostics slice by the EFFECTIVE
+  workspace width k_eff (R11 fix).
+- Hierarchy margin δ > 0 enforces a minimum spectral gap inside the
+  workspace; δ = 0 enforces plain descending order.

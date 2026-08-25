@@ -149,6 +149,36 @@ class SAPScore:
         except Exception:
             return 0.0
 
+    @staticmethod
+    def compute_nonlinear(representations, factors, n_bins=20):
+        """Non-linear SAP variant (audit R15 backlog): discretized-MI
+        predictability replaces |Pearson|, capturing monotone-nonlinear
+        dependencies the linear variant misses. Same top-2-gap aggregation;
+        note MI is unbounded above, so values are NOT comparable to the
+        linear SAP score — use it for ranking, not absolute levels.
+        """
+        try:
+            _N, D = representations.shape
+            K = factors.shape[1] if factors.dim() > 1 else 1
+            if factors.dim() == 1:
+                factors = factors.unsqueeze(1)
+
+            score_matrix = torch.zeros(D, K)
+            for i in range(D):
+                d_i = _discretize(representations[:, i], n_bins)
+                for j in range(K):
+                    f_j = _discretize(factors[:, j], n_bins)
+                    score_matrix[i, j] = _mutual_information(d_i, f_j, n_bins)
+
+            sap = 0.0
+            for j in range(K):
+                top2 = score_matrix[:, j].topk(min(2, D)).values
+                gap = top2[0] - (top2[1] if len(top2) > 1 else torch.tensor(0.0))
+                sap += gap.item()
+            return max(min(sap / K, 1.0), 0.0)
+        except Exception:
+            return 0.0
+
 
 class MIGScore:
     """Mutual Information Gap (MIG).

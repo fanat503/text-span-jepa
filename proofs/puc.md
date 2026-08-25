@@ -1,5 +1,14 @@
 # PUC: Prediction Uncertainty Calibration
 
+> **IMPLEMENTATION STATUS (audited 2026-08-24)** — see
+> `proofs/IMPLEMENTATION_STATUS.md`.
+> Verified: non-negativity of the returned scalar.
+> DIVERGENT: the headline Lagrangian-dual formula is dead code; the
+> executed ReLU'd log-det barrier matches neither stated form; the loss
+> carries NO gradient (buffer-based statistics); the risk constraint and
+> min_log_det are unimplemented. Labeled in-module (R12).
+
+
 ## Statement
 
 **Theorem (Minimax Prediction Optimality).**

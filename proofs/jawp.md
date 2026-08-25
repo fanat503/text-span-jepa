@@ -1,5 +1,13 @@
 # JAWP: Jacobian-Aligned Workspace Prediction — Formal Proof
 
+> **IMPLEMENTATION STATUS (audited 2026-08-24)** — see
+> `proofs/IMPLEMENTATION_STATUS.md`.
+> Verified: workspace-loss algebra on fixed k.
+> DIVERGENT: curriculum slices Q[:, :k(t)] with time-varying k while the
+> theorems assume fixed k; the five verification tests named in the proof
+> are absent. Complementary-gate style fixes elsewhere do NOT apply here.
+
+
 ## Problem Statement
 
 Standard JEPA predicts ALL D dimensions of z_target equally:

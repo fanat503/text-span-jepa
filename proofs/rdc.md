@@ -1,5 +1,14 @@
 # RDC: Representation Drift Compensation — Proof of Drift Compensation Bound
 
+> **IMPLEMENTATION STATUS (audited 2026-08-24)** — see
+> `proofs/IMPLEMENTATION_STATUS.md`.
+> Verified: projector algebra and stationary-bound formula.
+> DIVERGENT: the transient bound is internally inconsistent in the proof,
+> falsely justified in the code header, uses EMA-smoothed eps with an
+> arbitrary T_eff cap, rests on UNdetached targets and an unenforced
+> Stiefel assumption. Inline estimates labeled as diagnostics (R16).
+
+
 ## Problem Statement
 
 Pendharkar et al. (2026, arXiv:2606.30068) show that JEPA encoders minimize

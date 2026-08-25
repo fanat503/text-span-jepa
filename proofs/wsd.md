@@ -1,5 +1,14 @@
 # WSD: Workspace-Target Synchronization Drift
 
+> **IMPLEMENTATION STATUS (audited 2026-08-24)** — see
+> `proofs/IMPLEMENTATION_STATUS.md`.
+> Verified: chordal distance loss and Grassmann machinery.
+> DIVERGENT: load-bearing assumptions (exact orthonormality of target_Q,
+> lambda-to-penalty coupling) are not enforced; the 'constructive'
+> Davis-Kahan bound is circular; adaptive tau and per-step resync are
+> unimplemented. Silent eig-failure now warns (fixed R15).
+
+
 ## Statement
 
 **Theorem (Drift Bound).**

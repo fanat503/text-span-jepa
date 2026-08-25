@@ -1,5 +1,14 @@
 # WSR: Workspace Sharpness Regularization — Proofs
 
+> **IMPLEMENTATION STATUS (audited 2026-08-24)** — see
+> `proofs/IMPLEMENTATION_STATUS.md`.
+> Verified in code: projection algebra, retraction, constants (rho=0.05, eta=0.01).
+> DIVERGENT: the detached WSR loss cannot minimize the stated objective;
+> the rho_Q 'worst-case ball' step of Thm 1 is unsound (optimality holds
+> for L_train, not L_test); the sharpness decomposition is an inequality,
+> not an equality; both bound evaluators substitute EMA proxies.
+
+
 ## Mechanism #16
 
 ### Problem Statement

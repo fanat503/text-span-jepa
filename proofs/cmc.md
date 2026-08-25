@@ -1,5 +1,13 @@
 # CMC: Cross-Mask Consistency Regularization
 
+> **IMPLEMENTATION STATUS (audited 2026-08-24)** — see
+> `proofs/IMPLEMENTATION_STATUS.md`.
+> Verified: core loss formula and overlap construction.
+> DIVERGENT: the stability theorem is proven only in AVERAGED form while
+> stated pointwise; the skip path can report eps=0 while predictions
+> diverge (invalidating downstream-bound usage); reuse_encoder is a stub.
+
+
 ## Statement
 
 **Theorem (Stability Bound).**

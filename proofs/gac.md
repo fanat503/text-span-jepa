@@ -1,5 +1,13 @@
 # GAC: Gradient-Allocated Capacity
 
+> **IMPLEMENTATION STATUS (audited 2026-08-24)** — see
+> `proofs/IMPLEMENTATION_STATUS.md`.
+> Verified: loss skeleton, min_weight clamp semantics.
+> DIVERGENT: the wired call site passes LIVE predictions (R12 wiring),
+> but energy is a batch-MEAN, so the No-Dead-Zones bound scales by 1/N;
+> the warmup ramp further rescales it. Theorem holds up to these factors.
+
+
 ## Statement
 
 **Theorem (No Dead Zones).**
