@@ -1,59 +1,80 @@
-# SPC: Spectral Predictive Coding
+# SPC: Spectral Predictive Coding — Implemented Specification
 
-## Statement
+> Status: RECONCILED with `src/models/spc.py` (audit R14, 2026-08-24).
+> The previous version of this document described a SIMPLEX-constrained,
+> Gumbel-Softmax-weighted, NORM-SQUARED band loss. That object is not what
+> the code computes. This document states the implemented mechanism, the
+> properties that provably hold, and which v1 claims are void.
 
-**Theorem (Information-Proportional Capacity Allocation).**
-Let $z = \sum_b U_b c_b$ be the spectral decomposition into $B$ frequency bands, where $U_b \in \mathbb{R}^{D \times d_b}$ are learned band bases (on Stiefel manifold). The SPC-weighted prediction loss is:
+## Implemented mechanism
 
-$$\mathcal{L}_\mathrm{SPC} = \sum_{b=1}^{B} w_b \cdot \|c_b^{\mathrm{pred}} - c_b^{\mathrm{target}}\|^2$$
+Basis `F ∈ O(D)`: DCT-II initialization, maintained on O(D) by SVD
+retraction after every optimizer step (`train.py` Stiefel block); the
+`spc_ortho_error` diagnostic reports `max|FᵀF − I|` every forward.
+(R11 found the retraction's exception-fallback called a non-existent
+`torch.linalg.q3r`; fixed to `qr`.)
 
-where $w_b \in \Delta^{B-1}$ (simplex-constrained band weights).
+Band weights:
 
-**Property (Parseval's Equality).**
-When the band bases $U_b$ are orthonormal (maintained by Stiefel retraction):
+```
+w = softmax(θ) · B            # θ = log_band_weights, learned by backprop
+w = clamp(w, min=min_weight)  # default min_weight = 0.1
+w = w · B / sum(w)            # renormalize: sum(w) == B exactly
+```
 
-$$\|z^{\mathrm{pred}} - z^{\mathrm{target}}\|^2 = \sum_{b=1}^{B} \|c_b^{\mathrm{pred}} - c_b^{\mathrm{target}}\|^2$$
+Loss (`z_pred`, `z_target` flattened to (N, D)):
 
-The total prediction error equals the sum of per-band errors — no information is lost by the spectral decomposition.
+```
+L_SPC = Σ_b w_b · mean_{n,d}( ‖z_pred^(b) − z_target^(b)‖² )
+      = (1/(N·d)) · Σ_b w_b · ‖Δc_b‖²          # equal band width d = D/B
+```
 
-## Proof of Parseval's Equality
+Adaptation: `adapt_weights_to_predictability()` moves `θ` toward
+`w* ∝ running_residual_var · running_predictability` with learning rate
+`weight_lr = 0.01`. Wired into the training loop every 100 steps as of
+R14 — previously this method existed but was never called (same failure
+class as CMC/GAC wiring).
 
-### Setup
-Let $U = [U_1, \ldots, U_B] \in \mathrm{St}(D, D)$ be the concatenated band basis. Since $U$ is orthonormal ($U^\top U = I_D$):
+## Properties that HOLD for this implementation
 
-$$z = U c = \sum_b U_b c_b, \quad c = U^\top z$$
+1. **Exact weight normalization.** After clamp+renormalize, `Σ w_b = B`
+   and `w_b ≥ min_weight` for every band — no band can be starved.
+2. **Operational orthonormality of F.** Enforced by per-step retraction;
+   `ortho_err` is exported every forward so drift would be visible.
+3. **Parseval consistency up to a constant.** With `F ∈ O(D)` and equal
+   band widths, `L_SPC = (1/(N·d)) · Σ_b w_b ‖Δc_b‖²`, i.e. the weighted
+   band decomposition differs from the plain MSE only by the weight vector
+   and the constant `1/(N·d)` — uniform weights reproduce standard MSE/`B`.
+4. **Deterministic adaptation path.** Weight updates are a fixed
+   exponential interpolation toward `var × predictability` under a local
+   seed-free rule (no hidden RNG).
 
-### Parseval's Equality
-$$\|z^{\mathrm{pred}} - z^{\mathrm{target}}\|^2 = \|U(c^{\mathrm{pred}} - c^{\mathrm{target}})\|^2 = (c^{\mathrm{pred}} - c^{\mathrm{target}})^\top U^\top U (c^{\mathrm{pred}} - c^{\mathrm{target}})$$
+## VOID claims from the v1 document
 
-Since $U^\top U = I$:
-$$= \|c^{\mathrm{pred}} - c^{\mathrm{target}}\|^2 = \sum_{b=1}^{B} \|c_b^{\mathrm{pred}} - c_b^{\mathrm{target}}\|^2$$
+1. ~~`w ∈ Δ^{B-1}` simplex constraint~~ — weights sum to **B**, not 1, and
+   carry an explicit floor; they live on a clamped-renormalized affine image
+   of the simplex, not the simplex itself.
+2. ~~Gumbel-Softmax weighting `exp((α+g)/τ)`~~ — no Gumbel noise exists in
+   the implementation; weights are deterministic functions of learnable
+   logits.
+3. ~~Unscaled norm-squared statement `L = Σ w_b‖Δc_b‖²`~~ — the code uses
+   per-band MEANS; equivalent up to the constant `1/(N·d)` only because all
+   bands have equal width.
+4. ~~"Guaranteed orthonormality" unconditionally~~ — orthonormality holds
+   operationally (per-step retraction) and its fallback path was broken
+   until R14 (`q3r` typo).
+5. ~~Theorem (Information-Proportional Capacity Allocation) as a theorem~~ —
+   the `w* ∝ σ²·R²` derivation is a heuristic narrative: it mixes two
+   conflicting objectives (the module header's own corollary claims gradient
+   descent moves weight in the OPPOSITE direction of the stated optimum),
+   and the adaptation that realizes it was never invoked. Kept as motivated
+   heuristic; the wired soft-update is its operational form.
 
-### Weighted Loss Property
-The SPC-weighted loss satisfies:
-$$\min_b(w_b) \cdot \|z^{\mathrm{pred}} - z^{\mathrm{target}}\|^2 \leq \mathcal{L}_\mathrm{SPC} \leq \max_b(w_b) \cdot \|z^{\mathrm{pred}} - z^{\mathrm{target}}\|^2$$
+## What would restore v1-style statements
 
-When all $w_b = 1/B$: $\mathcal{L}_\mathrm{SPC} = \frac{1}{B} \|z^{\mathrm{pred}} - z^{\mathrm{target}}\|^2$ (uniform weighting, recovers standard JEPA).
-
-## Simplex Constraint
-The band weights $w_b$ are constrained to the simplex $\Delta^{B-1}$ via Gumbel-Softmax:
-$$w_b = \frac{\exp((\alpha_b + g_b) / \tau)}{\sum_{b'} \exp((\alpha_{b'} + g_{b'}) / \tau)}$$
-
-where $\alpha_b$ are learnable logits, $g_b$ is Gumbel noise, and $\tau$ is temperature.
-
-### Interpretation
-- High $w_b$: allocate more prediction capacity to band $b$
-- Low $w_b$: reduce capacity for band $b$
-- The model learns which frequency bands are most informative for prediction
-
-## Why This Is Novel
-- **Focal Loss** (ICCV 2017): down-weights easy **samples** — SPC down-weights easy **frequency bands**
-- **Multi-scale prediction** (FPN, U-Net): different scales at different **layers** — SPC operates within a **single layer**
-- **Spectral regularization** (Lipschitz): constrains weight spectra — SPC adaptively weights **prediction loss** per band
-- No prior work learns simplex-constrained band weights for JEPA prediction loss
-
-## DCT Initialization
-Band bases are initialized as DCT (Discrete Cosine Transform) basis vectors, providing:
-- Low bands: smooth, low-frequency structure
-- High bands: fine-grained, high-frequency detail
-- Stiefel retraction maintains orthonormality during training
+1. True simplex parameterization (sparsemax/Gumbel-Softmax) and dropping
+   `min_weight`, or restating bounds on the clamped-renormalized set.
+2. Fixing the band-width convention (equal widths today) before asserting
+   unscaled Parseval-style identities.
+3. A proof for the soft-update rule actually wired into training
+   (contraction toward `w*` under the EMA statistics).

@@ -236,6 +236,8 @@ class SpectralPredictiveCoding(nn.Module):
         # Running statistics for online weight adaptation
         self.register_buffer("running_residual_vars", torch.ones(n_bands))
         self.register_buffer("running_predictability", torch.zeros(n_bands))
+        # These buffers feed adapt_weights_to_predictability(); they are
+        # diagnostics + adaptation input, NOT a passive log.
         self.register_buffer("adapt_step", torch.tensor(0, dtype=torch.long))
         self.adapt_momentum = 0.99
 
@@ -267,7 +269,7 @@ class SpectralPredictiveCoding(nn.Module):
             F_mat.copy_(U @ Vh)
         except Exception:
             try:
-                Q, _ = torch.linalg.q3r(F_mat)
+                Q, _ = torch.linalg.qr(F_mat)
                 F_mat.copy_(Q)
             except Exception:
                 pass
@@ -294,7 +296,6 @@ class SpectralPredictiveCoding(nn.Module):
         Returns:
             list of (..., band_dim) tensors, one per band.
         """
-        z.size(-1)
         # Project onto frequency basis
         z_freq = z @ self.freq_basis  # (..., D) in frequency domain
 

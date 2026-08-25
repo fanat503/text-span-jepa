@@ -96,6 +96,7 @@ MECHANISMS = [
         2,
     ),
     ("sigreg", {"lambda_sigreg": 0.05}, 1),
+    ("spc", {"use_spc": True, "lambda_spc": 0.05}, 1),
 ]
 
 

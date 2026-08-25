@@ -1175,6 +1175,12 @@ def main(args):
                     and model.spc is not None
                 ):
                     model.spc.stiefel_retract()
+                    # Information-proportional weight adaptation (proofs/spc.md):
+                    # nudge band weights toward variance x predictability every
+                    # 100 steps. Without this call the adaptation method was
+                    # dead code and weights moved only via backprop (audit R11).
+                    if global_step > 0 and global_step % 100 == 0:
+                        model.spc.adapt_weights_to_predictability()
 
                 optimizer.zero_grad()
 
