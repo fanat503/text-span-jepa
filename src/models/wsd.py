@@ -223,7 +223,6 @@ class WorkspaceSyncDrift(nn.Module):
             drift_loss: scalar tensor (differentiable w.r.t. Q_workspace).
             info: dict with diagnostics.
         """
-        Q_workspace.size(0)
         k = min(Q_workspace.size(1), self.k)
         self.step_count.fill_(step)
 
