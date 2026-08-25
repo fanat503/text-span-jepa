@@ -147,10 +147,14 @@ class SWIPModule(nn.Module):
     Whitens background directions while preserving workspace
     eigenvalue structure. The log-eigenvalue matching loss:
 
-      L_SWIP = Σ_{i=k+1}^{D} (log λ_i - log σ²)²
-
-    is scale-invariant, convex, and has unique minimizer at
-    λ_i = σ² for all background directions.
+    The implemented loss (audit R15):
+      L_SWIP = Σ_{i>k} (log λ_i − log σ²)²              [background whitening]
+               + hierarchy_weight · Σ ReLU(λ_{i+1} − λ_i + hierarchy_margin)
+                                                        [workspace ordering]
+    NOTE: scale-INVARIANCE DOES NOT HOLD as implemented — σ² is fixed while
+    scaling Z scales λ_i (v1 docstring claimed otherwise; audit R11).
+    Convexity holds per coordinate; the background term has its unique
+    minimizer at λ_i = σ².
 
     Args:
         embed_dim: dimension of the embedding space (D).
@@ -161,6 +165,11 @@ class SWIPModule(nn.Module):
             identification (must pass workspace_Q to forward).
             If False, use top-k PCA directions.
         eps: numerical stability constant (default 1e-6).
+        hierarchy_margin: minimum required eigenvalue DROP between consecutive
+            workspace eigenvalues (descending order). Default 0.0 = enforce
+            plain descending order.
+        hierarchy_weight: weight of the workspace-ordering term (proofs/swip.md
+            term 2, implemented R15). Default 1.0.
     """
 
     def __init__(
@@ -170,6 +179,8 @@ class SWIPModule(nn.Module):
         target_variance=1.0,
         use_jawp_workspace=True,
         eps=1e-6,
+        hierarchy_margin=0.0,
+        hierarchy_weight=1.0,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -177,6 +188,8 @@ class SWIPModule(nn.Module):
         self.target_variance = target_variance
         self.use_jawp_workspace = use_jawp_workspace
         self.eps = eps
+        self.hierarchy_margin = hierarchy_margin
+        self.hierarchy_weight = hierarchy_weight
 
         assert (
             1 <= self.k_workspace <= embed_dim
@@ -214,6 +227,7 @@ class SWIPModule(nn.Module):
 
         # Determine workspace/background split
         k = min(self.k_workspace, D)
+        hierarchy_penalty = z.new_tensor(0.0)  # term-2 accumulator (R15)
 
         if workspace_Q is not None and self.use_jawp_workspace:
             # Use JAWP workspace: project onto Q and (I - QQ^T)
@@ -226,6 +240,15 @@ class SWIPModule(nn.Module):
             workspace_cov = Q.T @ cov @ Q  # (k, k)
             ws_eigenvalues = torch.linalg.eigvalsh(workspace_cov)
             ws_eigenvalues = ws_eigenvalues.clamp(min=self.eps)
+            # Workspace hierarchy term (proofs/swip.md term 2, R15): enforce
+            # descending order with margin δ on the JAWP-path spectrum.
+            if k_actual > 1:
+                lam_desc = ws_eigenvalues.flip(0)
+                hierarchy_penalty = (
+                    hierarchy_penalty
+                    + self.hierarchy_weight
+                    * F.relu(lam_desc[1:] - lam_desc[:-1] + self.hierarchy_margin).sum()
+                )
 
             # Background eigenvalues: from the residual
             # Total trace = tr(cov), workspace trace = tr(workspace_cov)
@@ -268,6 +291,15 @@ class SWIPModule(nn.Module):
             # eigenvalues[0] = smallest, eigenvalues[-1] = largest
             bg_eigenvalues = eigenvalues[: D - k]  # smallest D-k (background)
             ws_eigenvalues = eigenvalues[D - k :]  # largest k (workspace)
+            # Workspace hierarchy term (same as JAWP branch; spectrum here is
+            # the top-k of an ascending array, so flip to descending).
+            if k > 1:
+                lam_desc = ws_eigenvalues.flip(0)
+                hierarchy_penalty = (
+                    hierarchy_penalty
+                    + self.hierarchy_weight
+                    * F.relu(lam_desc[1:] - lam_desc[:-1] + self.hierarchy_margin).sum()
+                )
 
             # Background log-eigenvalue matching
             log_bg = bg_eigenvalues.clamp(min=self.eps).log()
@@ -282,6 +314,7 @@ class SWIPModule(nn.Module):
             else:
                 spectral_gap = torch.tensor(1.0)
 
+        loss = loss + hierarchy_penalty
         # Compute diagnostics (no grad)
         with torch.no_grad():
             # Anisotropy ratio: λ_max / λ_min

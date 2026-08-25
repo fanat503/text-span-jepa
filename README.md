@@ -54,6 +54,11 @@ operational notes
   a warning for legacy pickled files.
 - the trainer warns about config keys absent from `defaults.yaml`
   (catches typos like `lamda_swip`) and `_meta.*` subtrees are exempt.
+- theory status: `proofs/` are DESIGN documents with an audited
+  implementation matrix in `proofs/IMPLEMENTATION_STATUS.md` — several
+  theorems describe aspirational objects, not the shipped code. CGN and
+  STA have been reconciled (code now matches the stated math); see the
+  matrix for per-mechanism verdicts.
 
 
 the differences between text-span jepa, data2vec,  and MLM are best understood by reading their respective compute_loss() functions.
