@@ -45,6 +45,16 @@ resume: set `meta.load_checkpoint: true` in the config. picks up from
 `<logging.folder>/checkpoint-latest.pth.tar`. override output dir with
 `--output_dir`; skip the defaults merge with `--no_defaults`.
 
+operational notes
+-----------------
+
+- `logging.keep_last_epoch_ckpts: <K>` prunes older `checkpoint-ep{N}`
+  files every epoch (default: keep everything).
+- checkpoint loading tries `weights_only=True` first and falls back with
+  a warning for legacy pickled files.
+- the trainer warns about config keys absent from `defaults.yaml`
+  (catches typos like `lamda_swip`) and `_meta.*` subtrees are exempt.
+
 
 the differences between text-span jepa, data2vec,  and MLM are best understood by reading their respective compute_loss() functions.
 

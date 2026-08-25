@@ -50,12 +50,19 @@ class SyntheticStructuredModel:
         self.seq_len = seq_len
         self.snr = snr
         self.device = device
-
         # Feature group boundaries
         self.class_end = 16
         self.position_end = 32
         self.depth_end = 48
         self.noise_end = 64
+
+        # Class encoding uses stride-3 slots inside [0, class_end): more than
+        # class_end // 3 classes would silently overlap/wrap onto neighbors.
+        if self.n_classes * 3 > self.class_end:
+            raise ValueError(
+                f"n_classes={self.n_classes} does not fit the class feature "
+                f"budget: need {self.n_classes * 3} dims, have {self.class_end}"
+            )
 
     def generate(self, seed=42):
         """Generate representations with known structure.
@@ -101,10 +108,12 @@ class SyntheticStructuredModel:
                 depths[i] / 10.0 * self.snr + torch.randn(self.depth_end - self.position_end) * 0.5
             )
 
-        # Noise features: pure Gaussian
-        representations[i, self.depth_end : self.noise_end] = torch.randn(
-            self.noise_end - self.depth_end
-        )
+        # Noise features: pure Gaussian, written PER SAMPLE (the original code
+        # sat outside the sample loop and only populated the last row).
+        for i in range(N):
+            representations[i, self.depth_end : self.noise_end] = torch.randn(
+                self.noise_end - self.depth_end
+            )
 
         return {
             "representations": representations,

@@ -105,6 +105,13 @@ class SAPScore:
 
     Kumar et al. (2018): measures if each attribute can be predicted
     from single dimensions. Higher = more disentangled.
+
+    Note (audit R9): for single-dimension linear predictability, R² of the
+    OLS fit equals squared Pearson correlation, and the sign is already
+    discarded below — so |rho| here is numerically identical to the paper's
+    regression-R² variant. A non-linear predictability option (binned MI /
+    trees) remains future work; do not "fix" this to R² expecting different
+    numbers.
     """
 
     @staticmethod
