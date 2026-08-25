@@ -649,24 +649,11 @@ def _get_all_trainable_params(model):
 # ═══════════════════════════════════════════════════════════════════
 
 
-def main(args):
-    # ---- Config ----
-    meta_seed = args.get("meta", {}).get("seed")
-    top_seed = args.get("seed")
-    # Explicit None chain (no falsy-or): seed=0 must be honored; defaults.yaml
-    # documents top-level `seed`, code historically read only meta.seed.
-    seed = meta_seed if meta_seed is not None else (top_seed if top_seed is not None else 42)
-    seed_everything(seed)
+def _build_data_pipeline(args, seed):
+    """Load dataset(s) and construct train/validation loaders.
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    logger.info(f"Using device: {device}")
-
-    # Normalize model_name once at the start — all downstream functions use it
-    raw_model_name = args.get("meta", {}).get("model_name", "text_span_jepa")
-    model_name = _normalize_model_name(raw_model_name)
-    logger.info(f"Model type: {raw_model_name} -> {model_name}")
-
-    # ---- Data ----
+    Returns: (dataloader, val_dataloader, tokenizer, mask_token_id, seq_len).
+    """
     data_cfg = args.get("data", {})
     seq_len = data_cfg.get("max_seq_len", 512)
 
@@ -708,6 +695,139 @@ def main(args):
         num_workers=data_cfg.get("num_workers", 2),
         worker_init_fn=lambda wid: worker_init_fn(wid, seed),
     )
+    return dataloader, val_dataloader, tokenizer, mask_token_id, seq_len
+
+
+def _build_optimization(args, model, model_name, model_cfg, device, ipe):
+    """Build optimizer, AMP scaler and LR/WD/EMA schedules.
+
+    Returns: (num_epochs, grad_accum_steps, optimizer, use_bfloat16, scaler,
+              total_steps, scheduler, wd_scheduler, ema_scheduler).
+    """
+    opt_cfg = args.get("optimization", {})
+    grad_accum_steps = opt_cfg.get("grad_accum_steps", 1)  # For OOM on small GPUs
+    param_groups = get_param_groups(model, model_name, wd=opt_cfg.get("weight_decay", 0.04))
+    optimizer = torch.optim.AdamW(param_groups)
+
+    # AMP: respect device availability
+    use_bfloat16 = args.get("meta", {}).get("use_bfloat16", True) and device.type == "cuda"
+    scaler = torch.amp.GradScaler("cuda", enabled=use_bfloat16)
+
+    num_epochs = opt_cfg.get("epochs", 50)
+    total_steps = int(opt_cfg.get("ipe_scale", 1.0) * num_epochs * ipe)
+
+    from src.utils.schedulers import CosineWDSchedule, EMATauSchedule, WarmupCosineSchedule
+
+    scheduler = WarmupCosineSchedule(
+        optimizer,
+        warmup_steps=int(opt_cfg.get("warmup", 5) * ipe),
+        start_lr=opt_cfg.get("start_lr", 1e-4),
+        ref_lr=opt_cfg.get("lr", 1e-3),
+        final_lr=opt_cfg.get("final_lr", 1e-5),
+        T_max=total_steps,
+    )
+    wd_scheduler = CosineWDSchedule(
+        optimizer,
+        ref_wd=opt_cfg.get("weight_decay", 0.04),
+        final_wd=opt_cfg.get("final_weight_decay", 0.4),
+        T_max=total_steps,
+    )
+    # EMA schedule — only for JEPA models
+    if model_name == "text_span_jepa":
+        ema_scheduler = EMATauSchedule(
+            tau_start=model_cfg.get("ema_tau_start", 0.996),
+            tau_end=model_cfg.get("ema_tau_end", 1.0),
+            total_steps=total_steps,
+        )
+    else:
+        # data2vec handles its own EMA internally
+        ema_scheduler = None
+    return (
+        num_epochs,
+        grad_accum_steps,
+        optimizer,
+        use_bfloat16,
+        scaler,
+        total_steps,
+        scheduler,
+        wd_scheduler,
+        ema_scheduler,
+    )
+
+
+def _restore_training_state(
+    args,
+    log_dir,
+    latest_path,
+    model,
+    optimizer,
+    scaler,
+    model_name,
+    scheduler,
+    wd_scheduler,
+    ema_scheduler,
+    mask_collator,
+):
+    """Resume-from-checkpoint: replay schedulers/curriculum to the saved step.
+
+    Returns: (start_epoch, global_step, ema_step, mask_step, best_val_loss).
+    """
+    start_epoch = 0
+    global_step = 0
+    ema_step = 0
+    mask_step = 0
+    best_val_loss = float("inf")
+
+    r_file = args.get("meta", {}).get("read_checkpoint", None)
+    load_model = args.get("meta", {}).get("load_checkpoint", False)
+
+    if load_model:
+        load_path = os.path.join(log_dir, r_file) if r_file else latest_path
+        if os.path.exists(load_path):
+            start_epoch, global_step, ema_step, mask_step, extra = load_checkpoint(
+                load_path, model, optimizer, scaler, model_name=model_name
+            )
+            if extra and "best_val_loss" in extra:
+                best_val_loss = extra["best_val_loss"]
+            # Advance schedulers to correct step
+            for _ in range(global_step):
+                scheduler.step()
+                wd_scheduler.step()
+                if ema_scheduler is not None:
+                    ema_scheduler.step()
+            # Advance mask curriculum
+            for _ in range(mask_step):
+                mask_collator.step()
+            logger.info(f"Resumed: epoch={start_epoch}, step={global_step}")
+    return start_epoch, global_step, ema_step, mask_step, best_val_loss
+
+
+def main(args):
+    # ---- Config ----
+    meta_seed = args.get("meta", {}).get("seed")
+    top_seed = args.get("seed")
+    # Explicit None chain (no falsy-or): seed=0 must be honored; defaults.yaml
+    # documents top-level `seed`, code historically read only meta.seed.
+    seed = meta_seed if meta_seed is not None else (top_seed if top_seed is not None else 42)
+    seed_everything(seed)
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    logger.info(f"Using device: {device}")
+
+    # Normalize model_name once at the start — all downstream functions use it
+    raw_model_name = args.get("meta", {}).get("model_name", "text_span_jepa")
+    model_name = _normalize_model_name(raw_model_name)
+    logger.info(f"Model type: {raw_model_name} -> {model_name}")
+
+    # ---- Data ----
+    data_cfg = args.get("data", {})
+    (
+        dataloader,
+        val_dataloader,
+        tokenizer,
+        mask_token_id,
+        seq_len,
+    ) = _build_data_pipeline(args, seed)
 
     # ---- Model ----
     model_cfg = args.get("model", {})
@@ -745,45 +865,17 @@ def main(args):
     )
 
     # ---- Optimizer + Schedulers ----
-    opt_cfg = args.get("optimization", {})
-    grad_accum_steps = opt_cfg.get("grad_accum_steps", 1)  # For OOM on small GPUs
-    param_groups = get_param_groups(model, model_name, wd=opt_cfg.get("weight_decay", 0.04))
-    optimizer = torch.optim.AdamW(param_groups)
-
-    # AMP: respect device availability
-    use_bfloat16 = args.get("meta", {}).get("use_bfloat16", True) and device.type == "cuda"
-    scaler = torch.amp.GradScaler("cuda", enabled=use_bfloat16)
-
-    ipe = len(dataloader)
-    num_epochs = opt_cfg.get("epochs", 50)
-    total_steps = int(opt_cfg.get("ipe_scale", 1.0) * num_epochs * ipe)
-
-    from src.utils.schedulers import CosineWDSchedule, EMATauSchedule, WarmupCosineSchedule
-
-    scheduler = WarmupCosineSchedule(
+    (
+        num_epochs,
+        grad_accum_steps,
         optimizer,
-        warmup_steps=int(opt_cfg.get("warmup", 5) * ipe),
-        start_lr=opt_cfg.get("start_lr", 1e-4),
-        ref_lr=opt_cfg.get("lr", 1e-3),
-        final_lr=opt_cfg.get("final_lr", 1e-5),
-        T_max=total_steps,
-    )
-    wd_scheduler = CosineWDSchedule(
-        optimizer,
-        ref_wd=opt_cfg.get("weight_decay", 0.04),
-        final_wd=opt_cfg.get("final_weight_decay", 0.4),
-        T_max=total_steps,
-    )
-    # EMA schedule — only for JEPA models
-    if model_name == "text_span_jepa":
-        ema_scheduler = EMATauSchedule(
-            tau_start=model_cfg.get("ema_tau_start", 0.996),
-            tau_end=model_cfg.get("ema_tau_end", 1.0),
-            total_steps=total_steps,
-        )
-    else:
-        # data2vec handles its own EMA internally
-        ema_scheduler = None
+        use_bfloat16,
+        scaler,
+        total_steps,
+        scheduler,
+        wd_scheduler,
+        ema_scheduler,
+    ) = _build_optimization(args, model, model_name, model_cfg, device, len(dataloader))
 
     # ---- Logging ----
     log_cfg = args.get("logging", {})
@@ -815,34 +907,26 @@ def main(args):
     )
 
     # ---- Resume from checkpoint ----
-    start_epoch = 0
-    global_step = 0
-    ema_step = 0
-    mask_step = 0
-    best_val_loss = float("inf")
-
-    r_file = args.get("meta", {}).get("read_checkpoint", None)
-    load_model = args.get("meta", {}).get("load_checkpoint", False)
     latest_path = os.path.join(log_dir, "checkpoint-latest.pth.tar")
-
-    if load_model:
-        load_path = os.path.join(log_dir, r_file) if r_file else latest_path
-        if os.path.exists(load_path):
-            start_epoch, global_step, ema_step, mask_step, extra = load_checkpoint(
-                load_path, model, optimizer, scaler, model_name=model_name
-            )
-            if extra and "best_val_loss" in extra:
-                best_val_loss = extra["best_val_loss"]
-            # Advance schedulers to correct step
-            for _ in range(global_step):
-                scheduler.step()
-                wd_scheduler.step()
-                if ema_scheduler is not None:
-                    ema_scheduler.step()
-            # Advance mask curriculum
-            for _ in range(mask_step):
-                mask_collator.step()
-            logger.info(f"Resumed: epoch={start_epoch}, step={global_step}")
+    (
+        start_epoch,
+        global_step,
+        ema_step,
+        mask_step,
+        best_val_loss,
+    ) = _restore_training_state(
+        args,
+        log_dir,
+        latest_path,
+        model,
+        optimizer,
+        scaler,
+        model_name,
+        scheduler,
+        wd_scheduler,
+        ema_scheduler,
+        mask_collator,
+    )
 
     # ---- Training Loop ----
     logger.info(
