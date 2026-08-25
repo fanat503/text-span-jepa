@@ -405,6 +405,9 @@ class PredictiveCascadeRefinement(nn.Module):
 
         return z_refined, info
 
+    # AUDIT R15: THEOREM RETRACTED — the v1 cascade-capacity bound does not
+    # describe this gated MLP implementation (see proofs/pcr.md). The value
+    # below is an EMPIRICAL DIAGNOSTIC computed from current residuals.
     def compute_cascade_capacity_bound(self, z_pred, z_target):
         """Compute the theoretical cascade capacity bound.
 

@@ -209,6 +209,8 @@ class RepresentationDriftCompensation(nn.Module):
 
         # Theoretical bound: ε(1-η)^T · T/√k (transient)
         eps_estimate = self.running_ortho_drift_norm.item()
+        # NOTE (audit R15): proxy estimates on EMA-smoothed eps with an
+        # arbitrary T_eff cap — diagnostics, not certified bounds.
         T_eff = min(step, 10000)
         transient_bound = eps_estimate * ((1 - self.eta) ** T_eff) * T_eff / math.sqrt(max(k, 1))
         # Stationary bound: ε(1-η)/(η·√k) — tight, independent of T

@@ -534,6 +534,8 @@ class MechanismBundle(nn.Module):
         if self.spc is not None:
             self.spc.stiefel_retract()
 
+    # AUDIT R15: COMPOSITE PROXY — sums per-mechanism heuristic "capacity"
+    # terms; individual terms carry the caveats of their modules.
     def compute_capacity_bound(self, z_pred: torch.Tensor, z_target: torch.Tensor) -> float:
         """Compute total theoretical information gain from all mechanisms."""
         total = 0.0

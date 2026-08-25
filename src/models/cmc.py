@@ -357,6 +357,9 @@ class CrossMaskConsistency(nn.Module):
 
         return loss, info
 
+    # AUDIT R15: CONDITIONAL FORMULA — evaluates the corollary algebra; the
+    # underlying stability theorem is proven only in averaged form, not
+    # pointwise (proofs/IMPLEMENTATION_STATUS.md).
     def compute_downstream_stability_bound(
         self,
         cmc_loss: float,
@@ -375,6 +378,7 @@ class CrossMaskConsistency(nn.Module):
         """
         return probe_norm * math.sqrt(max(cmc_loss, 0.0))
 
+    # AUDIT R15: CONDITIONAL FORMULA — see note above.
     def compute_representation_variance_bound(
         self,
         cmc_loss: float,

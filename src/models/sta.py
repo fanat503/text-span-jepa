@@ -314,6 +314,9 @@ class SpectralTransportAlignment(nn.Module):
 
         return loss, info
 
+    # AUDIT R15: PROXY ESTIMATE — the Davis–Kahan reduction here assumes a
+    # spectral gap that is not enforced anywhere; value is an operational
+    # estimate, not a certified bound (proofs/IMPLEMENTATION_STATUS.md).
     @torch.no_grad()
     def compute_davis_kahan_bound(
         self,
@@ -347,7 +350,8 @@ class SpectralTransportAlignment(nn.Module):
 
         return w1 / delta
 
-    @torch.no_grad()
+    # AUDIT R15: CONDITIONAL FORMULA — downstream corollary of the same
+    # contested Davis–Kahan reduction; operational estimate only.
     def compute_downstream_stability_bound(
         self,
         probe_norm: float = 1.0,

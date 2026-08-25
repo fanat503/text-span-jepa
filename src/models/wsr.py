@@ -466,6 +466,9 @@ class WorkspaceSharpnessRegularization(nn.Module):
         return loss_tensor, info
 
     @torch.no_grad()
+    # AUDIT R15: PROXY ESTIMATE — inputs are EMA-smoothed sharpness proxies,
+    # not the PAC-Bayes theorem's raw quantities
+    # (proofs/IMPLEMENTATION_STATUS.md).
     def compute_generalization_bound(
         self,
         n_samples: int,

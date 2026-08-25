@@ -210,6 +210,10 @@ class GradientAllocatedCapacity(nn.Module):
 
         return loss, info
 
+    # AUDIT R15: PROXY ESTIMATE — implemented loss uses batch-mean energy
+    # (theorem bound scales by 1/N accordingly) and EMA-smoothed grad norms;
+    # treat the returned value as an operational diagnostic, not a certified
+    # No-Dead-Zones bound.
     def compute_gradient_bound(
         self,
         z_pred: torch.Tensor,
