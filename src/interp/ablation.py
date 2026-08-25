@@ -23,6 +23,7 @@
 import copy
 
 import torch
+from src.utils.cka_metrics import linear_cka
 from torch import nn
 
 
@@ -422,7 +423,7 @@ class AblationStudy:
 
         comparisons = {}
         for name, reps in ablated_reps_dict.items():
-            cka = diag._cka_linear(reps, full_model_reps)
+            cka = linear_cka(reps, full_model_reps)
             geom = RepresentationGeometry.compute_all(reps)
 
             comparisons[name] = {

@@ -20,6 +20,7 @@
 
 
 import torch
+from src.utils.cka_metrics import linear_cka
 
 
 class RepresentationRobustness:
@@ -88,7 +89,7 @@ class RepresentationRobustness:
                 flat_clean = clean_reps.reshape(-1, clean_reps.size(-1))
                 flat_pert = perturbed_reps.reshape(-1, perturbed_reps.size(-1))
                 n = min(flat_clean.size(0), flat_pert.size(0))
-                cka = diag._cka_linear(flat_clean[:n], flat_pert[:n])
+                cka = linear_cka(flat_clean[:n], flat_pert[:n])
                 cka_values.append(cka)
 
                 # Geometry degradation

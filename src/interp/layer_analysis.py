@@ -19,6 +19,7 @@
 import torch
 import torch.nn.functional as F
 from torch import nn
+from src.utils.cka_metrics import linear_cka
 
 
 class LayerwiseProbe:
@@ -189,7 +190,7 @@ class LayerwiseCKA:
                 flat_b = baseline_layers[j].reshape(-1, baseline_layers[j].size(-1))
                 # Need same number of samples
                 N = min(flat_j.size(0), flat_b.size(0))
-                cka_matrix[i, j] = diag._cka_linear(flat_j[:N], flat_b[:N])
+                cka_matrix[i, j] = linear_cka(flat_j[:N], flat_b[:N])
 
         return cka_matrix
 
@@ -217,7 +218,7 @@ class LayerwiseCKA:
             flat_a = layers[i].reshape(-1, layers[i].size(-1))
             flat_b = layers[i + 1].reshape(-1, layers[i + 1].size(-1))
             N = min(flat_a.size(0), flat_b.size(0))
-            cka = diag._cka_linear(flat_a[:N], flat_b[:N])
+            cka = linear_cka(flat_a[:N], flat_b[:N])
             adjacent_cka.append(cka)
 
         return {

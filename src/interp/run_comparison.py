@@ -23,6 +23,7 @@ from pathlib import Path
 
 import torch
 from src.utils.torchio import safe_torch_load
+from src.utils.cka_metrics import linear_cka, rbf_cka
 
 
 def load_model(ckpt_path, model_type="jepa", device="cpu"):
@@ -226,8 +227,8 @@ def run_full_comparison(
     print("[6/8] Computing CKA similarity...")
     from src.models.collapse import CollapseDiagnostics
 
-    cka_lin = diag._cka_linear(jepa_reps, base_reps)
-    cka_rbf = diag._cka_rbf(jepa_reps, base_reps)
+    cka_lin = linear_cka(jepa_reps, base_reps)
+    cka_rbf = rbf_cka(jepa_reps, base_reps)
     svcca = diag._svcca(jepa_reps.unsqueeze(1), base_reps.unsqueeze(1))
     subspace = diag._subspace_overlap(jepa_reps.unsqueeze(1), base_reps.unsqueeze(1))
     results["cka_similarity"] = {

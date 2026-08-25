@@ -8,6 +8,8 @@
 
 import torch
 
+from src.utils.cka_metrics import linear_cka, rbf_cka
+
 
 class RepresentationComparator:
     """Systematic comparison of two representation spaces.
@@ -133,8 +135,8 @@ class RepresentationComparator:
         from src.models.collapse import CollapseDiagnostics
 
         diag = CollapseDiagnostics()
-        cka_lin = diag._cka_linear(jepa_reps, baseline_reps)
-        cka_rbf = diag._cka_rbf(jepa_reps, baseline_reps)
+        cka_lin = linear_cka(jepa_reps, baseline_reps)
+        cka_rbf = rbf_cka(jepa_reps, baseline_reps)
         return {
             "cka_linear": cka_lin,
             "cka_rbf": cka_rbf,

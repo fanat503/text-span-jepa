@@ -17,6 +17,7 @@
 
 
 import torch
+from src.utils.cka_metrics import linear_cka
 
 
 class TrainingStability:
@@ -58,7 +59,7 @@ class TrainingStability:
             flat_ckpt = ckpt_reps.reshape(-1, ckpt_reps.size(-1))[:N]
             flat_final = final_representations.reshape(-1, final_representations.size(-1))[:N]
             n = min(flat_ckpt.size(0), flat_final.size(0))
-            cka = diag._cka_linear(flat_ckpt[:n], flat_final[:n])
+            cka = linear_cka(flat_ckpt[:n], flat_final[:n])
             cka_values.append(cka)
 
         # Convergence step: first checkpoint with CKA > 0.95
@@ -235,7 +236,7 @@ class EarlyStoppingAdvantage:
             flat_ckpt = reps.reshape(-1, reps.size(-1))
             flat_final = final.reshape(-1, final.size(-1))
             n = min(flat_ckpt.size(0), flat_final.size(0))
-            cka = diag._cka_linear(flat_ckpt[:n], flat_final[:n])
+            cka = linear_cka(flat_ckpt[:n], flat_final[:n])
             cka_values.append((frac, cka))
 
         # Find earliest fraction where CKA > threshold
@@ -302,7 +303,7 @@ class CheckpointConsistency:
                 flat_a = seed_representations[i].reshape(-1, seed_representations[i].size(-1))
                 flat_b = seed_representations[j].reshape(-1, seed_representations[j].size(-1))
                 n = min(flat_a.size(0), flat_b.size(0))
-                cka = diag._cka_linear(flat_a[:n], flat_b[:n])
+                cka = linear_cka(flat_a[:n], flat_b[:n])
                 pairwise_cka.append(cka)
 
         return {
