@@ -12,12 +12,13 @@ from torch.utils.data import DataLoader
 from src.datasets.kaggle import load_wikitext103
 from src.eval.probes import FutureTokenProbe, GeometryMetrics
 from src.models.jepa import TextSpanJEPA, TextSpanJEPAConfig
+from src.utils.torchio import safe_torch_load
 
 
 def load_model_from_checkpoint(ckpt_path, config, device):
     """Load TextSpanJEPA from checkpoint file."""
     model = TextSpanJEPA(config).to(device)
-    checkpoint = torch.load(ckpt_path, map_location=device, weights_only=False)
+    checkpoint = safe_torch_load(ckpt_path, map_location=device)
 
     if "encoder" in checkpoint:
         model.encoder.load_state_dict(checkpoint["encoder"])

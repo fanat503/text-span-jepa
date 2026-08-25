@@ -22,6 +22,7 @@ import json
 from pathlib import Path
 
 import torch
+from src.utils.torchio import safe_torch_load
 
 
 def load_model(ckpt_path, model_type="jepa", device="cpu"):
@@ -29,7 +30,7 @@ def load_model(ckpt_path, model_type="jepa", device="cpu"):
     if model_type == "jepa":
         from src.models.jepa import TextSpanJEPA, TextSpanJEPAConfig
 
-        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        ckpt = safe_torch_load(ckpt_path, map_location=device)
         config = TextSpanJEPAConfig()
         model = TextSpanJEPA(config)
         model.encoder.load_state_dict(ckpt.get("encoder", {}))
@@ -39,7 +40,7 @@ def load_model(ckpt_path, model_type="jepa", device="cpu"):
     elif model_type == "mlm":
         from baselines.mlm_baseline import MLMBaseline
 
-        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        ckpt = safe_torch_load(ckpt_path, map_location=device)
         model = MLMBaseline(
             vocab_size=50304, max_seq_len=512, embed_dim=768, depth=12, num_heads=12
         )
@@ -47,7 +48,7 @@ def load_model(ckpt_path, model_type="jepa", device="cpu"):
     elif model_type == "data2vec":
         from baselines.data2vec_baseline import Data2VecTextBaseline
 
-        ckpt = torch.load(ckpt_path, map_location=device, weights_only=False)
+        ckpt = safe_torch_load(ckpt_path, map_location=device)
         model = Data2VecTextBaseline(
             vocab_size=50304, max_seq_len=512, embed_dim=768, depth=12, num_heads=12
         )

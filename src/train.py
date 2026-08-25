@@ -21,6 +21,7 @@ import yaml
 
 from src.utils.logging import AverageMeter, CSVLogger
 from src.utils.seed import seed_everything, worker_init_fn
+from src.utils.torchio import safe_torch_load
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
 logger = logging.getLogger()
@@ -196,7 +197,7 @@ def load_checkpoint(path, model, optimizer, scaler, model_name="text_span_jepa")
     """
     model_name = _normalize_model_name(model_name)
     try:
-        checkpoint = torch.load(path, map_location=torch.device("cpu"), weights_only=False)
+        checkpoint = safe_torch_load(path, map_location=torch.device("cpu"))
 
         epoch = checkpoint.get("epoch", 0)
         global_step = checkpoint.get("global_step", 0)
@@ -802,6 +803,43 @@ def _restore_training_state(
     return start_epoch, global_step, ema_step, mask_step, best_val_loss
 
 
+def _warn_unknown_config_keys(args):
+    """Warn about config leaf keys absent from defaults.yaml (likely typos)."""
+    try:
+        base = os.path.dirname(os.path.abspath(__file__))
+        defaults_path = os.path.join(base, "defaults.yaml")
+        if not os.path.exists(defaults_path):
+            defaults_path = os.path.join(base, "..", "defaults.yaml")
+        with open(defaults_path, "r") as f:
+            known = yaml.safe_load(f)
+    except Exception:
+        return
+
+    def _leaves(d, prefix=""):
+        out = set()
+        if isinstance(d, dict):
+            for k, v in d.items():
+                p = f"{prefix}.{k}" if prefix else str(k)
+                out.add(p)
+                out |= _leaves(v, p)
+        return out
+
+    known_leaf_names = {p.split(".")[-1] for p in _leaves(known)}
+    metadata_keys = {"_meta", "description"}  # declarative namespaces
+
+    def _walk(d, prefix=""):
+        if not isinstance(d, dict):
+            return
+        for k, v in d.items():
+            p = f"{prefix}.{k}" if prefix else str(k)
+            if isinstance(v, dict):
+                _walk(v, p)
+            elif k not in known_leaf_names and k not in metadata_keys:
+                logger.warning(f"Unknown config key '{p}' is not in defaults.yaml — possible typo")
+
+    _walk(args)
+
+
 def main(args):
     # ---- Config ----
     meta_seed = args.get("meta", {}).get("seed")
@@ -810,6 +848,7 @@ def main(args):
     # documents top-level `seed`, code historically read only meta.seed.
     seed = meta_seed if meta_seed is not None else (top_seed if top_seed is not None else 42)
     seed_everything(seed)
+    _warn_unknown_config_keys(args)
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     logger.info(f"Using device: {device}")

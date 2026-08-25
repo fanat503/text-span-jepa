@@ -9,6 +9,7 @@
 import torch
 import torch.nn.functional as F
 from torch import nn
+from src.utils.torchio import safe_torch_load
 
 
 class SparseAutoencoder(nn.Module):
@@ -283,8 +284,7 @@ class SAETrainer:
 
     def load(self, path):
         """Load SAE checkpoint."""
-        ckpt = torch.load(path, map_location=self.device, weights_only=False)
-        self.sae.load_state_dict(ckpt["sae_state"])
+        ckpt = safe_torch_load(path, map_location=self.device)
         self.optimizer.load_state_dict(ckpt["optimizer_state"])
         self.scheduler.load_state_dict(ckpt["scheduler_state"])
         self.step_count = ckpt["step_count"]
