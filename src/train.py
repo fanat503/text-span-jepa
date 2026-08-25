@@ -825,7 +825,21 @@ def _warn_unknown_config_keys(args):
         return out
 
     known_leaf_names = {p.split(".")[-1] for p in _leaves(known)}
+    # Keys invisible to a textual defaults.yaml diff:
+    #   - consumed dynamically by baselines via model_cfg.get(...)
+    #   - CLI-only overrides / descriptive provenance
+    extra_known = {
+        "average_top_k_layers",
+        "loss_beta",
+        "loss_scale",
+        "ema_decay",
+        "ema_end_decay",
+        "ema_anneal_end_step",
+        "head_layers",
+        "dataset",
+    }
     metadata_keys = {"_meta", "description"}  # declarative namespaces
+    metadata_prefixes = ("_meta.",)  # _meta.* provenance subtrees
 
     def _walk(d, prefix=""):
         if not isinstance(d, dict):
@@ -834,7 +848,12 @@ def _warn_unknown_config_keys(args):
             p = f"{prefix}.{k}" if prefix else str(k)
             if isinstance(v, dict):
                 _walk(v, p)
-            elif k not in known_leaf_names and k not in metadata_keys:
+            elif (
+                k not in known_leaf_names
+                and k not in metadata_keys
+                and k not in extra_known
+                and not p.startswith(metadata_prefixes)
+            ):
                 logger.warning(f"Unknown config key '{p}' is not in defaults.yaml — possible typo")
 
     _walk(args)
