@@ -704,83 +704,24 @@ class TextSpanJEPA(nn.Module):
         loss_variance = self.variance_reg(h_online)
         loss_covariance = self.covariance_reg(h_online)
 
-        lambda_sigreg = self.config.lambda_sigreg
-        if lambda_sigreg > 0:
-            loss_sigreg = self.sigreg(h_online)
-        else:
-            loss_sigreg = _zero_loss
+        loss_sigreg = self._sigreg_loss(h_online)
 
         # Predictive Rank Regularization (prevents rank collapse in workspace)
-        lambda_pred_rank = self.config.lambda_predictive_rank
-        if lambda_pred_rank > 0 and self.jawp is not None:
-            if valid_mask.any() and span_preds.size(0) > 1:
-                loss_pred_rank = self.jawp.predictive_rank_loss(span_preds)
-            else:
-                loss_pred_rank = _zero_loss
-        else:
-            loss_pred_rank = _zero_loss
+        loss_pred_rank = self._pred_rank_loss(span_preds, valid_mask)
 
         # CGN orthogonality loss: encourage visible/masked gates to differ
-        lambda_cgn_ortho = self.config.lambda_cgn_ortho
-        if lambda_cgn_ortho > 0 and self.cgn is not None:
-            # Loss = 1 - orthogonality (minimizing pushes orthogonality toward 1)
-            # Use differentiable gate logits directly:
-            # cos_sim(g_visible, g_masked) — we want this close to 0 (orthogonal)
-            probs_v = F.softmax(self.cgn.gate_logits_visible, dim=-1)[:, 1]
-            probs_m = F.softmax(self.cgn.gate_logits_masked, dim=-1)[:, 1]
-            cos_sim = F.cosine_similarity(probs_v.unsqueeze(0), probs_m.unsqueeze(0))
-            # loss = cos_sim² → minimize to make gates orthogonal
-            loss_cgn_ortho = cos_sim.pow(2)
-        else:
-            loss_cgn_ortho = _zero_loss
+        loss_cgn_ortho = self._cgn_ortho_loss(h_online)
 
-        # SWIP: Selective Whitening with Information Preservation
-        # Whitens background noise while preserving workspace structure
-        lambda_swip = self.config.lambda_swip
-        if lambda_swip > 0 and self.swip is not None:
-            ws_Q = None
-            if self.jawp is not None:
-                k_active = int(self.jawp.active_k.item())
-                ws_Q = self.jawp.workspace_Q[:, :k_active]  # live view: SWIP may shape Q
-            loss_swip, swip_info = self.swip(h_online, workspace_Q=ws_Q)
-        else:
-            loss_swip = _zero_loss
-            swip_info = {}
+        # SWIP: selective whitening that still lets SWIP shape the workspace Q
+        loss_swip, swip_info = self._swip_loss(h_online)
 
-        # SPC: Spectral Predictive Coding — frequency-band-aware prediction
-        # Allocates capacity proportional to information content per band
-        lambda_spc = self.config.lambda_spc
-        if lambda_spc > 0 and self.spc is not None:
-            if valid_mask.any():
-                spc_z_pred = (
-                    span_preds[:, :min_cols][combined_valid]
-                    if combined_valid.any()
-                    else span_preds.reshape(-1, span_preds.size(-1))
-                )
-                spc_z_target = (
-                    target_gathered[:, :min_cols][combined_valid]
-                    if combined_valid.any()
-                    else h_target.detach().reshape(-1, h_target.size(-1))
-                )
-                loss_spc, spc_info = self.spc(spc_z_pred, spc_z_target)
-            else:
-                loss_spc = _zero_loss
-                spc_info = {}
-        else:
-            loss_spc = _zero_loss
-            spc_info = {}
+        # SPC: frequency-band-aware prediction loss
+        loss_spc, spc_info = self._spc_loss(
+            span_preds, target_gathered, combined_valid, valid_mask, min_cols, h_target
+        )
 
-        # WSD: Workspace-Target Synchronization Drift
-        # Penalizes desynchronization between JAWP Q and target encoder workspace
-        if self.wsd is not None and self.jawp is not None:
-            k_active = int(self.jawp.active_k.item())
-            Q_ws = self.jawp.workspace_Q[:, :k_active]
-            loss_wsd, wsd_info = self.wsd.compute_drift(
-                Q_ws, h_target=h_target.detach(), step=current_step
-            )
-        else:
-            loss_wsd = _zero_loss
-            wsd_info = {}
+        # WSD: penalizes desynchronization between JAWP Q and target workspace
+        loss_wsd, wsd_info = self._wsd_loss(h_online, h_target, current_step)
 
         # CMC: Cross-Mask Consistency Regularization.
         # The training loop runs a second forward with a different mask and calls
@@ -812,45 +753,19 @@ class TextSpanJEPA(nn.Module):
         loss_gac = _zero_loss
         gac_info = {}
 
-        # STA: Spectral Transport Alignment
-        if self.sta is not None:
-            loss_sta, sta_info = self.sta(h_online, step=current_step)
-        else:
-            loss_sta = _zero_loss
-            sta_info = {}
+        # STA: spectral transport alignment of h_online spectrum
+        loss_sta, sta_info = self._sta_loss(h_online, current_step)
 
-        # PUC: Prediction Uncertainty Calibration
-        # Applied to predictor output (span_preds) to prevent overconfident predictions
-        if self.puc is not None:
-            if valid_mask.any() and span_preds.size(0) > 0 and span_preds.size(1) > 0:
-                loss_puc, puc_info = self.puc(span_preds, z_target=h_target, step=current_step)
-            else:
-                loss_puc, puc_info = self.puc(h_online, z_target=h_target, step=current_step)
-        else:
-            loss_puc = _zero_loss
-            puc_info = {}
+        # PUC: prediction uncertainty calibration on predictor output
+        loss_puc, puc_info = self._puc_loss(
+            h_online, span_preds, h_target, valid_mask, current_step
+        )
 
-        # RDC: Representation Drift Compensation
-        # Uses running z_previous buffer — no external state needed
-        if self.rdc is not None:
-            ws_Q_rdc = None
-            if self.jawp is not None:
-                k_active_rdc = int(self.jawp.active_k.item())
-                ws_Q_rdc = self.jawp.workspace_Q[:, :k_active_rdc]  # live view
-            loss_rdc, rdc_info = self.rdc(h_online, workspace_Q=ws_Q_rdc, step=current_step)
-        else:
-            loss_rdc = _zero_loss
-            rdc_info = {}
+        # RDC: representation drift compensation (running z_previous buffer)
+        loss_rdc, rdc_info = self._rdc_loss(h_online, current_step)
 
-        # WSR: Workspace Sharpness Regularization
-        # Penalizes sharp minima on Gr(k,D) for workspace Q
-        if self.wsr is not None and self.jawp is not None:
-            k_active_wsr = int(self.jawp.active_k.item())
-            ws_Q_wsr = self.jawp.workspace_Q[:, :k_active_wsr]  # live view: WSR shapes Q
-            loss_wsr, wsr_info = self.wsr(ws_Q_wsr, step=current_step)
-        else:
-            loss_wsr = _zero_loss
-            wsr_info = {}
+        # WSR: sharpness penalty on the live workspace slice
+        loss_wsr, wsr_info = self._wsr_loss(h_online, current_step)
 
         total_loss = (
             self.config.lambda_span * loss_span
@@ -858,11 +773,11 @@ class TextSpanJEPA(nn.Module):
             + self.config.lambda_decoder * loss_decoder
             + self.config.lambda_variance * loss_variance
             + self.config.lambda_covariance * loss_covariance
-            + lambda_sigreg * loss_sigreg
-            + lambda_pred_rank * loss_pred_rank
-            + lambda_cgn_ortho * loss_cgn_ortho
-            + lambda_swip * loss_swip
-            + lambda_spc * loss_spc
+            + self.config.lambda_sigreg * loss_sigreg
+            + self.config.lambda_predictive_rank * loss_pred_rank
+            + self.config.lambda_cgn_ortho * loss_cgn_ortho
+            + self.config.lambda_swip * loss_swip
+            + self.config.lambda_spc * loss_spc
             + self.config.lambda_wsd * loss_wsd
             + self.config.lambda_cmc * loss_cmc
             + self.config.lambda_gac * loss_gac
@@ -1015,6 +930,98 @@ class TextSpanJEPA(nn.Module):
             zero = torch.tensor(0.0, device=z2.device)
             return zero, {"cmc_loss": 0.0, "cmc_skipped": True}
         return self.compute_cmc_loss(z1, z2, overlap)
+
+    # ═══ Per-mechanism loss collectors (round-6 decomposition) ═══
+    # Each returns (loss, info) — or a bare loss where no diagnostics exist.
+    # Disabled mechanisms yield a graph-attached zero so the reducer shape
+    # and autograd participation stay identical to the inline originals.
+
+    def _zero(self, like):
+        return like.new_tensor(0.0, requires_grad=True)
+
+    def _sigreg_loss(self, h_online):
+        if self.config.lambda_sigreg <= 0:
+            return self._zero(h_online)
+        return self.sigreg(h_online)
+
+    def _pred_rank_loss(self, span_preds, valid_mask):
+        if (
+            self.config.lambda_predictive_rank <= 0
+            or self.jawp is None
+            or not valid_mask.any()
+            or span_preds.size(0) <= 1
+        ):
+            return self._zero(span_preds)
+        return self.jawp.predictive_rank_loss(span_preds)
+
+    def _cgn_ortho_loss(self, h_online):
+        if self.config.lambda_cgn_ortho <= 0 or self.cgn is None:
+            return self._zero(h_online)
+        probs_v = F.softmax(self.cgn.gate_logits_visible, dim=-1)[:, 1]
+        probs_m = F.softmax(self.cgn.gate_logits_masked, dim=-1)[:, 1]
+        cos_sim = F.cosine_similarity(probs_v.unsqueeze(0), probs_m.unsqueeze(0))
+        return cos_sim.pow(2)  # minimize → gates orthogonal
+
+    def _swip_loss(self, h_online):
+        if self.config.lambda_swip <= 0 or self.swip is None:
+            return self._zero(h_online), {}
+        ws_Q = None
+        if self.jawp is not None:
+            k_active = int(self.jawp.active_k.item())
+            ws_Q = self.jawp.workspace_Q[:, :k_active]  # live view: SWIP may shape Q
+        return self.swip(h_online, workspace_Q=ws_Q)
+
+    def _spc_loss(
+        self, span_preds, target_gathered, combined_valid, valid_mask, min_cols, h_target
+    ):
+        if self.config.lambda_spc <= 0 or self.spc is None or not valid_mask.any():
+            return self._zero(span_preds), {}
+        spc_z_pred = (
+            span_preds[:, :min_cols][combined_valid]
+            if combined_valid.any()
+            else span_preds.reshape(-1, span_preds.size(-1))
+        )
+        spc_z_target = (
+            target_gathered[:, :min_cols][combined_valid]
+            if combined_valid.any()
+            else h_target.detach().reshape(-1, h_target.size(-1))
+        )
+        return self.spc(spc_z_pred, spc_z_target)
+
+    def _wsd_loss(self, h_online, h_target, current_step):
+        if self.wsd is None or self.jawp is None:
+            return self._zero(h_online), {}
+        k_active = int(self.jawp.active_k.item())
+        Q_ws = self.jawp.workspace_Q[:, :k_active]
+        return self.wsd.compute_drift(Q_ws, h_target=h_target.detach(), step=current_step)
+
+    def _sta_loss(self, h_online, current_step):
+        if self.sta is None:
+            return self._zero(h_online), {}
+        return self.sta(h_online, step=current_step)
+
+    def _puc_loss(self, h_online, span_preds, h_target, valid_mask, current_step):
+        if self.puc is None:
+            return self._zero(h_online), {}
+        if valid_mask.any() and span_preds.size(0) > 0 and span_preds.size(1) > 0:
+            return self.puc(span_preds, z_target=h_target, step=current_step)
+        return self.puc(h_online, z_target=h_target, step=current_step)
+
+    def _rdc_loss(self, h_online, current_step):
+        if self.rdc is None:
+            return self._zero(h_online), {}
+        ws_Q_rdc = None
+        if self.jawp is not None:
+            k_active_rdc = int(self.jawp.active_k.item())
+            ws_Q_rdc = self.jawp.workspace_Q[:, :k_active_rdc]  # live view
+        return self.rdc(h_online, workspace_Q=ws_Q_rdc, step=current_step)
+
+    def _wsr_loss(self, h_online, current_step):
+        if self.wsr is None or self.jawp is None:
+            return self._zero(h_online), {}
+        k_active_wsr = int(self.jawp.active_k.item())
+        ws_Q_wsr = self.jawp.workspace_Q[:, :k_active_wsr]  # live view: WSR shapes Q
+        return self.wsr(ws_Q_wsr, step=current_step)
 
     def get_num_params(self, non_embedding=True):
         enc = self.encoder.get_num_params(non_embedding)
