@@ -321,6 +321,15 @@ class LayerRoutingAnalysis:
         n_layers = len(layer_representations)
         task_names = list(task_labels_dict.keys())
         n_tasks = len(task_names)
+        if n_layers < 2:
+            # Leave-one-out is undefined for a single layer.
+            return {
+                "routing_matrix": torch.zeros(n_layers, max(n_tasks, 0)),
+                "task_names": task_names,
+                "baseline_accs": {},
+                "specialization": 0.0,
+                "skipped": True,
+            }
 
         # First, compute baseline accuracy using ALL layers (sum)
         combined = sum(layer_representations) / n_layers
@@ -337,8 +346,10 @@ class LayerRoutingAnalysis:
         routing = torch.zeros(n_layers, n_tasks)
         for i in range(n_layers):
             # Sum all layers except i
-            loo_combined = sum(l for j, l in enumerate(layer_representations) if j != i) / max(
-                n_layers - 1, 1
+            # Normalize by the FULL layer count so baseline and ablation share
+            # one scale (dividing by n_layers-1 inflated LOO representations).
+            loo_combined = sum(l for j, l in enumerate(layer_representations) if j != i) / (
+                n_layers
             )
             for t_idx, (task_name, labels) in enumerate(task_labels_dict.items()):
                 from src.interp.layer_analysis import LayerwiseProbe

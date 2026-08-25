@@ -27,7 +27,10 @@ def _svg_footer():
 
 
 def _svg_text(x, y, text, size=12, anchor="middle", color="black", weight="normal"):
-    return f'  <text x="{x}" y="{y}" font-size="{size}" text-anchor="{anchor}" fill="{color}" font-weight="{weight}">{text}</text>\n'
+    from html import escape
+
+    safe = escape(str(text), quote=False)  # & < > must not break the SVG tree
+    return f'  <text x="{x}" y="{y}" font-size="{size}" text-anchor="{anchor}" fill="{color}" font-weight="{weight}">{safe}</text>\n'
 
 
 def _svg_line(x1, y1, x2, y2, color="black", width=1):
@@ -384,7 +387,8 @@ def probing_complexity_curve(
         svg += _svg_text(x, margin + chart_h + 15, str(d), size=9)
 
     # JEPA line
-    jepa_points = [(x_pos(d), y_pos(a)) for d, a in zip(depths, jepa_accuracies)]
+    _n_j = min(len(depths), len(jepa_accuracies))
+    jepa_points = sorted((x_pos(depths[i]), y_pos(jepa_accuracies[i])) for i in range(_n_j))
     if len(jepa_points) > 1:
         for i in range(len(jepa_points) - 1):
             svg += _svg_line(
@@ -399,7 +403,8 @@ def probing_complexity_curve(
         svg += _svg_circle(x, y, 4, fill="#4285f4")
 
     # Baseline line
-    base_points = [(x_pos(d), y_pos(a)) for d, a in zip(depths, baseline_accuracies)]
+    _n_b = min(len(depths), len(baseline_accuracies))
+    base_points = sorted((x_pos(depths[i]), y_pos(baseline_accuracies[i])) for i in range(_n_b))
     if len(base_points) > 1:
         for i in range(len(base_points) - 1):
             svg += _svg_line(
@@ -461,8 +466,9 @@ def convergence_plot(
     svg += _svg_line(margin, margin, margin, margin + chart_h, color="black")
     svg += _svg_line(margin, margin + chart_h, margin + chart_w, margin + chart_h, color="black")
 
-    # JEPA line
-    for i in range(len(steps) - 1):
+    # Values may lag steps in length; draw only fully-defined segments.
+    n_j = max(min(len(steps), len(jepa_values)) - 1, 0)
+    for i in range(n_j):
         svg += _svg_line(
             xp(steps[i]),
             yp(jepa_values[i]),
@@ -472,8 +478,8 @@ def convergence_plot(
             width=2,
         )
 
-    # Baseline line
-    for i in range(len(steps) - 1):
+    n_b = max(min(len(steps), len(baseline_values)) - 1, 0)
+    for i in range(n_b):
         svg += _svg_line(
             xp(steps[i]),
             yp(baseline_values[i]),

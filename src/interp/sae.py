@@ -112,7 +112,7 @@ class SparseAutoencoder(nn.Module):
         """Track which features fired for dead feature resampling."""
         fired = (latent.abs() > self.dead_feature_threshold).any(dim=0).float()
         self.feature_act_count += fired
-        self.total_samples += 1
+        self.total_samples += latent.size(0)  # true sample count, not step count
         self._steps_since_resample += 1
 
     @torch.no_grad()
@@ -275,6 +275,8 @@ class SAETrainer:
                 "optimizer_state": self.optimizer.state_dict(),
                 "scheduler_state": self.scheduler.state_dict(),
                 "step_count": self.step_count,
+                # resample cadence must survive resume, else the interval resets
+                "steps_since_resample": self.sae._steps_since_resample,
             },
             path,
         )
@@ -286,3 +288,4 @@ class SAETrainer:
         self.optimizer.load_state_dict(ckpt["optimizer_state"])
         self.scheduler.load_state_dict(ckpt["scheduler_state"])
         self.step_count = ckpt["step_count"]
+        self.sae._steps_since_resample = int(ckpt.get("steps_since_resample", 0))

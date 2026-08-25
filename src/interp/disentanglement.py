@@ -9,6 +9,7 @@
 # Modularity: Ridgeway & Mozer (2018) "Learning Deep Disentangled Embeddings"
 
 import math
+import warnings
 
 import torch
 
@@ -169,6 +170,7 @@ class MIGScore:
                 factors = factors.unsqueeze(1)
 
             mig = 0.0
+            n_valid = 0  # factors with non-zero entropy actually contribute
             for j in range(K):
                 # Compute mutual information between each dim and factor j
                 mi_values = torch.zeros(D)
@@ -180,6 +182,8 @@ class MIGScore:
                 if h_factor == 0:
                     continue
 
+                n_valid += 1
+
                 for i in range(D):
                     d_i = _discretize(representations[:, i], n_bins)
                     mi_values[i] = _mutual_information(d_i, f_j_disc, n_bins)
@@ -189,7 +193,9 @@ class MIGScore:
                 gap = top2[0] - (top2[1] if len(top2) > 1 else torch.tensor(0.0))
                 mig += gap.item() / (h_factor + 1e-10)
 
-            return max(min(mig / K, 1.0), 0.0)
+            # Normalize by CONTRIBUTING factors: zero-entropy factors were
+            # skipped above, so dividing by K deflated the score silently.
+            return max(min(mig / max(n_valid, 1), 1.0), 0.0)
         except Exception:
             return 0.0
 
@@ -287,7 +293,8 @@ def _discretize(x, n_bins):
     try:
         bins = torch.linspace(x.min(), x.max() + 1e-8, n_bins + 1)
         return torch.bucketize(x.contiguous(), bins[1:-1].contiguous())  # bin indices
-    except Exception:
+    except Exception as e:
+        warnings.warn(f"_discretize failed ({e}); returning all-zero bins")
         return torch.zeros_like(x, dtype=torch.long)
 
 

@@ -41,6 +41,14 @@ def _ensure_mpl():
         return False
 
 
+def _cmap(name, n):
+    """Version-safe discrete colormap: mpl >= 3.9 removed plt.get_cmap(name, lut)."""
+    try:
+        return _plt.get_cmap(name, n)
+    except (TypeError, ValueError):
+        return _mpl.colormaps[name].resampled(n)
+
+
 # ═══════════════════════════════════════════════════════════════════
 #  Academic plot style
 # ═══════════════════════════════════════════════════════════════════
@@ -203,7 +211,8 @@ def plot_svcca_curve(
     x = np.arange(len(svcca_scores))
     ax.bar(x, svcca_scores, color="#4393c3", alpha=0.7, label="SVCCA")
 
-    cumsum = np.cumsum(svcca_scores) / svcca_scores.sum()
+    _denom = svcca_scores.sum()
+    cumsum = np.cumsum(svcca_scores) / _denom if _denom > 0 else np.zeros_like(svcca_scores)
     ax2 = ax.twinx()
     ax2.plot(x, cumsum, color="#d6604d", linewidth=1.5, label="cumulative")
     ax2.axhline(threshold, color="#d6604d", linestyle=":", alpha=0.5)
@@ -275,7 +284,7 @@ def plot_representation_2d(
 
     if labels is not None:
         unique_labels = np.unique(labels)
-        cmap = _plt.get_cmap("tab10", len(unique_labels))
+        cmap = _cmap("tab10", len(unique_labels))
         for i, lbl in enumerate(unique_labels):
             mask = labels == lbl
             ax.scatter(
@@ -331,7 +340,7 @@ def plot_stacked_losses(
     # Clamp negatives for stacking
     values = np.maximum(values, 0)
 
-    colors = _plt.get_cmap("Set2", len(keys))
+    colors = _cmap("Set2", len(keys))
     ax.stackplot(
         steps, values, labels=keys, colors=[colors(i) for i in range(len(keys))], alpha=0.8
     )
@@ -778,7 +787,7 @@ def plot_spectral_waterfall(
     fig, ax = _plt.subplots(figsize=(8, 5))
 
     n_steps = len(eigenvalues_by_step)
-    cmap = _plt.get_cmap("viridis", n_steps)
+    cmap = _cmap("viridis", n_steps)
 
     for i, (eigs, step) in enumerate(zip(eigenvalues_by_step, steps)):
         x = np.arange(len(eigs))
@@ -1508,8 +1517,13 @@ def plot_pcr_cascade_capacity(
     n_levels = len(level_losses[0])
     colors = plt.cm.Set2(np.linspace(0, 1, max(n_levels, 1)))
     for l in range(n_levels):
-        vals = [step[l] for step in level_losses if l < len(step)]
-        ax.plot(steps[: len(vals)], vals, color=colors[l], linewidth=1.5, label=f"Level {l}")
+        # Pair every level value with its own step: level arrays are ragged and
+        # steps[:len(vals)] silently misaligned earliest-steps with later values.
+        pts = [(s, step[l]) for s, step in zip(steps, level_losses) if l < len(step)]
+        if not pts:
+            continue
+        s_arr, v_arr = zip(*pts)
+        ax.plot(s_arr, v_arr, color=colors[l], linewidth=1.5, label=f"Level {l}")
     ax.set_xlabel("Training step")
     ax.set_ylabel("Level loss")
     ax.set_title(title)
