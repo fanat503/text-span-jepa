@@ -22,6 +22,11 @@
 #   log q*(z) = -λ ||z - z_pred||² + const
 # which is Gaussian with covariance (2λ)^{-1} I.
 # PUC drives Σ_pred toward this optimal covariance.
+#
+# Implementation status (audited R11/R12): the EXECUTED loss is a ReLU'd
+# log-det barrier over Oja-tracked eigenvalues, gated by an entropy-deficit
+# check — it is NOT the Lagrangian-dual object sketched in the theorem
+# above. Full discrepancy matrix: proofs/IMPLEMENTATION_STATUS.md.
 
 from __future__ import annotations
 
@@ -199,7 +204,6 @@ class PredictionUncertaintyCalibration(nn.Module):
         # We want: H(z_pred) ≥ H_target
         # Loss = eta * max(0, H_target - H(z_pred))
         entropy_deficit = max(0.0, self.target_entropy - estimated_entropy)
-        self.eta * warmup_factor * entropy_deficit
 
         # Convert to tensor for gradient flow (through eigenvalues)
         # The differentiable path: encourage large eigenvalues
