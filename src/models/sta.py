@@ -259,10 +259,16 @@ class SpectralTransportAlignment(nn.Module):
                 "sta_warmup_factor": 0.0,
             }
 
-        # Update reference and current eigenvalues periodically
-        should_update = (step % self.update_interval == 0) or not self.is_initialized
-        if should_update:
+        # Reference follows the interval cadence; CURRENT recomputes every
+        # step. The original code refreshed both from the same tensor at the
+        # same moments, forcing W1(current, ref) == 0 identically — the loss
+        # could never become non-zero (audit R11).
+        if not self.is_initialized:
             self._update_reference(z.detach())
+            self._compute_current_eigenvalues(z.detach())
+        else:
+            if step % self.update_interval == 0:
+                self._update_reference(z.detach())
             self._compute_current_eigenvalues(z.detach())
 
         # Compute W1 distance: (1/D) Σ |λ_i^current - λ_i^ref|

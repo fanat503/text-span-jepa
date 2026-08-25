@@ -201,8 +201,15 @@ class WorkspaceSyncDrift(nn.Module):
             _eigenvalues, eigenvectors = torch.linalg.eigh(self.target_cov)
             # eigh returns ascending order; take top-k
             self.target_Q.copy_(eigenvectors[:, -self.k :])
-        except Exception:
-            pass  # Keep previous Q_target
+        except Exception as e:
+            # Keep previous Q_target, but SAY SO: a silently frozen drift
+            # signal invalidates every downstream WSD diagnostic (fleet R11).
+            import warnings
+
+            warnings.warn(
+                f"WSD target-workspace eigendecomposition failed ({e}); "
+                "reusing the previous target_Q."
+            )
 
     def compute_drift(self, Q_workspace, h_target=None, step=0):
         """Compute workspace-target synchronization drift.

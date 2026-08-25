@@ -219,6 +219,7 @@ class SWIPModule(nn.Module):
             # Use JAWP workspace: project onto Q and (I - QQ^T)
             Q = workspace_Q[:, : min(workspace_Q.shape[1], k)]
             k_actual = Q.shape[1]
+            k_eff = k_actual
 
             # Workspace eigenvalues: diagonal of Q^T Cov Q
             # This is differentiable w.r.t. cov (and thus w.r.t. z)
@@ -263,6 +264,7 @@ class SWIPModule(nn.Module):
 
         else:
             # Use top-k PCA directions (eigenvalues are sorted ascending)
+            k_eff = k
             # eigenvalues[0] = smallest, eigenvalues[-1] = largest
             bg_eigenvalues = eigenvalues[: D - k]  # smallest D-k (background)
             ws_eigenvalues = eigenvalues[D - k :]  # largest k (workspace)
@@ -286,7 +288,10 @@ class SWIPModule(nn.Module):
             anisotropy = eigenvalues.max() / (eigenvalues.min() + self.eps)
 
             # Background uniformity: std(bg_eigenvalues) / mean(bg_eigenvalues)
-            bg_eigs = eigenvalues[: D - k] if workspace_Q is None else eigenvalues[: D - k]
+            # Slice by the EFFECTIVE workspace width: on the JAWP path k may be
+            # clamped by Q's width (k_eff < k), and a static D-k here reported
+            # background diagnostics over the wrong tail (fleet R11).
+            bg_eigs = eigenvalues[: D - k_eff]
             bg_mean_val = bg_eigs.mean()
             bg_std_val = bg_eigs.std() if bg_eigs.numel() > 1 else torch.tensor(0.0)
             bg_uniformity = bg_std_val / (bg_mean_val + self.eps)
@@ -302,7 +307,7 @@ class SWIPModule(nn.Module):
                 spectral_gap.item() if isinstance(spectral_gap, torch.Tensor) else spectral_gap
             ),
             "k_workspace": k,
-            "bg_dim": D - k,
+            "bg_dim": D - k_eff,
         }
 
         return loss, info
