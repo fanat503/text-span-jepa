@@ -192,3 +192,4 @@ logging:
   folder: output/
   log_freq: 10
   write_tag: text_span_jepa
+  keep_last_epoch_ckpts: null  # int K: prune older checkpoint-ep{N} files

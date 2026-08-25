@@ -122,44 +122,59 @@ class FeatureCompositionScore:
             dict with aggregate composition score
         """
         results = []
-        for pair in test_pairs:
+        placebos = []
+        for pair_idx, pair in enumerate(test_pairs):
             a_reps = pair["a_reps"].to(self.device)
             b_reps = pair["b_reps"].to(self.device)
             ab_reps = pair["ab_reps"].to(self.device)
             neither_reps = pair["neither_reps"].to(self.device)
 
-            # Find best SAE features for A and B
-            feature_a_idx = self._find_discriminating_feature(
-                a_reps, neither_reps, n_feature_search
-            )
-            feature_b_idx = self._find_discriminating_feature(
-                b_reps, neither_reps, n_feature_search
-            )
+            # Find candidate SAE features for A and B (honors n_feature_search)
+            cand_a = self._find_discriminating_feature(a_reps, neither_reps, n_feature_search)
+            cand_b = self._find_discriminating_feature(b_reps, neither_reps, n_feature_search)
 
-            # Test composition
-            # Create synthetic combined features
             z_a = self.sae.encode(a_reps.mean(dim=0, keepdim=True))[0]
             z_b = self.sae.encode(b_reps.mean(dim=0, keepdim=True))[0]
             z_ab = self.sae.encode(ab_reps.mean(dim=0, keepdim=True))[0]
 
-            # Activate just feature A and feature B
-            z_combined = torch.zeros_like(z_a)
-            z_combined[:, feature_a_idx] = z_a[:, feature_a_idx]
-            z_combined[:, feature_b_idx] = z_b[:, feature_b_idx]
+            # Placebo control (fleet R3): permuting AB rows destroys sample
+            # identity while keeping the marginal SAE code distribution; the
+            # same selection run on shuffled AB calibrates the tautology of
+            # comparing against data that literally contains A and B.
+            gen = torch.Generator().manual_seed(1234 + pair_idx)
+            perm = torch.randperm(ab_reps.size(0), generator=gen).to(ab_reps.device)
+            z_ab_placebo = self.sae.encode(ab_reps[perm].mean(dim=0, keepdim=True))[0]
 
-            # Cosine similarity with actual AB
-            cos_sim = F.cosine_similarity(z_combined, z_ab).item()
-            results.append(cos_sim)
+            best_cos = -2.0
+            best_placebo = 0.0
+            for b_idx in cand_b:
+                z_combined = torch.zeros_like(z_a)
+                z_combined[:, cand_a[0]] = z_a[:, cand_a[0]]
+                z_combined[:, b_idx] = z_b[:, b_idx]
+                cos_real = F.cosine_similarity(z_combined, z_ab).item()
+                if cos_real > best_cos:
+                    best_cos = cos_real
+                    best_placebo = F.cosine_similarity(z_combined, z_ab_placebo).item()
+            results.append(best_cos)
+            placebos.append(best_placebo)
 
         if not results:
             return {"mean_composition_score": 0.0, "n_pairs": 0}
 
+        n = len(results)
         return {
-            "mean_composition_score": sum(results) / len(results),
-            "n_pairs": len(results),
+            "mean_composition_score": sum(results) / n,
+            "n_pairs": n,
             "max_score": max(results),
             "min_score": min(results),
-            "fraction_positive": sum(1 for r in results if r > 0) / len(results),
+            "fraction_positive": sum(1 for r in results if r > 0) / n,
+            # Placebo-calibrated reporting: the raw score is selection-biased
+            # upward by best-of-k search; advantage over matched placebo is
+            # the interpretable quantity.
+            "mean_placebo": sum(placebos) / n,
+            "mean_advantage": sum(r - p for r, p in zip(results, placebos)) / n,
+            "fraction_above_placebo": sum(1 for r, p in zip(results, placebos) if r > p) / n,
+            "n_search_used": int(n_feature_search),
         }
 
     def _find_discriminating_feature(self, pos_reps, neg_reps, n_search=10):
@@ -176,9 +191,10 @@ class FeatureCompositionScore:
         neg_mean = z_neg.mean(dim=0)
         diff = (pos_mean - neg_mean).abs()
 
-        # Top discriminating feature
-        top_idx = diff.topk(min(n_search, diff.numel())).indices[0]
-        return top_idx.item()
+        k = min(n_search, diff.numel())
+        # Return ALL candidates: the caller runs its selection over this list
+        # (top-1-only silently ignored n_feature_search — fleet R3 finding).
+        return diff.topk(k).indices.tolist()
 
     @staticmethod
     def compare_models(

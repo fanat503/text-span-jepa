@@ -360,6 +360,11 @@ def validate_workspace_claim(
 
     # Compute subspace similarity
     similarity_result = compute_workspace_similarity(Q, sae, ws_indices)
+    # Shuffled-Q control (fleet R3): a random orthonormal basis of the same
+    # shape calibrates the fixed 0.8 gate — report the margin explicitly.
+    gen = torch.Generator().manual_seed(20260824)
+    Q_rand, _ = torch.linalg.qr(torch.randn(D, k, generator=gen))
+    placebo = compute_workspace_similarity(Q_rand, sae, ws_indices)
 
     # Bootstrap CI on per-sample workspace utilization
     with torch.no_grad():
@@ -377,7 +382,16 @@ def validate_workspace_claim(
         "n_samples": N,
         "embed_dim": D,
         "workspace_dim_jawp": k,
-        "workspace_claim_valid": similarity_result["subspace_similarity"] > 0.8,
+        "subspace_similarity_placebo": placebo["subspace_similarity"],
+        "claim_margin_above_placebo": (
+            similarity_result["subspace_similarity"] - placebo["subspace_similarity"]
+        ),
+        # Preregistered rule: the claim must beat BOTH the fixed gate and the
+        # shuffled-basis control, not just an unjustified constant.
+        "workspace_claim_valid": (
+            similarity_result["subspace_similarity"] > 0.8
+            and similarity_result["subspace_similarity"] > placebo["subspace_similarity"]
+        ),
     }
 
     return result

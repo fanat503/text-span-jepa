@@ -1276,6 +1276,26 @@ def main(args):
         )
         logger.info(f"Saved checkpoint: {epoch_path}")
 
+        # Optional retention (audit R4 backlog): keep only the newest K epoch
+        # checkpoints. Default null keeps every file (previous behavior).
+        keep_k = log_cfg.get("keep_last_epoch_ckpts", None)
+        if keep_k is not None:
+            import re
+
+            epoch_ckpts = []
+            for fname in os.listdir(log_dir):
+                m = re.fullmatch(r"checkpoint-ep(\d+)\.pth\.tar", fname)
+                if m:
+                    epoch_ckpts.append((int(m.group(1)), fname))
+            epoch_ckpts.sort()
+            k_int = int(keep_k)
+            stale = epoch_ckpts[: len(epoch_ckpts) - k_int] if k_int > 0 else epoch_ckpts
+            for _, stale_name in stale:
+                try:
+                    os.remove(os.path.join(log_dir, stale_name))
+                except OSError:
+                    logger.warning(f"Could not prune old checkpoint: {stale_name}")
+
     logger.info(f"Training complete! Best val loss: {best_val_loss:.4f}")
 
 
