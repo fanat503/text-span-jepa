@@ -231,12 +231,6 @@ def load_checkpoint(path, model, optimizer, scaler, model_name="text_span_jepa")
                 and model.cgn is not None
             ):
                 model.cgn.gate_logits_visible.data.copy_(checkpoint["cgn_gate_logits_visible"])
-            if (
-                "cgn_gate_logits_masked" in checkpoint
-                and hasattr(model, "cgn")
-                and model.cgn is not None
-            ):
-                model.cgn.gate_logits_masked.data.copy_(checkpoint["cgn_gate_logits_masked"])
             if "cgn_total_steps" in checkpoint and hasattr(model, "cgn") and model.cgn is not None:
                 model.cgn.total_steps.copy_(checkpoint["cgn_total_steps"])
             # PCR projection Q restoration

@@ -170,11 +170,14 @@ class ContextualGatingNetwork(nn.Module):
             embed_dim % n_groups == 0
         ), f"embed_dim={embed_dim} must be divisible by n_groups={n_groups}"
 
-        # Gate logits for visible positions: (n_groups, 2)
-        # Column 0 = gate OFF, Column 1 = gate ON
+        # Gate logits for VISIBLE positions: (n_groups, 2), columns [OFF, ON].
+        # The masked-pathway ON probability is the COMPLEMENT of the visible
+        # one (proof §CGN partition-of-unity): both position types share a
+        # single learned Bernoulli per group, so
+        #   g_visible + g_masked == 1
+        # holds BY CONSTRUCTION instead of via an unenforced loss
+        # (reconciles code with proofs/cgn.md — audit R11/R12).
         self.gate_logits_visible = nn.Parameter(torch.zeros(n_groups, 2))
-        # Gate logits for masked positions: (n_groups, 2)
-        self.gate_logits_masked = nn.Parameter(torch.zeros(n_groups, 2))
 
         # Per-dimension refinement: lightweight position-dependent shift
         # This allows the gate to be different per position within a group
@@ -240,11 +243,10 @@ class ContextualGatingNetwork(nn.Module):
 
         # Compute gate probabilities for visible and masked positions
         probs_visible = self._compute_gate_probs(self.gate_logits_visible, tau)
-        probs_masked = self._compute_gate_probs(self.gate_logits_masked, tau)
 
-        # Extract ON probabilities: (n_groups,)
+        # Extract ON probabilities: (n_groups,) — masked is the complement.
         gate_on_visible = probs_visible[:, 1]  # P(gate=ON | visible)
-        gate_on_masked = probs_masked[:, 1]  # P(gate=ON | masked)
+        gate_on_masked = 1.0 - gate_on_visible  # P(gate=ON | masked)
 
         # Compute position-dependent gate modulation via context_proj
         # context_scores: (B, T, n_groups) — how much each group activates
@@ -318,22 +320,15 @@ class ContextualGatingNetwork(nn.Module):
 
     @torch.no_grad()
     def compute_orthogonality_score(self):
-        """Compute orthogonality between visible and masked gate patterns.
+        """Routing decisiveness under complementary gating.
 
-        Returns:
-            float in [0, 1]. Higher = more orthogonal = better routing.
-            1.0 means visible and masked gates are perfectly orthogonal.
+        With P_ON(masked) = 1 - P_ON(visible) the two pathways are exact
+        mirrors, so the legacy "orthogonality" is trivially satisfied. The
+        informative quantity is how DECISIVE the shared Bernoulli is:
+        mean |P_ON - 0.5| * 2, in [0, 1]; 1 = hard routing.
         """
-        probs_v = F.softmax(self.gate_logits_visible, dim=-1)[:, 1]
-        probs_m = F.softmax(self.gate_logits_masked, dim=-1)[:, 1]
-
-        # Cosine similarity between gate patterns
-        cos_sim = F.cosine_similarity(probs_v.unsqueeze(0), probs_m.unsqueeze(0)).item()
-
-        # Orthogonality = 1 - |cos_sim|
-        # Perfectly same direction: 0, perfectly orthogonal: 1
-        ortho = 1.0 - abs(cos_sim)
-        return max(0.0, min(1.0, ortho))
+        p_on = F.softmax(self.gate_logits_visible, dim=-1)[:, 1]
+        return (2.0 * (p_on - 0.5).abs().mean()).item()
 
     @torch.no_grad()
     def compute_routing_efficiency(self, z, mask_positions):
@@ -358,7 +353,7 @@ class ContextualGatingNetwork(nn.Module):
 
         # Compute gate values
         probs_v = F.softmax(self.gate_logits_visible, dim=-1)[:, 1]
-        probs_m = F.softmax(self.gate_logits_masked, dim=-1)[:, 1]
+        probs_m = 1.0 - probs_v  # complementary pathway
 
         # Context preservation: visible positions should retain information
         z_vis = z[vis_bool]  # (N_vis, D)

@@ -77,7 +77,6 @@ class TestCGNCore:
         # Initialize with different logits so gates differ
         with torch.no_grad():
             cgn.gate_logits_visible[:, 1].fill_(1.0)
-            cgn.gate_logits_masked[:, 1].fill_(-1.0)
 
         z = torch.randn(self.batch_size, self.seq_len, self.embed_dim)
         mask = torch.zeros(self.batch_size, self.seq_len, dtype=torch.long)
@@ -160,17 +159,13 @@ class TestCGNOrthogonality:
         assert 0.0 <= score <= 1.0
 
     def test_orthogonality_perfect(self):
-        """When visible and masked gates are orthogonal, score = 1."""
+        """Decisive shared Bernoulli ⇒ routing decisiveness score ≈ 1."""
         cgn = ContextualGatingNetwork(embed_dim=self.embed_dim, n_groups=self.n_groups)
-        # Make visible gates [1, 0] and masked gates [0, 1]
         with torch.no_grad():
-            cgn.gate_logits_visible[:, 0].fill_(10.0)  # Strong OFF
-            cgn.gate_logits_visible[:, 1].fill_(-10.0)  # Weak ON
-            cgn.gate_logits_masked[:, 0].fill_(-10.0)  # Weak OFF
-            cgn.gate_logits_masked[:, 1].fill_(10.0)  # Strong ON
+            cgn.gate_logits_visible[:, 0].fill_(-10.0)  # Strong OFF
+            cgn.gate_logits_visible[:, 1].fill_(10.0)  # Strong ON
         score = cgn.compute_orthogonality_score()
-        # Not exactly 1.0 due to softmax, but should be > 0
-        assert score > 0.0
+        assert score > 0.99
 
     def test_routing_efficiency(self):
         """Routing efficiency metrics should be valid."""
@@ -210,7 +205,6 @@ class TestCGNTheorems:
         # Initialize with different gate patterns
         with torch.no_grad():
             cgn.gate_logits_visible[:, 1].fill_(2.0)
-            cgn.gate_logits_masked[:, 1].fill_(-2.0)
 
         z = torch.randn(32, 16, self.embed_dim)
         mask = torch.zeros(32, 16, dtype=torch.long)
@@ -394,7 +388,6 @@ class TestCGNIntegration:
 
         # CGN parameters should have gradients
         assert model.cgn.gate_logits_visible.grad is not None
-        assert model.cgn.gate_logits_masked.grad is not None
         assert model.cgn.context_proj.weight.grad is not None
 
 

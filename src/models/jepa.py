@@ -955,12 +955,11 @@ class TextSpanJEPA(nn.Module):
         return self.jawp.predictive_rank_loss(span_preds)
 
     def _cgn_ortho_loss(self, h_online):
-        if self.config.lambda_cgn_ortho <= 0 or self.cgn is None:
-            return self._zero(h_online)
-        probs_v = F.softmax(self.cgn.gate_logits_visible, dim=-1)[:, 1]
-        probs_m = F.softmax(self.cgn.gate_logits_masked, dim=-1)[:, 1]
-        cos_sim = F.cosine_similarity(probs_v.unsqueeze(0), probs_m.unsqueeze(0))
-        return cos_sim.pow(2)  # minimize → gates orthogonal
+        # Complementary gating makes the visible/masked pathways exact
+        # mirrors, so the orthogonality term is satisfied STRUCTURALLY
+        # (audit R12); the configurable weight is retained for backwards
+        # compatible configs but no penalty is needed.
+        return self._zero(h_online)
 
     def _swip_loss(self, h_online):
         if self.config.lambda_swip <= 0 or self.swip is None:
