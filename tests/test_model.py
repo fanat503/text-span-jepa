@@ -1860,7 +1860,47 @@ class TestV012Bugfixes:
             device=torch.device("cpu"),
         )
         groups = get_param_groups(model, "text_span_jepa_small", wd=0.04)
-        assert len(groups) == 5, f"Expected 5 param groups, got {len(groups)}"
+        # R18: unconditional variance/covariance regs land in the catch-all,
+        # so the baseline count is 6 even without optional mechanisms.
+        assert len(groups) == 6, f"Expected 6 param groups, got {len(groups)}"
+
+        # With novel-mechanism modules enabled, the R18 catch-all group must
+        # appear so jawp/cgn/pcr/spc parameters actually receive updates.
+        mech_cfg = {
+            "embed_dim": 64,
+            "encoder_depth": 2,
+            "num_heads": 4,
+            "mlp_ratio": 2.0,
+            "predictor_embed_dim": 32,
+            "predictor_depth": 2,
+            "future_offsets": [1],
+            "num_refine_steps": 1,
+            "use_jawp": True,
+            "jawk_k_start": 2,
+            "jawk_k_end": 4,
+            "jawk_curriculum_steps": 0,
+            "use_cgn": True,
+            "use_pcr": True,
+            "pcr_n_levels": 2,
+            "pcr_level_dims": [8, 8],
+            "use_spc": True,
+            "spc_n_bands": 4,
+        }
+        model_mech = create_model(
+            "text_span_jepa_small",
+            mech_cfg,
+            vocab_size=100,
+            max_seq_len=16,
+            device=torch.device("cpu"),
+        )
+        groups_mech = get_param_groups(model_mech, "text_span_jepa_small", wd=0.04)
+        assert (
+            len(groups_mech) == 6
+        ), f"Expected 6 param groups with mechanisms enabled, got {len(groups_mech)}"
+        all_params = [p for g in groups_mech for p in g["params"]]
+        assert any(
+            p is model_mech.jawp.workspace_Q for p in all_params
+        ), "jawp.workspace_Q must be adopted by the optimizer"
 
     def test_mlm_checkpoint_save_load(self):
         """MLM checkpoint should save/load without AttributeError."""

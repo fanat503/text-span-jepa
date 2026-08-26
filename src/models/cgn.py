@@ -238,7 +238,9 @@ class ContextualGatingNetwork(nn.Module):
         tau = self.current_tau(step)
 
         # Update step counter
-        if step is not None:
+        # Advance the anneal counter ONLY during training: validation-time
+        # forwards used to regress tau back toward tau_start (audit R18).
+        if step is not None and self.training:
             self.total_steps.fill_(step)
 
         # Compute gate probabilities for visible and masked positions

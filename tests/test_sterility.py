@@ -67,6 +67,17 @@ PURE_MECHANISMS = [
     ("rdc", {"use_rdc": True, "lambda_rdc": 0.05}),
     ("spc", {"use_spc": True, "lambda_spc": 0.05}),
     ("sigreg", {"lambda_sigreg": 0.05}),
+    (
+        "pred_rank",
+        {
+            "use_jawp": True,
+            "jawk_k_start": 2,
+            "jawk_k_end": 4,
+            "jawk_curriculum_steps": 0,
+            "lambda_predictive_rank": 0.05,
+        },
+    ),
+    ("cgn", {"use_cgn": True}),
 ]
 
 # Stateful mechanisms: asserted via their loss COMPONENT because the signal

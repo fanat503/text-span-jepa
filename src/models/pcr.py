@@ -326,7 +326,7 @@ class PredictiveCascadeRefinement(nn.Module):
         if step < self.warmup_steps:
             warmup_factor = 0.0
         else:
-            warmup_factor = min((step - self.warmup_steps) / self.warmup_steps, 1.0)
+            warmup_factor = min((step - self.warmup_steps) / max(self.warmup_steps, 1), 1.0)
 
         total_refinement_norm = 0.0
         level_info = []

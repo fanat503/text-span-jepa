@@ -121,7 +121,6 @@ def save_checkpoint(
         # CGN gate logits — must be saved for resumption
         if model_name == "text_span_jepa" and hasattr(model, "cgn") and model.cgn is not None:
             state["cgn_gate_logits_visible"] = model.cgn.gate_logits_visible.data.clone()
-            state["cgn_gate_logits_masked"] = model.cgn.gate_logits_masked.data.clone()
             state["cgn_total_steps"] = model.cgn.total_steps.clone()
         # PCR projection Q — must be saved for resumption
         if model_name == "text_span_jepa" and hasattr(model, "pcr") and model.pcr is not None:
@@ -534,12 +533,16 @@ def compute_loss(
 def get_param_groups(model, model_name, wd=0.04):
     """Build optimizer param groups with WD_exclude for bias/norm.
 
-    model_name is automatically normalized.
+    Audit R18 headline fix: the text_span_jepa branch previously covered ONLY
+    encoder/predictor/decoder — every novel-mechanism parameter (jawp
+    workspace_Q, cgn gates, pcr cascade, spc basis, ...) was invisible to the
+    optimizer and therefore frozen for the entire history of the repo.
+    A final catch-all group now adopts any remaining trainable parameter,
+    weight-decay-excluded to preserve manifold semantics (retraction owns
+    the geometry of Q-like parameters).
     """
-    model_name = _normalize_model_name(model_name)
-
-    if model_name == "text_span_jepa":
-        return [
+    if model_name.startswith(("text_span_jepa", "jepa")):
+        groups = [
             {
                 "params": [
                     p
@@ -574,6 +577,14 @@ def get_param_groups(model, model_name, wd=0.04):
             },
             {"params": list(model.decoder.parameters()), "weight_decay": wd},
         ]
+
+        covered = {id(p) for g in groups for p in g["params"]}
+        mechanism_params = [
+            p for n, p in model.named_parameters() if id(p) not in covered and p.requires_grad
+        ]
+        if mechanism_params:
+            groups.append({"params": mechanism_params, "WD_exclude": True, "weight_decay": 0})
+        return groups
     elif model_name == "mlm":
         # MLM: all encoder params + mlm_head
         return [
@@ -1129,6 +1140,17 @@ def main(args):
 
             # Only update weights every grad_accum_steps
             if (itr + 1) % grad_accum_steps == 0:
+                # Riemannian tangent projection BEFORE the step consumes the
+                # gradient. Previously the correction ran AFTER optimizer.step()
+                # and was destroyed by zero_grad — a documented-but-dead write
+                # (audit R18, JAWPProofAuditor finding #10).
+                if (
+                    model_name == "text_span_jepa"
+                    and getattr(model, "jawp", None) is not None
+                    and model.jawp.workspace_Q.grad is not None
+                ):
+                    model.jawp.project_tangent_gradient()
+
                 # Global gradient clipping (I-JEPA pattern: single clip_grad_norm)
                 all_trainable = _get_all_trainable_params(model)
                 if all_trainable:

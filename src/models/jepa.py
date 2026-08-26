@@ -346,8 +346,10 @@ class TextSpanJEPAConfig:
                 raise ValueError(f"wsr_ema_beta must be in (0,1), got {self.wsr_ema_beta}")
             if self.wsr_warmup_steps < 0:
                 raise ValueError(f"wsr_warmup_steps must be >= 0, got {self.wsr_warmup_steps}")
-            if self.wsr_mode not in ("gradient", "hessian", "param"):
-                raise ValueError(f"wsr_mode must be gradient/hessian/param, got '{self.wsr_mode}'")
+            if self.wsr_mode not in ("sam", "gradient"):
+                raise ValueError(
+                    f"wsr_mode must be sam/gradient (module contract), got '{self.wsr_mode}'"
+                )
         # EMA tau range check
         if not (0 < self.ema_tau_start <= self.ema_tau_end < 1.0):
             raise ValueError(
@@ -716,8 +718,14 @@ class TextSpanJEPA(nn.Module):
         loss_swip, swip_info = self._swip_loss(h_online)
 
         # SPC: frequency-band-aware prediction loss
-        loss_spc, spc_info = self._spc_loss(
-            span_preds, target_gathered, combined_valid, valid_mask, min_cols, h_target
+        # All-visible masks leave the span-loss gather state unbound; SPC is
+        # defined only over masked slots, so skip instead of raising (R18).
+        loss_spc, spc_info = (
+            self._spc_loss(
+                span_preds, target_gathered, combined_valid, valid_mask, min_cols, h_target
+            )
+            if valid_mask.any()
+            else (self._zero(span_preds), {})
         )
 
         # WSD: penalizes desynchronization between JAWP Q and target workspace

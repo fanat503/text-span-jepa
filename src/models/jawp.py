@@ -208,6 +208,27 @@ class JAWPModule(nn.Module):
             raise ValueError(f"Unknown init mode: {mode}. Use 'identity', 'random', or 'pca'.")
 
     @torch.no_grad()
+    def project_tangent_gradient(self):
+        """Replace workspace_Q.grad with its Stiefel tangential component.
+
+        grad_R = G − Q_active · sym(Q_activeᵀ G)  (Absil et al. 2008, §4.1).
+
+        Call AFTER backward() and BEFORE optimizer.step(): the Euclidean
+        gradient is consumed by the step, so the R13 post-step placement was
+        a dead write (audit R18, JAWPProofAuditor #10). Active columns only,
+        mirroring stiefel_retract's correction scope.
+        """
+        if self.workspace_Q.grad is None:
+            return
+        k = int(self.active_k.item())
+        G = self.workspace_Q.grad
+        Qa = self.workspace_Q.data[:, :k]
+        Ga = G[:, :k]
+        QtG = Qa.T @ Ga
+        sym_QtG = 0.5 * (QtG + QtG.T)
+        G[:, :k] = Ga - Qa @ sym_QtG
+
+    @torch.no_grad()
     def stiefel_retract(self):
         """Project Q onto the Stiefel manifold via SVD retraction.
 
@@ -1068,7 +1089,7 @@ class JAWPModule(nn.Module):
             loss: scalar tensor (differentiable w.r.t. Q)
         """
         D = z_pred.size(-1)
-        k = self.current_k(int(self.active_k.item()))
+        k = int(self.active_k.item())  # active WIDTH; current_k() treats it as a step (R18 bugfix)
 
         Q = self.workspace_Q[:, :k]  # differentiable
         z_flat = z_pred.reshape(-1, D)
