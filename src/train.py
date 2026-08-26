@@ -136,8 +136,8 @@ def save_checkpoint(
         # WSD running statistics — must be saved for resumption
         if model_name == "text_span_jepa" and hasattr(model, "wsd") and model.wsd is not None:
             state["wsd_running_drift"] = model.wsd.running_drift.clone()
-            state["wsd_target_ema"] = model.wsd.target_ema.clone()
-            state["wsd_total_syncs"] = model.wsd.total_syncs.clone()
+            state["wsd_is_initialized"] = model.wsd.is_initialized.clone()
+            state["wsd_step_count"] = model.wsd.step_count.clone()
         # CMC running statistics — must be saved for resumption
         if model_name == "text_span_jepa" and hasattr(model, "cmc") and model.cmc is not None:
             state["cmc_running_consistency"] = model.cmc.running_consistency.clone()
@@ -150,9 +150,10 @@ def save_checkpoint(
             state["gac_total_gac_steps"] = model.gac.total_gac_steps.clone()
         # STA running statistics — must be saved for resumption
         if model_name == "text_span_jepa" and hasattr(model, "sta") and model.sta is not None:
-            state["sta_running_spectrum"] = model.sta.running_spectrum.clone()
-            state["sta_running_transport_cost"] = model.sta.running_transport_cost.clone()
-            state["sta_total_sta_steps"] = model.sta.total_steps.clone()
+            state["sta_running_w1"] = model.sta.running_w1.clone()
+            state["sta_running_spectral_gap"] = model.sta.running_spectral_gap.clone()
+            state["sta_is_initialized"] = model.sta.is_initialized.clone()
+            state["sta_step_count"] = model.sta.step_count.clone()
         # PUC running statistics — must be saved for resumption
         if model_name == "text_span_jepa" and hasattr(model, "puc") and model.puc is not None:
             state["puc_running_mean"] = model.puc.running_mean.clone()
@@ -268,10 +269,14 @@ def load_checkpoint(path, model, optimizer, scaler, model_name="text_span_jepa")
                 and model.wsd is not None
             ):
                 model.wsd.running_drift.copy_(checkpoint["wsd_running_drift"])
-            if "wsd_target_ema" in checkpoint and hasattr(model, "wsd") and model.wsd is not None:
-                model.wsd.target_ema.copy_(checkpoint["wsd_target_ema"])
-            if "wsd_total_syncs" in checkpoint and hasattr(model, "wsd") and model.wsd is not None:
-                model.wsd.total_syncs.copy_(checkpoint["wsd_total_syncs"])
+            if (
+                "wsd_is_initialized" in checkpoint
+                and hasattr(model, "wsd")
+                and model.wsd is not None
+            ):
+                model.wsd.is_initialized.copy_(checkpoint["wsd_is_initialized"])
+            if "wsd_step_count" in checkpoint and hasattr(model, "wsd") and model.wsd is not None:
+                model.wsd.step_count.copy_(checkpoint["wsd_step_count"])
             # CMC running statistics restoration
             if (
                 "cmc_running_consistency" in checkpoint
@@ -311,24 +316,22 @@ def load_checkpoint(path, model, optimizer, scaler, model_name="text_span_jepa")
             ):
                 model.gac.total_gac_steps.copy_(checkpoint["gac_total_gac_steps"])
             # STA running statistics restoration
+            if "sta_running_w1" in checkpoint and hasattr(model, "sta") and model.sta is not None:
+                model.sta.running_w1.copy_(checkpoint["sta_running_w1"])
             if (
-                "sta_running_spectrum" in checkpoint
+                "sta_running_spectral_gap" in checkpoint
                 and hasattr(model, "sta")
                 and model.sta is not None
             ):
-                model.sta.running_spectrum.copy_(checkpoint["sta_running_spectrum"])
+                model.sta.running_spectral_gap.copy_(checkpoint["sta_running_spectral_gap"])
             if (
-                "sta_running_transport_cost" in checkpoint
+                "sta_is_initialized" in checkpoint
                 and hasattr(model, "sta")
                 and model.sta is not None
             ):
-                model.sta.running_transport_cost.copy_(checkpoint["sta_running_transport_cost"])
-            if (
-                "sta_total_sta_steps" in checkpoint
-                and hasattr(model, "sta")
-                and model.sta is not None
-            ):
-                model.sta.total_steps.copy_(checkpoint["sta_total_sta_steps"])
+                model.sta.is_initialized.copy_(checkpoint["sta_is_initialized"])
+            if "sta_step_count" in checkpoint and hasattr(model, "sta") and model.sta is not None:
+                model.sta.step_count.copy_(checkpoint["sta_step_count"])
             # PUC running statistics restoration
             if "puc_running_mean" in checkpoint and hasattr(model, "puc") and model.puc is not None:
                 model.puc.running_mean.copy_(checkpoint["puc_running_mean"])

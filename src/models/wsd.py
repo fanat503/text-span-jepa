@@ -164,7 +164,7 @@ class WorkspaceSyncDrift(nn.Module):
             self.target_Q[: self.k, : self.k] = torch.eye(self.k)
 
         self.register_buffer("is_initialized", torch.tensor(False))
-        self.register_buffer("step_count", torch.tensor(0, dtype=torch.long))
+        self.register_buffer("step_count", torch.tensor(-1, dtype=torch.long))
         self.register_buffer("running_drift", torch.tensor(0.0))
 
     @torch.no_grad()
@@ -224,12 +224,17 @@ class WorkspaceSyncDrift(nn.Module):
             info: dict with diagnostics.
         """
         k = min(Q_workspace.size(1), self.k)
-        self.step_count.fill_(step)
+        prev_step = int(self.step_count.item())
 
-        # Periodic resync
-        if h_target is not None and step % self.sync_interval == 0:
+        # Periodic resync — AT MOST ONCE PER STEP: with CMC the drift is
+        # evaluated twice per iteration, and a second in-place resync would
+        # invalidate tensors saved by the first pass's autograd graph
+        # (audit R18).
+        if h_target is not None and step % self.sync_interval == 0 and prev_step != step:
             self.update_target_cov(h_target)
             self.resync_target_workspace()
+
+        self.step_count.fill_(step)
 
         Q_jawp = Q_workspace[:, :k]  # (D, k)
         Q_tgt = self.target_Q[:, :k]  # (D, k)

@@ -59,6 +59,9 @@ class PredictionUncertaintyCalibration(nn.Module):
         ema_beta: EMA decay for running covariance statistics.
         warmup_steps: steps before PUC activates.
         min_log_det: floor for log-determinant (numerical stability).
+        use_differentiable_entropy: if True, entropy is computed from
+            batch-covariance eigenvalues WITH autograd (gradient flows to
+            z_pred); default False keeps the legacy buffer-based estimate.
     """
 
     def __init__(
@@ -70,6 +73,7 @@ class PredictionUncertaintyCalibration(nn.Module):
         ema_beta: float = 0.999,
         warmup_steps: int = 500,
         min_log_det: float = -50.0,
+        use_differentiable_entropy: bool = False,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -78,6 +82,7 @@ class PredictionUncertaintyCalibration(nn.Module):
         self.ema_beta = ema_beta
         self.warmup_steps = warmup_steps
         self.min_log_det = min_log_det
+        self.use_differentiable_entropy = use_differentiable_entropy
 
         # Target entropy: isotropic Gaussian H = D/2 * log(2πe)
         if target_entropy is not None:
@@ -180,7 +185,16 @@ class PredictionUncertaintyCalibration(nn.Module):
                 self._orthogonalize_projections()
 
         # --- Compute entropy from eigenvalues ---
-        eigenvalues = F.softplus(self.running_eigenvalues - 5.0) + 1e-6  # ensure positive
+        if self.use_differentiable_entropy:
+            # Differentiable path (audit R18): batch-covariance eigenvalues
+            # computed WITH autograd, so the entropy deficit carries gradient
+            # into z_pred — impossible via EMA buffers.
+            centered_d = z_flat - z_flat.mean(dim=0, keepdim=True)
+            cov_b = centered_d.T @ centered_d / max(z_flat.size(0) - 1, 1)
+            eigs_top = torch.linalg.eigvalsh(cov_b).flip(0)[: self.n_components]
+            eigenvalues = F.softplus(eigs_top) + 1e-6
+        else:
+            eigenvalues = F.softplus(self.running_eigenvalues - 5.0) + 1e-6  # ensure positive
         # Differential entropy of Gaussian: H = 0.5 * sum(log(2πe * λ_i))
         # For tracked components:
         log_eigenvalues = torch.log(eigenvalues)
