@@ -36,7 +36,7 @@ python -m src.train --fname config/wikitext/mlm_wikitext_small.yaml
 python -m src.train --fname config/wikitext/data2vec_wikitext_train.yaml
 ```
 
-configs live under `config/`:
+configs live in `config/`:
 - `scaling/` — xsmall_30m, small_100m, base_140m, large_300m
 - `wikitext/`, `tinystories/`, `kaggle/` — dataset/model variants
 - `ablations/` — one-mechanism on/off sweeps (deep-merged over defaults.yaml)
