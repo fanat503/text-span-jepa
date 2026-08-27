@@ -19,7 +19,7 @@ pip install -r requirements.txt
 pip install -e ".[dev,eval]"   # dev: pytest/ruff · eval: sklearn/scipy/matplotlib
 ```
 
-python 3.9+, pytorch 2.0+. trains on wikitext-103 out of the box.
+python 3.9+, pytorch 2.0+
 
 training
 --------
@@ -38,7 +38,7 @@ python -m src.train --fname config/wikitext/data2vec_wikitext_train.yaml
 
 configs live in `config/`:
 - `scaling/` — xsmall_30m, small_100m, base_140m, large_300m
-- `wikitext/`, `tinystories/`, `kaggle/` — dataset/model variants
+- `wikitext/`, `tinystories/`, `kaggle/` — dataset and variant for kaggle
 - `ablations/` — one-mechanism on/off sweeps (deep-merged over defaults.yaml)
 
 resume: set `meta.load_checkpoint: true` in the config. picks up from
@@ -61,8 +61,6 @@ operational notes
   matrix for per-mechanism verdicts.
 
 
-the differences between text-span jepa, data2vec,  and MLM are best understood by reading their respective compute_loss() functions.
-
 cite
 ----
 
@@ -81,4 +79,4 @@ apache 2.0
 
 novel mechanisms (16)
 
-each mechanism addresses a specific failure mode of standard JEPA, which I hope will help to large JEPA models
+each mechanism addresses a specific failure mode of standard JEPA, which will be tested on different sizes of models
