@@ -3,7 +3,14 @@ meta:
   use_bfloat16: true
   model_name: text_span_jepa_small
   load_checkpoint: false
-  dataset: tinystories
+  # NOTE (B12): there is no TinyStories loader in this repo yet — training
+  # uses load_wikitext103 from data.root_path (WikiText-103). A
+  # `dataset: tinystories` key here would now fail loudly (dataset registry
+  # in train._build_data_pipeline) instead of silently training the wrong
+  # corpus. Add a real loader before claiming TinyStories runs.
+  description: >-
+    Small model sized for a TinyStories run; currently trains WikiText-103
+    because only the wikitext103 loader exists.
 data:
   batch_size: 128
   max_seq_len: 512
