@@ -31,6 +31,7 @@
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -122,7 +123,7 @@ class PredictionUncertaintyCalibration(nn.Module):
         z_pred: torch.Tensor,
         z_target: torch.Tensor | None = None,
         step: int = 0,
-    ) -> tuple[torch.Tensor, dict[str, any]]:
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
         """Compute PUC calibration loss.
 
         Args:
@@ -261,7 +262,7 @@ class PredictionUncertaintyCalibration(nn.Module):
 
         return final_loss, info
 
-    def checkpoint_dict(self) -> dict[str, any]:
+    def checkpoint_dict(self) -> dict[str, Any]:
         """Get state for checkpoint save."""
         return {
             "running_mean": self.running_mean.clone(),
@@ -272,7 +273,7 @@ class PredictionUncertaintyCalibration(nn.Module):
             "proj_vectors": self.proj_vectors.clone(),
         }
 
-    def load_checkpoint(self, ckpt: dict[str, any]):
+    def load_checkpoint(self, ckpt: dict[str, Any]):
         """Restore from checkpoint."""
         if "running_mean" in ckpt:
             self.running_mean.copy_(ckpt["running_mean"])

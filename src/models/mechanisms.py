@@ -508,7 +508,7 @@ class MechanismBundle(nn.Module):
         z_pred_primary: torch.Tensor,
         z_pred_secondary: torch.Tensor,
         overlap_mask: torch.Tensor,
-    ) -> tuple[torch.Tensor, dict[str, any]]:
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
         """Compute CMC loss (requires second forward pass, call separately).
 
         Args:

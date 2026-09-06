@@ -131,6 +131,7 @@
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import torch
 from torch import nn
@@ -259,7 +260,7 @@ class CrossMaskConsistency(nn.Module):
         z_pred_primary: torch.Tensor,
         z_pred_secondary: torch.Tensor,
         overlap_mask: torch.Tensor,
-    ) -> tuple[torch.Tensor, dict[str, any]]:
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
         """Compute Cross-Mask Consistency loss.
 
         Args:

@@ -65,6 +65,7 @@
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import torch
 from torch import nn
@@ -123,7 +124,7 @@ class RepresentationDriftCompensation(nn.Module):
         z_previous: torch.Tensor | None = None,
         workspace_Q: torch.Tensor | None = None,
         step: int = 0,
-    ) -> tuple[torch.Tensor, dict[str, any]]:
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
         """Compute RDC compensation loss.
 
         Args:
@@ -243,7 +244,7 @@ class RepresentationDriftCompensation(nn.Module):
         with torch.no_grad():
             self.workspace_Q[:, :k].copy_(Q[:, :k])
 
-    def checkpoint_dict(self) -> dict[str, any]:
+    def checkpoint_dict(self) -> dict[str, Any]:
         """Get state for checkpoint save."""
         return {
             "running_drift_norm": self.running_drift_norm.clone(),
@@ -255,7 +256,7 @@ class RepresentationDriftCompensation(nn.Module):
             "workspace_Q": self.workspace_Q.clone(),
         }
 
-    def load_checkpoint(self, ckpt: dict[str, any]):
+    def load_checkpoint(self, ckpt: dict[str, Any]):
         """Restore from checkpoint."""
         for key in [
             "running_drift_norm",

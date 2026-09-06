@@ -96,6 +96,7 @@
 
 
 import torch
+from typing import Any
 import torch.nn.functional as F
 from torch import nn
 
@@ -142,7 +143,7 @@ class GradientAllocatedCapacity(nn.Module):
         z_pred: torch.Tensor,
         grad_norms: torch.Tensor,
         step: int = 0,
-    ) -> tuple[torch.Tensor, dict[str, any]]:
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
         """Compute GAC exploration loss.
 
         Args:
