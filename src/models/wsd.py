@@ -144,6 +144,7 @@ class WorkspaceSyncDrift(nn.Module):
         sync_interval: steps between full target PCA resync (default 100).
         ema_beta: EMA momentum for target covariance estimate (default 0.99).
         eps: numerical stability constant (default 1e-6).
+
     """
 
     def __init__(self, embed_dim=768, k=None, sync_interval=100, ema_beta=0.99, eps=1e-6):
@@ -173,6 +174,7 @@ class WorkspaceSyncDrift(nn.Module):
 
         Args:
             h_target: (..., D) target encoder output.
+
         """
         D = h_target.size(-1)
         flat = h_target.reshape(-1, D).float()
@@ -208,7 +210,7 @@ class WorkspaceSyncDrift(nn.Module):
 
             warnings.warn(
                 f"WSD target-workspace eigendecomposition failed ({e}); "
-                "reusing the previous target_Q."
+                "reusing the previous target_Q.",
             )
 
     def compute_drift(self, Q_workspace, h_target=None, step=0):
@@ -222,6 +224,7 @@ class WorkspaceSyncDrift(nn.Module):
         Returns:
             drift_loss: scalar tensor (differentiable w.r.t. Q_workspace).
             info: dict with diagnostics.
+
         """
         k = min(Q_workspace.size(1), self.k)
         prev_step = int(self.step_count.item())

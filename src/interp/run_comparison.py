@@ -43,7 +43,11 @@ def load_model(ckpt_path, model_type="jepa", device="cpu"):
 
         ckpt = safe_torch_load(ckpt_path, map_location=device)
         model = MLMBaseline(
-            vocab_size=50304, max_seq_len=512, embed_dim=768, depth=12, num_heads=12
+            vocab_size=50304,
+            max_seq_len=512,
+            embed_dim=768,
+            depth=12,
+            num_heads=12,
         )
         model.load_state_dict(ckpt.get("model", {}))
     elif model_type == "data2vec":
@@ -51,7 +55,11 @@ def load_model(ckpt_path, model_type="jepa", device="cpu"):
 
         ckpt = safe_torch_load(ckpt_path, map_location=device)
         model = Data2VecTextBaseline(
-            vocab_size=50304, max_seq_len=512, embed_dim=768, depth=12, num_heads=12
+            vocab_size=50304,
+            max_seq_len=512,
+            embed_dim=768,
+            depth=12,
+            num_heads=12,
         )
         model.encoder.load_state_dict(ckpt.get("encoder", {}))
         model.target_encoder.load_state_dict(ckpt.get("target_encoder", {}))
@@ -68,6 +76,7 @@ def extract_representations(model, dataloader, max_batches=100, device="cpu", po
 
     Args:
         pool: 'mean' for mean pooling over sequence, 'none' for per-token.
+
     """
     all_reps = []
     all_ids = []
@@ -132,7 +141,12 @@ def extract_layer_representations(model, dataloader, max_batches=50, device="cpu
 
 
 def run_full_comparison(
-    jepa_model, baseline_model, dataloader, output_dir, device="cpu", max_batches=50
+    jepa_model,
+    baseline_model,
+    dataloader,
+    output_dir,
+    device="cpu",
+    max_batches=50,
 ):
     """Run the FULL interpretability comparison pipeline."""
     output_dir = Path(output_dir)
@@ -210,7 +224,10 @@ def run_full_comparison(
     from src.interp.polysemanticity import PolysemanticityIndex
 
     psi = PolysemanticityIndex(
-        n_clusters_range=(2, 3), n_top_activations=50, n_dimensions_sample=20, device=device
+        n_clusters_range=(2, 3),
+        n_top_activations=50,
+        n_dimensions_sample=20,
+        device=device,
     )
     jepa_psi = psi.compute(jepa_reps)
     base_psi = psi.compute(base_reps)
@@ -345,7 +362,7 @@ def generate_text_summary(results, output_dir):
     lines.append("-" * 40)
     s = results.get("summary", {})
     lines.append(
-        f"  Geometry metrics JEPA better: {s.get('n_geometry_jepa_better', '?')}/{s.get('n_geometry_total', '?')}"
+        f"  Geometry metrics JEPA better: {s.get('n_geometry_jepa_better', '?')}/{s.get('n_geometry_total', '?')}",
     )
     lines.append(f"  JEPA more monosemantic:  {s.get('jepa_more_monosemantic', '?')}")
     lines.append(f"  JEPA higher entropy:     {s.get('jepa_higher_entropy', '?')}")
@@ -363,17 +380,28 @@ def main():
     parser = argparse.ArgumentParser(description="Full JEPA vs Baseline comparison")
     parser.add_argument("--jepa_ckpt", type=str, required=True, help="Path to JEPA checkpoint")
     parser.add_argument(
-        "--baseline_ckpt", type=str, required=True, help="Path to baseline checkpoint"
+        "--baseline_ckpt",
+        type=str,
+        required=True,
+        help="Path to baseline checkpoint",
     )
     parser.add_argument("--baseline_type", type=str, default="mlm", choices=["mlm", "data2vec"])
     parser.add_argument(
-        "--dataset", type=str, default="wikitext", choices=["wikitext", "tinystories"]
+        "--dataset",
+        type=str,
+        default="wikitext",
+        choices=["wikitext", "tinystories"],
     )
     parser.add_argument(
-        "--output", type=str, default="results/comparison/", help="Output directory"
+        "--output",
+        type=str,
+        default="results/comparison/",
+        help="Output directory",
     )
     parser.add_argument(
-        "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu"
+        "--device",
+        type=str,
+        default="cuda" if torch.cuda.is_available() else "cpu",
     )
     parser.add_argument("--max_batches", type=int, default=50)
     args = parser.parse_args()
@@ -396,7 +424,12 @@ def main():
 
     # Run comparison
     results = run_full_comparison(
-        jepa_model, baseline_model, dataloader, args.output, args.device, args.max_batches
+        jepa_model,
+        baseline_model,
+        dataloader,
+        args.output,
+        args.device,
+        args.max_batches,
     )
 
     return results

@@ -112,7 +112,10 @@ class TestPCRStiefel:
 
     def test_identity_init_orthonormal(self):
         pcr = PredictiveCascadeRefinement(
-            embed_dim=64, n_levels=2, level_dims=[16, 8], init="identity"
+            embed_dim=64,
+            n_levels=2,
+            level_dims=[16, 8],
+            init="identity",
         )
         Q = pcr.workspace_Q.data
         gram = Q.T @ Q
@@ -122,7 +125,10 @@ class TestPCRStiefel:
 
     def test_random_init_orthonormal(self):
         pcr = PredictiveCascadeRefinement(
-            embed_dim=64, n_levels=2, level_dims=[16, 8], init="random"
+            embed_dim=64,
+            n_levels=2,
+            level_dims=[16, 8],
+            init="random",
         )
         Q = pcr.workspace_Q.data
         gram = Q.T @ Q
@@ -429,7 +435,11 @@ class TestPCRIntegration:
         mask[:, 4:8] = 1
 
         total_loss, _loss_dict, _diag_dict = model.compute_loss_with_targets(
-            masked_ids, original_ids, mask, current_step=2000, total_steps=10000
+            masked_ids,
+            original_ids,
+            mask,
+            current_step=2000,
+            total_steps=10000,
         )
         assert total_loss.item() >= 0
         assert not math.isnan(total_loss.item())
@@ -462,7 +472,17 @@ class TestPCRIntegration:
         original_gates = [g.data.clone() for g in model.pcr.level_gates]
 
         ckpt_path = str(tmp_path / "pcr-ckpt.pth.tar")
-        save_checkpoint(ckpt_path, model, optimizer, None, 2, 137, 99, 55, model_name="text_span_jepa")
+        save_checkpoint(
+            ckpt_path,
+            model,
+            optimizer,
+            None,
+            2,
+            137,
+            99,
+            55,
+            model_name="text_span_jepa",
+        )
 
         # Corrupt in-memory state AFTER save: load must restore from the checkpoint,
         # otherwise the allclose assert below is a no-op tautology
@@ -501,7 +521,10 @@ class TestPCRConfig:
 
         with pytest.raises(ValueError):
             config = TextSpanJEPAConfig(
-                embed_dim=64, num_heads=4, use_pcr=True, pcr_warmup_steps=-1
+                embed_dim=64,
+                num_heads=4,
+                use_pcr=True,
+                pcr_warmup_steps=-1,
             )
             config.validate()
 

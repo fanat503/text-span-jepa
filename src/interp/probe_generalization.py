@@ -33,7 +33,13 @@ class ProbeGeneralizationTest:
     """
 
     def __init__(
-        self, embed_dim=768, num_classes=2, lr=1e-3, max_epochs=50, patience=5, device="cpu"
+        self,
+        embed_dim=768,
+        num_classes=2,
+        lr=1e-3,
+        max_epochs=50,
+        patience=5,
+        device="cpu",
     ):
         self.embed_dim = embed_dim
         self.num_classes = num_classes
@@ -97,7 +103,12 @@ class ProbeGeneralizationTest:
         return (logits.argmax(dim=-1) == labs).float().mean().item()
 
     def cross_dataset_generalization(
-        self, source_reps, source_labels, target_reps, target_labels, task_name="default"
+        self,
+        source_reps,
+        source_labels,
+        target_reps,
+        target_labels,
+        task_name="default",
     ):
         """Train probe on source, test on target (zero-shot transfer).
 
@@ -110,6 +121,7 @@ class ProbeGeneralizationTest:
 
         Returns:
             dict with source accuracy, target accuracy, generalization gap
+
         """
         # Train on source
         with torch.enable_grad():
@@ -160,13 +172,22 @@ class ProbeGeneralizationTest:
 
         Returns:
             dict with comparison
+
         """
         jepa_result = self.cross_dataset_generalization(
-            jepa_source, target_source, jepa_target, target_target, f"{task_name}_jepa"
+            jepa_source,
+            target_source,
+            jepa_target,
+            target_target,
+            f"{task_name}_jepa",
         )
 
         baseline_result = self.cross_dataset_generalization(
-            baseline_source, target_source, baseline_target, target_target, f"{task_name}_baseline"
+            baseline_source,
+            target_source,
+            baseline_target,
+            target_target,
+            f"{task_name}_baseline",
         )
 
         return {
@@ -255,6 +276,7 @@ class ProbeSelectivityTest:
 
         Returns:
             dict with selectivity metrics
+
         """
         with torch.enable_grad():
             real_acc = self._train_probe(representations, real_labels)
@@ -317,6 +339,7 @@ class StructuralProbeGeneralization:
 
         Returns:
             dict with source and target Spearman correlation
+
         """
 
         # Evaluate on source

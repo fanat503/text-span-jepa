@@ -88,7 +88,10 @@ class TestPredictor:
         mask[:, 5:10] = 1
         mask[:, 20:25] = 1
         span_preds, _num_masked, valid_mask, fl, fp = pred(
-            h, mask, torch.randn(4, 32, 64), torch.randn(4, 32, 64)
+            h,
+            mask,
+            torch.randn(4, 32, 64),
+            torch.randn(4, 32, 64),
         )
         assert span_preds.shape[0] == 4 and span_preds.shape[2] == 64
         assert valid_mask.sum().item() == mask.sum().item()
@@ -256,7 +259,7 @@ class TestCollapsePrevention:
         from src.models.collapse import VarianceRegularization
 
         assert VarianceRegularization(margin=1.0)(
-            torch.randn(32, 64) * 10.0
+            torch.randn(32, 64) * 10.0,
         ).item() == pytest.approx(0.0, abs=1e-3)
 
     def test_variance_n1(self):
@@ -597,7 +600,9 @@ class TestJEPA:
         mask = torch.zeros(2, 32, dtype=torch.long)
         mask[:, 5:10] = 1
         loss, ld, dd = model.compute_loss_with_targets(
-            torch.randint(0, 1000, (2, 32)), torch.randint(0, 1000, (2, 32)), mask
+            torch.randint(0, 1000, (2, 32)),
+            torch.randint(0, 1000, (2, 32)),
+            mask,
         )
         assert loss.requires_grad
         for k in [
@@ -666,7 +671,9 @@ class TestJEPA:
         mask = torch.zeros(2, 32, dtype=torch.long)
         mask[:, 5:10] = 1
         model.compute_loss_with_targets(
-            torch.randint(0, 1000, (2, 32)), torch.randint(0, 1000, (2, 32)), mask
+            torch.randint(0, 1000, (2, 32)),
+            torch.randint(0, 1000, (2, 32)),
+            mask,
         )[0].backward()
         assert any(
             p.grad is not None and p.grad.abs().sum() > 0
@@ -684,7 +691,9 @@ class TestJEPA:
         mask = torch.zeros(2, 32, dtype=torch.long)
         mask[:, 5:10] = 1
         loss, _, _ = model.compute_loss_with_targets(
-            torch.randint(0, 1000, (2, 32)), torch.randint(0, 1000, (2, 32)), mask
+            torch.randint(0, 1000, (2, 32)),
+            torch.randint(0, 1000, (2, 32)),
+            mask,
         )
         assert torch.isfinite(loss)
 
@@ -697,7 +706,9 @@ class TestJEPA:
         mask[1, 5:10] = 1
         mask[2, 15:18] = 1
         loss, ld, _ = model.compute_loss_with_targets(
-            torch.randint(0, 1000, (3, 32)), torch.randint(0, 1000, (3, 32)), mask
+            torch.randint(0, 1000, (3, 32)),
+            torch.randint(0, 1000, (3, 32)),
+            mask,
         )
         assert torch.isfinite(loss)
         assert ld["loss_span"] >= 0
@@ -708,7 +719,9 @@ class TestJEPA:
         mask = torch.zeros(2, 32, dtype=torch.long)
         mask[:, 5:10] = 1
         _loss, ld, _ = model.compute_loss_with_targets(
-            torch.randint(0, 1000, (2, 32)), torch.randint(0, 1000, (2, 32)), mask
+            torch.randint(0, 1000, (2, 32)),
+            torch.randint(0, 1000, (2, 32)),
+            mask,
         )
         # Decoder should have non-zero loss when mask is present
         assert ld["loss_decoder"] > 0
@@ -758,7 +771,11 @@ class TestTrainingIntegration:
         losses = []
         for step in range(200):
             loss, _, _ = model.compute_loss_with_targets(
-                fixed_input, fixed_target, fixed_mask, current_step=step, total_steps=200
+                fixed_input,
+                fixed_target,
+                fixed_mask,
+                current_step=step,
+                total_steps=200,
             )
             opt.zero_grad()
             loss.backward()
@@ -824,7 +841,7 @@ class TestSpanMask:
         from src.masks.span import SpanMaskCollator
 
         r = SpanMaskCollator(mask_ratio=0.3, span_length_range=(3, 5), mask_token_id=0)(
-            [{"input_ids": torch.tensor([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])}]
+            [{"input_ids": torch.tensor([1, 2, 3, 4, 5, 6, 7, 8, 9, 10])}],
         )
         assert all(k in r for k in ["masked_input_ids", "original_input_ids", "mask_positions"])
 
@@ -871,7 +888,12 @@ class TestSchedulers:
 
         opt = torch.optim.SGD([torch.randn(2, 2, requires_grad=True)], lr=0.001)
         s = WarmupCosineSchedule(
-            opt, warmup_steps=10, start_lr=1e-5, ref_lr=1e-3, final_lr=1e-6, T_max=100
+            opt,
+            warmup_steps=10,
+            start_lr=1e-5,
+            ref_lr=1e-3,
+            final_lr=1e-6,
+            T_max=100,
         )
         lrs = [s.step() for _ in range(100)]
         assert lrs[5] > lrs[0] and lrs[9] >= lrs[8]  # warmup
@@ -963,7 +985,12 @@ class TestData2VecBaseline:
         from baselines.data2vec_baseline import Data2VecTextBaseline
 
         m = Data2VecTextBaseline(
-            vocab_size=1000, max_seq_len=32, embed_dim=64, depth=2, num_heads=4, head_layers=2
+            vocab_size=1000,
+            max_seq_len=32,
+            embed_dim=64,
+            depth=2,
+            num_heads=4,
+            head_layers=2,
         )
         assert m.regression_head[0].in_features == 64
         assert m.regression_head[0].out_features == 128  # 2x expand (data2vec pattern)
@@ -992,7 +1019,11 @@ class TestData2VecBaseline:
         from baselines.data2vec_baseline import Data2VecTextBaseline
 
         m = Data2VecTextBaseline(
-            vocab_size=1000, max_seq_len=32, embed_dim=64, depth=2, num_heads=4
+            vocab_size=1000,
+            max_seq_len=32,
+            embed_dim=64,
+            depth=2,
+            num_heads=4,
         )
         assert all(not p.requires_grad for p in m.target_encoder.parameters())
 
@@ -1007,12 +1038,19 @@ class TestMLMBaseline:
         from baselines.mlm_baseline import MLMBaseline
 
         m = MLMBaseline(
-            vocab_size=1000, max_seq_len=32, embed_dim=64, depth=2, num_heads=4, mlp_ratio=2.0
+            vocab_size=1000,
+            max_seq_len=32,
+            embed_dim=64,
+            depth=2,
+            num_heads=4,
+            mlp_ratio=2.0,
         )
         mask = torch.zeros(2, 32, dtype=torch.long)
         mask[:, 5:10] = 1
         loss, info = m.compute_loss(
-            torch.randint(0, 1000, (2, 32)), torch.randint(0, 1000, (2, 32)), mask
+            torch.randint(0, 1000, (2, 32)),
+            torch.randint(0, 1000, (2, 32)),
+            mask,
         )
         assert loss.requires_grad and "loss_mlm" in info and "mlm_accuracy" in info
 
@@ -1040,7 +1078,11 @@ class TestLogging:
         # I-JEPA grad_logger looks for 'qkv' in param names;
         # must use a model with fused QKV projection (like our encoder).
         model = TextSpanJEPLEncoder(
-            vocab_size=1000, max_seq_len=32, embed_dim=64, depth=2, num_heads=4
+            vocab_size=1000,
+            max_seq_len=32,
+            embed_dim=64,
+            depth=2,
+            num_heads=4,
         )
         x = torch.randint(0, 1000, (2, 32))
         h, _ = model(x)
@@ -1209,7 +1251,8 @@ class TestCheckpoint:
         assert global_step == 1000
         # Verify weights match
         for (n1, p1), (n2, p2) in zip(
-            model.encoder.named_parameters(), model2.encoder.named_parameters()
+            model.encoder.named_parameters(),
+            model2.encoder.named_parameters(),
         ):
             assert torch.allclose(p1, p2), f"Weight mismatch: {n1}"
 
@@ -1240,7 +1283,11 @@ class TestV010Bugfixes:
         from src.models.encoder import TextSpanJEPLEncoder
 
         enc = TextSpanJEPLEncoder(
-            vocab_size=1000, max_seq_len=32, embed_dim=64, depth=4, num_heads=4
+            vocab_size=1000,
+            max_seq_len=32,
+            embed_dim=64,
+            depth=4,
+            num_heads=4,
         )
         x = torch.randint(0, 1000, (2, 16))
         intermediates = enc.get_intermediate_layers(x)
@@ -1252,7 +1299,11 @@ class TestV010Bugfixes:
         from src.models.encoder import TextSpanJEPLEncoder
 
         enc = TextSpanJEPLEncoder(
-            vocab_size=1000, max_seq_len=32, embed_dim=64, depth=3, num_heads=4
+            vocab_size=1000,
+            max_seq_len=32,
+            embed_dim=64,
+            depth=3,
+            num_heads=4,
         )
         x = torch.randint(0, 1000, (2, 16))
         h, _tok, intermediates = enc(x, return_intermediates=True)
@@ -1440,7 +1491,9 @@ class TestV010NewFeatures:
         from src.interp.visualization import scaling_law_plot
 
         svg = scaling_law_plot(
-            sizes=[1e6, 10e6, 100e6], jepa_metrics=[15, 30, 50], baseline_metrics=[12, 22, 35]
+            sizes=[1e6, 10e6, 100e6],
+            jepa_metrics=[15, 30, 50],
+            baseline_metrics=[12, 22, 35],
         )
         assert svg is not None and "<svg" in svg
 
@@ -1460,7 +1513,8 @@ class TestV010NewFeatures:
         from src.interp.visualization import information_plane
 
         svg = information_plane(
-            mi_input=[5.0, 4.5, 4.0, 3.5, 3.0, 2.5], mi_task=[0.5, 1.0, 1.5, 2.0, 2.2, 2.3]
+            mi_input=[5.0, 4.5, 4.0, 3.5, 3.0, 2.5],
+            mi_task=[0.5, 1.0, 1.5, 2.0, 2.2, 2.3],
         )
         assert svg is not None and "<svg" in svg
 
@@ -1636,7 +1690,11 @@ class TestV011TrainingReadiness:
         from baselines.data2vec_baseline import Data2VecTextBaseline
 
         d2v = Data2VecTextBaseline(
-            vocab_size=100, max_seq_len=16, embed_dim=32, depth=2, num_heads=4
+            vocab_size=100,
+            max_seq_len=16,
+            embed_dim=32,
+            depth=2,
+            num_heads=4,
         )
         loss3, _ld3, _dd3 = compute_loss(d2v, ids, ids, mask)
         assert torch.isfinite(loss3)
@@ -1675,7 +1733,11 @@ class TestV011TrainingReadiness:
 
         # data2vec
         d2v = Data2VecTextBaseline(
-            vocab_size=100, max_seq_len=16, embed_dim=32, depth=2, num_heads=4
+            vocab_size=100,
+            max_seq_len=16,
+            embed_dim=32,
+            depth=2,
+            num_heads=4,
         )
         pg_d2v = get_param_groups(d2v, "data2vec")
         opt_d2v = torch.optim.AdamW(pg_d2v)
@@ -1744,7 +1806,11 @@ class TestV011TrainingReadiness:
         from baselines.data2vec_baseline import Data2VecTextBaseline
 
         d2v = Data2VecTextBaseline(
-            vocab_size=100, max_seq_len=16, embed_dim=32, depth=2, num_heads=4
+            vocab_size=100,
+            max_seq_len=16,
+            embed_dim=32,
+            depth=2,
+            num_heads=4,
         )
         # Train encoder + regression_head (NOT target_encoder)
         params = list(d2v.encoder.parameters()) + list(d2v.regression_head.parameters())
@@ -2001,7 +2067,8 @@ class TestV012Bugfixes:
         with open("defaults.yaml") as f:
             cfg = yaml.safe_load(f)
         assert "grad_accum_steps" in cfg.get(
-            "optimization", {}
+            "optimization",
+            {},
         ), "grad_accum_steps missing from defaults.yaml"
 
     def test_jepa_training_loss_decreases(self):

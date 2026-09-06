@@ -38,6 +38,7 @@ class StructuralProbe(nn.Module):
 
         Returns:
             distances: (B, T, T) predicted pairwise tree distances
+
         """
         _B, _T, _D = representations.shape
         # Project: h' = P h
@@ -49,7 +50,12 @@ class StructuralProbe(nn.Module):
         return distances
 
     def train_probe(
-        self, representations_list, tree_distances_list, lr=0.001, epochs=30, device="cpu"
+        self,
+        representations_list,
+        tree_distances_list,
+        lr=0.001,
+        epochs=30,
+        device="cpu",
     ):
         """Train the structural probe on gold parse tree distances.
 
@@ -62,6 +68,7 @@ class StructuralProbe(nn.Module):
 
         Returns:
             Training loss history
+
         """
         self.to(device)
         optimizer = torch.optim.Adam(self.parameters(), lr=lr)
@@ -100,6 +107,7 @@ class StructuralProbe(nn.Module):
 
         Returns:
             dict with 'spearman_r' and 'uuas' metrics
+
         """
         self.eval()
         self.to(device)

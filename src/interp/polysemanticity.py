@@ -39,7 +39,11 @@ class PolysemanticityIndex:
     """
 
     def __init__(
-        self, n_clusters_range=(2, 5), n_top_activations=100, n_dimensions_sample=None, device="cpu"
+        self,
+        n_clusters_range=(2, 5),
+        n_top_activations=100,
+        n_dimensions_sample=None,
+        device="cpu",
     ):
         """
         Args:
@@ -47,6 +51,7 @@ class PolysemanticityIndex:
             n_top_activations: how many top-activating inputs per dimension
             n_dimensions_sample: subsample dimensions (None = all)
             device: compute device
+
         """
         self.n_clusters_range = n_clusters_range
         self.n_top_activations = n_top_activations
@@ -63,6 +68,7 @@ class PolysemanticityIndex:
 
         Returns:
             dict with per-dimension PSI, mean PSI, fraction_monosemantic
+
         """
         try:
             _N, D = representations.shape
@@ -71,7 +77,7 @@ class PolysemanticityIndex:
                 labels = labels.to(self.device)
 
             # Subsample dimensions for efficiency
-            if self.n_dimensions_sample and D > self.n_dimensions_sample:
+            if self.n_dimensions_sample and self.n_dimensions_sample < D:
                 dim_idx = torch.randperm(D)[: self.n_dimensions_sample]
             else:
                 dim_idx = torch.arange(D)
@@ -148,7 +154,7 @@ class PolysemanticityIndex:
         """
         try:
             N, _D = points.shape
-            if N < k * 3:
+            if k * 3 > N:
                 return 0.0
 
             # Simple k-means with random initialization
@@ -261,6 +267,7 @@ class SuperpositionIndex:
 
         Returns:
             dict with superposition metrics
+
         """
         try:
             W = weight_matrix.float()
@@ -340,6 +347,7 @@ class FeatureDeduplicationScore:
 
         Returns:
             dict with deduplication metrics
+
         """
         try:
             # Normalize features

@@ -148,6 +148,7 @@ class CollapseDiagnostics(nn.Module):
                            (needed for representation_stability metric)
         Returns:
             dict of metric_name -> float
+
         """
         metrics = {}
         # Guard: std() on single-element tensors produces NaN (df=0)
@@ -227,7 +228,8 @@ class CollapseDiagnostics(nn.Module):
         # --- Representation stability (I-JEPA: cosine between consecutive target updates) ---
         if prev_target_h is not None:
             metrics["representation_stability"] = self._representation_stability(
-                target_h, prev_target_h
+                target_h,
+                prev_target_h,
             )
 
         # --- Cross-correlation redundancy (Barlow Twins) ---
@@ -975,6 +977,7 @@ class CollapseDiagnostics(nn.Module):
 
         Returns:
             float in [0, 1]. Higher = more workspace utilization.
+
         """
         try:
             P = predictor_grad.float()
@@ -1018,6 +1021,7 @@ class CollapseDiagnostics(nn.Module):
         Returns:
             float in [0, 1]. Higher = healthier workspace.
             0.0 if any computation fails.
+
         """
         try:
 

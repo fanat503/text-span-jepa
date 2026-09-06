@@ -43,6 +43,7 @@ class CausalScrubber:
         Args:
             model: Text-Span JEPA model (or any model with .encoder)
             device: compute device
+
         """
         self.model = model
         self.device = device
@@ -62,6 +63,7 @@ class CausalScrubber:
 
         Returns:
             dict with scrubbed behavior metrics
+
         """
         self.model.eval()
         input_ids = input_ids.to(self.device)
@@ -85,14 +87,17 @@ class CausalScrubber:
 
             # Run behavior test on scrubbed representations
             scrubbed_behavior = self._behavior_from_representations(
-                h_scrubbed, behavior_fn, input_ids
+                h_scrubbed,
+                behavior_fn,
+                input_ids,
             )
             scrubbed_behaviors.append(scrubbed_behavior)
 
         # Results
         mean_scrubbed = sum(scrubbed_behaviors) / len(scrubbed_behaviors)
         behavior_preserved = abs(mean_scrubbed - baseline_behavior) / max(
-            abs(baseline_behavior), 1e-10
+            abs(baseline_behavior),
+            1e-10,
         )
         # Higher preservation = hypothesis correct (scrubbed features are irrelevant)
         # Lower preservation = hypothesis wrong (scrubbed features matter)
@@ -123,7 +128,13 @@ class CausalScrubber:
 
     @torch.no_grad()
     def compare_scrubbing(
-        self, jepa_model, baseline_model, input_ids, hypothesis_fn, behavior_fn, n_resamples=10
+        self,
+        jepa_model,
+        baseline_model,
+        input_ids,
+        hypothesis_fn,
+        behavior_fn,
+        n_resamples=10,
     ):
         """Compare causal scrubbing results between JEPA and baseline.
 
@@ -142,15 +153,22 @@ class CausalScrubber:
 
         Returns:
             dict with comparison results
+
         """
         jepa_scrubber = CausalScrubber(jepa_model, self.device)
         baseline_scrubber = CausalScrubber(baseline_model, self.device)
 
         jepa_result = jepa_scrubber.scrub_and_evaluate(
-            input_ids, hypothesis_fn, behavior_fn, n_resamples
+            input_ids,
+            hypothesis_fn,
+            behavior_fn,
+            n_resamples,
         )
         baseline_result = baseline_scrubber.scrub_and_evaluate(
-            input_ids, hypothesis_fn, behavior_fn, n_resamples
+            input_ids,
+            hypothesis_fn,
+            behavior_fn,
+            n_resamples,
         )
 
         return {
@@ -208,7 +226,8 @@ class FeatureHypothesis:
         except Exception:
             B, T, D = representations.shape
             return torch.ones_like(representations, dtype=torch.bool), torch.zeros_like(
-                representations, dtype=torch.bool
+                representations,
+                dtype=torch.bool,
             )
 
     @staticmethod
@@ -256,7 +275,12 @@ class InterventionPredictabilityScorer:
     @staticmethod
     @torch.no_grad()
     def compute_predictability(
-        model, input_ids, direction, probe_fn, scales=(-3, -2, -1, 0, 1, 2, 3), device="cpu"
+        model,
+        input_ids,
+        direction,
+        probe_fn,
+        scales=(-3, -2, -1, 0, 1, 2, 3),
+        device="cpu",
     ):
         """Compute predictability score for a direction.
 
@@ -270,6 +294,7 @@ class InterventionPredictabilityScorer:
 
         Returns:
             dict with predictability metrics
+
         """
         model.eval()
         input_ids = input_ids.to(device)

@@ -99,7 +99,7 @@ class TextSpanJEPAConfig:
         # JAWP
         self.use_jawp = kwargs.get("use_jawp", True)
         self.jawk_k_start = kwargs.get("jawk_k_start", 1)
-        self.jawk_k_end = kwargs.get("jawk_k_end", None)
+        self.jawk_k_end = kwargs.get("jawk_k_end")
         self.jawk_curriculum_steps = kwargs.get("jawk_curriculum_steps", 10000)
         self.jawk_alpha = kwargs.get("jawk_alpha", 0.1)
         self.jawk_init = kwargs.get("jawk_init", "identity")
@@ -117,14 +117,14 @@ class TextSpanJEPAConfig:
 
         # SWIP: Selective Whitening with Information Preservation (novel mechanism #7)
         self.use_swip = kwargs.get("use_swip", False)
-        self.swip_k_workspace = kwargs.get("swip_k_workspace", None)
+        self.swip_k_workspace = kwargs.get("swip_k_workspace")
         self.swip_target_variance = kwargs.get("swip_target_variance", 1.0)
         self.lambda_swip = kwargs.get("lambda_swip", 0.0)
 
         # PCR: Predictive Cascade Refinement (novel mechanism #8)
         self.use_pcr = kwargs.get("use_pcr", False)
         self.pcr_n_levels = kwargs.get("pcr_n_levels", 3)
-        self.pcr_level_dims = kwargs.get("pcr_level_dims", None)
+        self.pcr_level_dims = kwargs.get("pcr_level_dims")
         self.pcr_warmup_steps = kwargs.get("pcr_warmup_steps", 1000)
 
         # SPC: Spectral Predictive Coding (novel mechanism #9)
@@ -135,14 +135,14 @@ class TextSpanJEPAConfig:
 
         # WSD: Workspace-Target Synchronization Drift (novel mechanism #10)
         self.use_wsd = kwargs.get("use_wsd", False)
-        self.wsd_k = kwargs.get("wsd_k", None)
+        self.wsd_k = kwargs.get("wsd_k")
         self.wsd_sync_interval = kwargs.get("wsd_sync_interval", 100)
         self.wsd_ema_beta = kwargs.get("wsd_ema_beta", 0.99)
         self.lambda_wsd = kwargs.get("lambda_wsd", 0.0)
 
         # CMC: Cross-Mask Consistency Regularization (novel mechanism #11)
         self.use_cmc = kwargs.get("use_cmc", False)
-        self.cmc_second_mask_ratio = kwargs.get("cmc_second_mask_ratio", None)
+        self.cmc_second_mask_ratio = kwargs.get("cmc_second_mask_ratio")
         self.cmc_min_overlap_ratio = kwargs.get("cmc_min_overlap_ratio", 0.2)
         self.cmc_mode = kwargs.get("cmc_mode", "interval")
         self.cmc_interval = kwargs.get("cmc_interval", 10)
@@ -175,7 +175,7 @@ class TextSpanJEPAConfig:
         self.rdc_eta = kwargs.get("rdc_eta", 0.01)
         self.rdc_ema_beta = kwargs.get("rdc_ema_beta", 0.999)
         self.rdc_warmup_steps = kwargs.get("rdc_warmup_steps", 500)
-        self.rdc_k_workspace = kwargs.get("rdc_k_workspace", None)
+        self.rdc_k_workspace = kwargs.get("rdc_k_workspace")
         self.lambda_rdc = kwargs.get("lambda_rdc", 0.0)
 
         # WSR: Workspace Sharpness Regularization (novel mechanism #16)
@@ -190,11 +190,11 @@ class TextSpanJEPAConfig:
     def validate(self):
         if self.embed_dim % self.num_heads != 0:
             raise ValueError(
-                f"embed_dim={self.embed_dim} must be divisible by num_heads={self.num_heads}"
+                f"embed_dim={self.embed_dim} must be divisible by num_heads={self.num_heads}",
             )
         if self.predictor_embed_dim % self.num_heads != 0:
             raise ValueError(
-                f"predictor_embed_dim={self.predictor_embed_dim} must be divisible by num_heads={self.num_heads}"
+                f"predictor_embed_dim={self.predictor_embed_dim} must be divisible by num_heads={self.num_heads}",
             )
         if self.encoder_depth < 1:
             raise ValueError(f"encoder_depth must be >= 1, got {self.encoder_depth}")
@@ -202,7 +202,7 @@ class TextSpanJEPAConfig:
             raise ValueError(f"predictor_depth must be >= 1, got {self.predictor_depth}")
         if self.ema_schedule not in ("cosine", "linear"):
             raise ValueError(
-                f"ema_schedule must be 'cosine' or 'linear', got '{self.ema_schedule}'"
+                f"ema_schedule must be 'cosine' or 'linear', got '{self.ema_schedule}'",
             )
         if self.lambda_span < 0:
             raise ValueError(f"lambda_span must be >= 0, got {self.lambda_span}")
@@ -217,7 +217,7 @@ class TextSpanJEPAConfig:
                 raise ValueError(f"jawk_k_start must be >= 1, got {self.jawk_k_start}")
             if self.jawk_k_end is not None and self.jawk_k_end > self.embed_dim:
                 raise ValueError(
-                    f"jawk_k_end={self.jawk_k_end} cannot exceed embed_dim={self.embed_dim}"
+                    f"jawk_k_end={self.jawk_k_end} cannot exceed embed_dim={self.embed_dim}",
                 )
             if self.jawk_k_end is not None and self.jawk_k_start > self.jawk_k_end:
                 raise ValueError(f"jawk_k_start={self.jawk_k_start} > jawk_k_end={self.jawk_k_end}")
@@ -225,41 +225,41 @@ class TextSpanJEPAConfig:
                 raise ValueError(f"jawk_alpha must be >= 0, got {self.jawk_alpha}")
             if self.jawk_init not in ("identity", "random", "pca"):
                 raise ValueError(
-                    f"jawk_init must be 'identity', 'random', or 'pca', got '{self.jawk_init}'"
+                    f"jawk_init must be 'identity', 'random', or 'pca', got '{self.jawk_init}'",
                 )
         if self.lambda_sigreg < 0:
             raise ValueError(f"lambda_sigreg must be >= 0, got {self.lambda_sigreg}")
         if self.lambda_sigreg > 0 and self.sigreg_sigma <= 0:
             raise ValueError(
-                f"sigreg_sigma must be > 0 when SIGReg is active, got {self.sigreg_sigma}"
+                f"sigreg_sigma must be > 0 when SIGReg is active, got {self.sigreg_sigma}",
             )
         if self.future_warmup_steps < 0:
             raise ValueError(f"future_warmup_steps must be >= 0, got {self.future_warmup_steps}")
         if self.lambda_predictive_rank < 0:
             raise ValueError(
-                f"lambda_predictive_rank must be >= 0, got {self.lambda_predictive_rank}"
+                f"lambda_predictive_rank must be >= 0, got {self.lambda_predictive_rank}",
             )
         if self.use_cgn:
             if self.embed_dim % self.cgn_n_groups != 0:
                 raise ValueError(
-                    f"embed_dim={self.embed_dim} must be divisible by cgn_n_groups={self.cgn_n_groups}"
+                    f"embed_dim={self.embed_dim} must be divisible by cgn_n_groups={self.cgn_n_groups}",
                 )
             if self.cgn_n_groups < 1:
                 raise ValueError(f"cgn_n_groups must be >= 1, got {self.cgn_n_groups}")
             if self.cgn_tau_start <= 0 or self.cgn_tau_end <= 0:
                 raise ValueError(
-                    f"cgn temperatures must be > 0, got start={self.cgn_tau_start}, end={self.cgn_tau_end}"
+                    f"cgn temperatures must be > 0, got start={self.cgn_tau_start}, end={self.cgn_tau_end}",
                 )
             if self.lambda_cgn_ortho < 0:
                 raise ValueError(f"lambda_cgn_ortho must be >= 0, got {self.lambda_cgn_ortho}")
         if self.use_swip:
             if self.swip_k_workspace is not None and self.swip_k_workspace > self.embed_dim:
                 raise ValueError(
-                    f"swip_k_workspace={self.swip_k_workspace} cannot exceed embed_dim={self.embed_dim}"
+                    f"swip_k_workspace={self.swip_k_workspace} cannot exceed embed_dim={self.embed_dim}",
                 )
             if self.swip_target_variance <= 0:
                 raise ValueError(
-                    f"swip_target_variance must be > 0, got {self.swip_target_variance}"
+                    f"swip_target_variance must be > 0, got {self.swip_target_variance}",
                 )
             if self.lambda_swip < 0:
                 raise ValueError(f"lambda_swip must be >= 0, got {self.lambda_swip}")
@@ -270,14 +270,14 @@ class TextSpanJEPAConfig:
                 total = sum(self.pcr_level_dims)
                 if total > self.embed_dim:
                     raise ValueError(
-                        f"sum(pcr_level_dims)={total} cannot exceed embed_dim={self.embed_dim}"
+                        f"sum(pcr_level_dims)={total} cannot exceed embed_dim={self.embed_dim}",
                     )
             if self.pcr_warmup_steps < 0:
                 raise ValueError(f"pcr_warmup_steps must be >= 0, got {self.pcr_warmup_steps}")
         if self.use_spc:
             if self.embed_dim % self.spc_n_bands != 0:
                 raise ValueError(
-                    f"embed_dim={self.embed_dim} must be divisible by spc_n_bands={self.spc_n_bands}"
+                    f"embed_dim={self.embed_dim} must be divisible by spc_n_bands={self.spc_n_bands}",
                 )
             if self.spc_n_bands < 1:
                 raise ValueError(f"spc_n_bands must be >= 1, got {self.spc_n_bands}")
@@ -295,11 +295,11 @@ class TextSpanJEPAConfig:
                 raise ValueError(f"lambda_cmc must be >= 0, got {self.lambda_cmc}")
             if self.cmc_mode not in ("always", "interval", "reuse_encoder"):
                 raise ValueError(
-                    f"cmc_mode must be always/interval/reuse_encoder, got '{self.cmc_mode}'"
+                    f"cmc_mode must be always/interval/reuse_encoder, got '{self.cmc_mode}'",
                 )
             if self.cmc_min_overlap_ratio < 0 or self.cmc_min_overlap_ratio > 1:
                 raise ValueError(
-                    f"cmc_min_overlap_ratio must be in [0,1], got {self.cmc_min_overlap_ratio}"
+                    f"cmc_min_overlap_ratio must be in [0,1], got {self.cmc_min_overlap_ratio}",
                 )
         if self.use_gac:
             if self.lambda_gac < 0:
@@ -348,13 +348,13 @@ class TextSpanJEPAConfig:
                 raise ValueError(f"wsr_warmup_steps must be >= 0, got {self.wsr_warmup_steps}")
             if self.wsr_mode not in ("sam", "gradient"):
                 raise ValueError(
-                    f"wsr_mode must be sam/gradient (module contract), got '{self.wsr_mode}'"
+                    f"wsr_mode must be sam/gradient (module contract), got '{self.wsr_mode}'",
                 )
         # EMA tau range check
         if not (0 < self.ema_tau_start <= self.ema_tau_end < 1.0):
             raise ValueError(
                 f"ema_tau_start={self.ema_tau_start} must be in (0, ema_tau_end) "
-                f"and ema_tau_end={self.ema_tau_end} must be in (ema_tau_start, 1.0)"
+                f"and ema_tau_end={self.ema_tau_end} must be in (ema_tau_start, 1.0)",
             )
         return True
 
@@ -405,7 +405,8 @@ class TextSpanJEPA(nn.Module):
         self.variance_reg = VarianceRegularization(margin=config.variance_margin)
         self.covariance_reg = CovarianceRegularization()
         self.target_centering = TargetCentering(
-            dim=config.embed_dim, momentum=config.centering_momentum
+            dim=config.embed_dim,
+            momentum=config.centering_momentum,
         )
         self.diagnostics = CollapseDiagnostics()
 
@@ -577,7 +578,8 @@ class TextSpanJEPA(nn.Module):
         with torch.no_grad():
             one_minus_tau = 1.0 - tau
             for param_q, param_k in zip(
-                self.encoder.parameters(), self.target_encoder.parameters()
+                self.encoder.parameters(),
+                self.target_encoder.parameters(),
             ):
                 param_k.data.mul_(tau).add_(param_q.data, alpha=one_minus_tau)
 
@@ -590,7 +592,12 @@ class TextSpanJEPA(nn.Module):
         return self.config.lambda_future * progress
 
     def compute_loss_with_targets(
-        self, masked_input_ids, original_input_ids, mask_positions, current_step=0, total_steps=1
+        self,
+        masked_input_ids,
+        original_input_ids,
+        mask_positions,
+        current_step=0,
+        total_steps=1,
     ):
         if masked_input_ids.size(0) == 0:
             zero = torch.tensor(0.0, device=masked_input_ids.device)
@@ -624,7 +631,10 @@ class TextSpanJEPA(nn.Module):
             h_online, cgn_info = self.cgn(h_online, mask_positions, step=current_step)
 
         span_preds, _num_masked, valid_mask, future_losses, _future_preds = self.predictor(
-            h_online, mask_positions, token_embeds_online, h_target.detach()
+            h_online,
+            mask_positions,
+            token_embeds_online,
+            h_target.detach(),
         )
 
         # GAC: expose live slot predictions so the training loop can read
@@ -644,7 +654,8 @@ class TextSpanJEPA(nn.Module):
         pcr_info = {}
         if self.pcr is not None and valid_mask.any():
             target_gathered_pcr, _, target_valid_pcr = TextSpanJPAPredictor._gather_masked(
-                h_target.detach(), mask_positions
+                h_target.detach(),
+                mask_positions,
             )
             min_cols_pcr = min(valid_mask.size(1), target_valid_pcr.size(1))
             combined_valid_pcr = valid_mask[:, :min_cols_pcr] & target_valid_pcr[:, :min_cols_pcr]
@@ -652,7 +663,9 @@ class TextSpanJEPA(nn.Module):
                 span_preds_valid_pcr = span_preds[:, :min_cols_pcr][combined_valid_pcr]
                 target_valid_pcr_flat = target_gathered_pcr[:, :min_cols_pcr][combined_valid_pcr]
                 span_preds_refined, pcr_info = self.pcr(
-                    span_preds_valid_pcr, target_valid_pcr_flat, step=current_step
+                    span_preds_valid_pcr,
+                    target_valid_pcr_flat,
+                    step=current_step,
                 )
                 # Write refined predictions back
                 span_preds[:, :min_cols_pcr][combined_valid_pcr] = span_preds_refined
@@ -663,7 +676,8 @@ class TextSpanJEPA(nn.Module):
         _zero_loss = h_online.new_tensor(0.0, requires_grad=True)
         if valid_mask.any():
             target_gathered, _, target_valid = TextSpanJPAPredictor._gather_masked(
-                h_target.detach(), mask_positions
+                h_target.detach(),
+                mask_positions,
             )
             min_cols = min(valid_mask.size(1), target_valid.size(1))
             combined_valid = valid_mask[:, :min_cols] & target_valid[:, :min_cols]
@@ -672,7 +686,9 @@ class TextSpanJEPA(nn.Module):
                     span_preds_valid = span_preds[:, :min_cols][combined_valid]
                     target_gathered_valid = target_gathered[:, :min_cols][combined_valid]
                     loss_span, jawp_info = self.jawp.compute_loss(
-                        span_preds_valid, target_gathered_valid, step=current_step
+                        span_preds_valid,
+                        target_gathered_valid,
+                        step=current_step,
                     )
                 else:
                     loss_span = F.smooth_l1_loss(
@@ -722,7 +738,12 @@ class TextSpanJEPA(nn.Module):
         # defined only over masked slots, so skip instead of raising (R18).
         loss_spc, spc_info = (
             self._spc_loss(
-                span_preds, target_gathered, combined_valid, valid_mask, min_cols, h_target
+                span_preds,
+                target_gathered,
+                combined_valid,
+                valid_mask,
+                min_cols,
+                h_target,
             )
             if valid_mask.any()
             else (self._zero(span_preds), {})
@@ -766,7 +787,11 @@ class TextSpanJEPA(nn.Module):
 
         # PUC: prediction uncertainty calibration on predictor output
         loss_puc, puc_info = self._puc_loss(
-            h_online, span_preds, h_target, valid_mask, current_step
+            h_online,
+            span_preds,
+            h_target,
+            valid_mask,
+            current_step,
         )
 
         # RDC: representation drift compensation (running z_previous buffer)
@@ -845,13 +870,17 @@ class TextSpanJEPA(nn.Module):
             loss_dict.update({f"pcr_{k}": v for k, v in pcr_info.items()})
 
         diag_dict = self.diagnostics.compute(
-            h_online.detach(), h_target.detach(), prev_target_h=self._prev_target_h
+            h_online.detach(),
+            h_target.detach(),
+            prev_target_h=self._prev_target_h,
         )
         diag_dict["target_center_norm"] = self.target_centering.center.norm().item()
         diag_dict["mask_fraction"] = mask_positions.float().mean().item()
 
         jspace_dict = self.jspace_metrics.compute(
-            h_online.detach(), h_target.detach(), predictor_h=None
+            h_online.detach(),
+            h_target.detach(),
+            predictor_h=None,
         )
         diag_dict.update(jspace_dict)
 
@@ -881,6 +910,7 @@ class TextSpanJEPA(nn.Module):
         Returns:
             loss_cmc: scalar tensor.
             cmc_info: dict with diagnostics.
+
         """
         if self.cmc is None:
             zero = torch.tensor(0.0, device=z_pred_primary.device)
@@ -979,7 +1009,13 @@ class TextSpanJEPA(nn.Module):
         return self.swip(h_online, workspace_Q=ws_Q)
 
     def _spc_loss(
-        self, span_preds, target_gathered, combined_valid, valid_mask, min_cols, h_target
+        self,
+        span_preds,
+        target_gathered,
+        combined_valid,
+        valid_mask,
+        min_cols,
+        h_target,
     ):
         if self.config.lambda_spc <= 0 or self.spc is None or not valid_mask.any():
             return self._zero(span_preds), {}

@@ -159,6 +159,7 @@ class WorkspaceSharpnessRegularization(nn.Module):
         ema_beta: EMA decay for running sharpness statistics.
         warmup_steps: steps before WSR activates.
         mode: 'sam' (explicit perturbation) or 'gradient' (gradient norm proxy).
+
     """
 
     def __init__(
@@ -208,6 +209,7 @@ class WorkspaceSharpnessRegularization(nn.Module):
 
         Returns:
             (D, k) Grassmann gradient (tangent vector at Q).
+
         """
         # Project out the Q-component: (I - QQ^T) G
         QQ_T_G = Q @ (Q.T @ euclidean_grad)  # (D, k)
@@ -222,6 +224,7 @@ class WorkspaceSharpnessRegularization(nn.Module):
 
         Returns:
             (D, k) orthonormal matrix (nearest on St(D,k)).
+
         """
         Q_retracted, _ = torch.linalg.qr(Q)
         # Ensure positive diagonal (canonical QR)
@@ -251,6 +254,7 @@ class WorkspaceSharpnessRegularization(nn.Module):
         Returns:
             loss: scalar tensor (≥ 0).
             info: dict with diagnostics.
+
         """
         _D, _k = Q.shape
 
@@ -302,6 +306,7 @@ class WorkspaceSharpnessRegularization(nn.Module):
         Returns:
             loss: scalar tensor.
             info: dict with diagnostics.
+
         """
         _D, k = Q.shape
 
@@ -346,10 +351,10 @@ class WorkspaceSharpnessRegularization(nn.Module):
         with torch.no_grad():
             self.running_sharpness.mul_(self.ema_beta).add_((1 - self.ema_beta) * sharpness.item())
             self.running_spectral_sharpness.mul_(self.ema_beta).add_(
-                (1 - self.ema_beta) * spectral_sharpness.item()
+                (1 - self.ema_beta) * spectral_sharpness.item(),
             )
             self.running_directional_sharpness.mul_(self.ema_beta).add_(
-                (1 - self.ema_beta) * directional_sharpness.item()
+                (1 - self.ema_beta) * directional_sharpness.item(),
             )
             self.running_grad_norm.mul_(self.ema_beta).add_((1 - self.ema_beta) * grad_norm.item())
             self.total_steps.add_(1)
@@ -395,6 +400,7 @@ class WorkspaceSharpnessRegularization(nn.Module):
         Returns:
             loss: scalar tensor.
             info: dict with diagnostics.
+
         """
         _D, k = Q.shape
 
@@ -442,10 +448,10 @@ class WorkspaceSharpnessRegularization(nn.Module):
         with torch.no_grad():
             self.running_sharpness.mul_(self.ema_beta).add_((1 - self.ema_beta) * sharpness)
             self.running_spectral_sharpness.mul_(self.ema_beta).add_(
-                (1 - self.ema_beta) * spectral_sharpness.item()
+                (1 - self.ema_beta) * spectral_sharpness.item(),
             )
             self.running_directional_sharpness.mul_(self.ema_beta).add_(
-                (1 - self.ema_beta) * directional_sharpness.item()
+                (1 - self.ema_beta) * directional_sharpness.item(),
             )
             self.running_grad_norm.mul_(self.ema_beta).add_((1 - self.ema_beta) * grad_norm.item())
             self.total_steps.add_(1)
@@ -484,6 +490,7 @@ class WorkspaceSharpnessRegularization(nn.Module):
 
         Returns:
             Upper bound on generalization gap.
+
         """
         rho_Q = self.running_sharpness.item()
         if n_samples <= 0 or rho_Q <= 0:
@@ -508,6 +515,7 @@ class WorkspaceSharpnessRegularization(nn.Module):
 
         Returns:
             PAC-Bayes upper bound.
+
         """
         if n_samples <= 0:
             return float("inf")
@@ -539,6 +547,7 @@ def wsr_sharpness(Q, embed_dim=768, rho=0.05, eta=0.01, step=0):
 
     Returns:
         (loss, info) tuple.
+
     """
     wsr = WorkspaceSharpnessRegularization(embed_dim=embed_dim, rho=rho, eta=eta)
     wsr = wsr.to(Q.device)

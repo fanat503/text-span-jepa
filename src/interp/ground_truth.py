@@ -61,7 +61,7 @@ class SyntheticStructuredModel:
         if self.n_classes * 3 > self.class_end:
             raise ValueError(
                 f"n_classes={self.n_classes} does not fit the class feature "
-                f"budget: need {self.n_classes * 3} dims, have {self.class_end}"
+                f"budget: need {self.n_classes * 3} dims, have {self.class_end}",
             )
 
     def generate(self, seed=42):
@@ -69,6 +69,7 @@ class SyntheticStructuredModel:
 
         Returns:
             dict with representations, labels, and ground truth info
+
         """
         torch.manual_seed(seed)
 
@@ -112,7 +113,7 @@ class SyntheticStructuredModel:
         # sat outside the sample loop and only populated the last row).
         for i in range(N):
             representations[i, self.depth_end : self.noise_end] = torch.randn(
-                self.noise_end - self.depth_end
+                self.noise_end - self.depth_end,
             )
 
         return {
@@ -153,7 +154,11 @@ class GroundTruthValidation:
         data = synth.generate()
 
         pcc = ProbingComplexityCurve(
-            embed_dim=64, depths=(1, 2, 3), max_epochs=30, min_accuracy=0.6, device=self.device
+            embed_dim=64,
+            depths=(1, 2, 3),
+            max_epochs=30,
+            min_accuracy=0.6,
+            device=self.device,
         )
 
         # Class labels: should be accessible with linear probe
@@ -188,7 +193,9 @@ class GroundTruthValidation:
         data = synth.generate()
 
         psi = PolysemanticityIndex(
-            n_clusters_range=(2, 3), n_top_activations=30, n_dimensions_sample=8
+            n_clusters_range=(2, 3),
+            n_top_activations=30,
+            n_dimensions_sample=8,
         )
 
         result = psi.compute(data["representations"], data["labels"])
@@ -264,6 +271,7 @@ class GroundTruthValidation:
 
         Returns:
             dict with per-test results and overall pass/fail
+
         """
         results = {}
 

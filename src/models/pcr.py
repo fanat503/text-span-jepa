@@ -159,6 +159,7 @@ class RefinementBlock(nn.Module):
     Args:
         dim: subspace dimension (input and output).
         hidden_dim: hidden dimension of the MLP.
+
     """
 
     def __init__(self, dim: int, hidden_dim: int | None = None):
@@ -197,10 +198,16 @@ class PredictiveCascadeRefinement(nn.Module):
         refine_mlp_hidden: hidden dim for refinement MLPs.
             If None, uses 2 * max(level_dims).
         init: 'identity' (Q = I) or 'random' (Q = random orthogonal).
+
     """
 
     def __init__(
-        self, embed_dim=768, n_levels=3, level_dims=None, refine_mlp_hidden=None, init="identity"
+        self,
+        embed_dim=768,
+        n_levels=3,
+        level_dims=None,
+        refine_mlp_hidden=None,
+        init="identity",
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -239,13 +246,14 @@ class PredictiveCascadeRefinement(nn.Module):
 
         # Precompute offsets for each level
         self.register_buffer(
-            "level_offsets", torch.cumsum(torch.tensor([0] + self.level_dims[:-1]), 0)
+            "level_offsets",
+            torch.cumsum(torch.tensor([0] + self.level_dims[:-1]), 0),
         )
 
         # Refinement blocks — one per level
         refine_hidden = refine_mlp_hidden or (2 * max(self.level_dims))
         self.refine_blocks = nn.ModuleList(
-            [RefinementBlock(dim=d, hidden_dim=refine_hidden) for d in self.level_dims]
+            [RefinementBlock(dim=d, hidden_dim=refine_hidden) for d in self.level_dims],
         )
 
         # Gating scalar per level — learned importance weight
@@ -253,7 +261,7 @@ class PredictiveCascadeRefinement(nn.Module):
             [
                 nn.Parameter(torch.tensor(0.0))  # starts at 0 → near-zero refinement
                 for _ in range(n_levels)
-            ]
+            ],
         )
 
         # Warmup: don't refine for the first few steps (let base predictor learn)
@@ -296,6 +304,7 @@ class PredictiveCascadeRefinement(nn.Module):
 
         Returns:
             P: (D, d_l) orthonormal projection matrix
+
         """
         offset = self.level_offsets[level].item()
         dim = self.level_dims[level]
@@ -312,6 +321,7 @@ class PredictiveCascadeRefinement(nn.Module):
         Returns:
             z_refined: (..., D) refined predictions.
             info: dict with diagnostics.
+
         """
         D = z_pred.size(-1)
         original_shape = z_pred.shape
@@ -367,7 +377,7 @@ class PredictiveCascadeRefinement(nn.Module):
                         ),
                         f"pcr_level_{l}_subspace_fraction": subspace_fraction,
                         f"pcr_level_{l}_dim": self.level_dims[l],
-                    }
+                    },
                 )
 
         # Reshape back
@@ -422,6 +432,7 @@ class PredictiveCascadeRefinement(nn.Module):
         Returns:
             capacity_bound: float — lower bound on additional information (nats).
             bound_info: dict with per-level breakdown.
+
         """
         D = z_pred.size(-1)
         z_pred_flat = z_pred.reshape(-1, D).float()

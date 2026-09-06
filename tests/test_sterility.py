@@ -52,7 +52,11 @@ class TestDeterminism:
             step_losses = []
             for step in range(3):
                 out, _, _ = model.compute_loss_with_targets(
-                    ids, ids, mask, current_step=step, total_steps=100
+                    ids,
+                    ids,
+                    mask,
+                    current_step=step,
+                    total_steps=100,
                 )
                 step_losses.append(out.item())
             traj.append(step_losses)

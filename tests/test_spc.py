@@ -284,10 +284,10 @@ class TestSPCTheorem:
         high variance × predictability bands."""
         # Set up running statistics manually
         spc_module.running_residual_vars.copy_(
-            torch.tensor([1.0, 1.0, 1.0, 1.0, 10.0, 10.0, 10.0, 10.0])
+            torch.tensor([1.0, 1.0, 1.0, 1.0, 10.0, 10.0, 10.0, 10.0]),
         )
         spc_module.running_predictability.copy_(
-            torch.tensor([0.9, 0.9, 0.9, 0.9, 0.1, 0.1, 0.1, 0.1])
+            torch.tensor([0.9, 0.9, 0.9, 0.9, 0.1, 0.1, 0.1, 0.1]),
         )
 
         w_before = spc_module.get_band_weights().clone()

@@ -40,6 +40,7 @@ class ScalingAnalysis:
 
         Returns:
             dict with fitted parameters and predictions
+
         """
         if len(sizes) < 3:
             return {"exponent": 0.0, "coefficient": 0.0, "r_squared": 0.0}
@@ -130,6 +131,7 @@ class ComputeOptimalScale:
 
         Returns:
             dict with per-budget comparison
+
         """
         results = {}
         jepa_wins = 0
@@ -177,6 +179,7 @@ class InterpretabilityEfficiency:
 
         Returns:
             dict with efficiency metrics
+
         """
         jepa_efficiency = interp_metric / max(flops, 1)
         baseline_efficiency = baseline_interp / max(baseline_flops, 1)
@@ -194,7 +197,10 @@ class InterpretabilityEfficiency:
 
     @staticmethod
     def pareto_curve(
-        interp_values, compute_values, baseline_interp_values, baseline_compute_values
+        interp_values,
+        compute_values,
+        baseline_interp_values,
+        baseline_compute_values,
     ):
         """Compute Pareto frontier: best interpretability at each compute level.
 
@@ -206,6 +212,7 @@ class InterpretabilityEfficiency:
 
         Returns:
             dict with Pareto analysis
+
         """
         # Combine all points
         all_points = []

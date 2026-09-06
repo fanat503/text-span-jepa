@@ -30,6 +30,6 @@ def safe_torch_load(path, map_location=None):
         warnings.warn(
             f"safe_torch_load: weights_only=True failed for {path} "
             "(UnpicklingError); retrying with weights_only=False. "
-            "Only do this for checkpoints you trust."
+            "Only do this for checkpoints you trust.",
         )
         return torch.load(path, map_location=map_location, weights_only=False)

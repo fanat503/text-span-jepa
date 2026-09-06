@@ -76,7 +76,9 @@ class AblationConfig:
 ABLATION_CONFIGS = {
     "full": AblationConfig("full"),
     "no_predictor": AblationConfig(
-        "no_predictor", use_predictor=False, use_iterative_refinement=False
+        "no_predictor",
+        use_predictor=False,
+        use_iterative_refinement=False,
     ),
     "no_future_loss": AblationConfig("no_future_loss", use_future_loss=False),
     "no_vicreg": AblationConfig("no_vicreg", use_variance_reg=False, use_covariance_reg=False),
@@ -163,7 +165,12 @@ class AblatedModel(nn.Module):
         self.config = ablation_config
 
     def forward(
-        self, masked_input_ids, original_input_ids, mask_positions, current_step=0, total_steps=1
+        self,
+        masked_input_ids,
+        original_input_ids,
+        mask_positions,
+        current_step=0,
+        total_steps=1,
     ):
         """Forward pass with ablation.
 
@@ -227,7 +234,8 @@ class AblatedModel(nn.Module):
         """If EMA is ablated, copy online weights to target (no EMA)."""
         if not self.config.use_ema_target:
             for p_q, p_k in zip(
-                self.model.encoder.parameters(), self.model.target_encoder.parameters()
+                self.model.encoder.parameters(),
+                self.model.target_encoder.parameters(),
             ):
                 p_k.data.copy_(p_q.data)
 
@@ -253,6 +261,7 @@ class AblationStudy:
             base_model: TextSpanJEPA model
             train_fn: callable(model, n_steps) -> loss_history
             device: compute device
+
         """
         self.base_model = base_model
         self.train_fn = train_fn
@@ -267,6 +276,7 @@ class AblationStudy:
 
         Returns:
             dict with training results
+
         """
         config = ABLATION_CONFIGS.get(ablation_name)
         if config is None:
@@ -298,6 +308,7 @@ class AblationStudy:
 
         Returns:
             dict of {ablation_name: results}
+
         """
         if ablations is None:
             ablations = list(ABLATION_CONFIGS.keys())
@@ -340,6 +351,7 @@ class AblationStudy:
 
         Returns:
             dict of {(ablation, size): results}
+
         """
         from src.models.jepa import TextSpanJEPA, TextSpanJEPAConfig
 
@@ -414,6 +426,7 @@ class AblationStudy:
 
         Returns:
             dict with per-ablation CKA and geometry comparison
+
         """
         from src.interp.representation_geometry import RepresentationGeometry
         from src.models.collapse import CollapseDiagnostics

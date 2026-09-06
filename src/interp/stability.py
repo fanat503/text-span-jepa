@@ -40,6 +40,7 @@ class TrainingStability:
 
         Returns:
             dict with convergence metrics
+
         """
         from src.models.collapse import CollapseDiagnostics
 
@@ -95,6 +96,7 @@ class TrainingStability:
 
         Returns:
             dict with comparison
+
         """
         jepa_conv = TrainingStability.convergence_curve(jepa_checkpoints)
         baseline_conv = TrainingStability.convergence_curve(baseline_checkpoints)
@@ -129,6 +131,7 @@ class LossStability:
 
         Returns:
             dict with stability metrics
+
         """
         if len(loss_values) < window_size:
             return {
@@ -165,7 +168,8 @@ class LossStability:
         if n_last >= 2:
             steps = torch.arange(n_last, dtype=torch.float32)
             slope = ((last_losses * steps).mean() - last_losses.mean() * steps.mean()) / max(
-                (steps**2).mean() - steps.mean() ** 2, 1e-10
+                (steps**2).mean() - steps.mean() ** 2,
+                1e-10,
             )
             convergence_slope = slope.item()
         else:
@@ -211,7 +215,11 @@ class EarlyStoppingAdvantage:
     @staticmethod
     @torch.no_grad()
     def compute(
-        checkpoint_representations, checkpoint_fractions, threshold=0.9, probe_fn=None, labels=None
+        checkpoint_representations,
+        checkpoint_fractions,
+        threshold=0.9,
+        probe_fn=None,
+        labels=None,
     ):
         """Find the earliest checkpoint with acceptable quality.
 
@@ -224,6 +232,7 @@ class EarlyStoppingAdvantage:
 
         Returns:
             dict with early stopping fraction
+
         """
         from src.models.collapse import CollapseDiagnostics
 
@@ -255,12 +264,18 @@ class EarlyStoppingAdvantage:
 
     @staticmethod
     def compare(
-        jepa_checkpoints, baseline_checkpoints, jepa_fractions, baseline_fractions, threshold=0.9
+        jepa_checkpoints,
+        baseline_checkpoints,
+        jepa_fractions,
+        baseline_fractions,
+        threshold=0.9,
     ):
         """Compare early stopping advantage between JEPA and baseline."""
         jepa_early = EarlyStoppingAdvantage.compute(jepa_checkpoints, jepa_fractions, threshold)
         baseline_early = EarlyStoppingAdvantage.compute(
-            baseline_checkpoints, baseline_fractions, threshold
+            baseline_checkpoints,
+            baseline_fractions,
+            threshold,
         )
 
         return {
@@ -290,6 +305,7 @@ class CheckpointConsistency:
 
         Returns:
             dict with pairwise CKA
+
         """
         from src.models.collapse import CollapseDiagnostics
 

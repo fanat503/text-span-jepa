@@ -42,6 +42,7 @@ class TiedTokenDecoder(nn.Module):
 
         Returns:
             logits: (..., V) token logits
+
         """
         x = self.proj(predicted_latents)
         x = self.norm(x)

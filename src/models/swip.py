@@ -170,6 +170,7 @@ class SWIPModule(nn.Module):
             plain descending order.
         hierarchy_weight: weight of the workspace-ordering term (proofs/swip.md
             term 2, implemented R15). Default 1.0.
+
     """
 
     def __init__(
@@ -206,6 +207,7 @@ class SWIPModule(nn.Module):
         Returns:
             loss: scalar tensor (differentiable w.r.t. model parameters).
             info: dict with diagnostics.
+
         """
         D = z.size(-1)
         flat = z.reshape(-1, D).float()
@@ -307,7 +309,7 @@ class SWIPModule(nn.Module):
             loss = (log_bg - log_target).pow(2).sum()
 
             # Spectral gap
-            if k > 0 and D > k:
+            if k > 0 and k < D:
                 ws_min = ws_eigenvalues.min()
                 bg_max = bg_eigenvalues.max()
                 spectral_gap = ws_min / (bg_max + self.eps)
@@ -355,6 +357,7 @@ class SWIPModule(nn.Module):
 
         Returns:
             dict with spectral analysis metrics.
+
         """
         D = z.size(-1)
         flat = z.reshape(-1, D).float()

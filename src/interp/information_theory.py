@@ -65,6 +65,7 @@ class MINEEstimator(nn.Module):
 
         Returns:
             float: estimated MI in nats
+
         """
         N = x.size(0)
         if batch_size is None:
@@ -124,6 +125,7 @@ class InfoNCEEstimator:
 
         Returns:
             float: InfoNCE lower bound on MI in nats
+
         """
         N = x.size(0)
         if N < 2:
@@ -157,7 +159,11 @@ class ConditionalMIEstimator:
 
     @staticmethod
     def compute(
-        representations, target_features, conditioning_features, method="infonce", n_steps=100
+        representations,
+        target_features,
+        conditioning_features,
+        method="infonce",
+        n_steps=100,
     ):
         """Estimate MI(h; target | condition).
 
@@ -170,6 +176,7 @@ class ConditionalMIEstimator:
 
         Returns:
             dict with MI estimates
+
         """
         _N, D = representations.shape
         K = target_features.shape[1]
@@ -237,6 +244,7 @@ class RepresentationCompression:
 
         Returns:
             float: average entropy in nats
+
         """
         if representations.dim() == 3:
             flat = representations.reshape(-1, representations.size(-1))
@@ -284,6 +292,7 @@ class RepresentationCompression:
 
         Returns:
             float: total correlation in nats
+
         """
         if representations.dim() == 3:
             flat = representations.reshape(-1, representations.size(-1))
@@ -328,6 +337,7 @@ class RepresentationCompression:
 
         Returns:
             float: compression ratio in [0, inf)
+
         """
         rep_entropy = RepresentationCompression.entropy_estimate(representations)
         # Random baseline: entropy of isotropic Gaussian in D dims
@@ -363,6 +373,7 @@ class InformationPlane:
 
         Returns:
             dict with I(h; X), I(h; Y), and IB gap
+
         """
         if method == "infonce":
             mi_input = InfoNCEEstimator.compute(representations, input_features.float())

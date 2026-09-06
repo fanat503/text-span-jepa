@@ -30,6 +30,7 @@ def estimate_transformer_flops(
 
     Returns:
         dict with FLOPs estimates
+
     """
     # Kaplan estimate: 6N for forward+backward per token
     flops_per_token = 6 * num_params
@@ -63,6 +64,7 @@ def estimate_training_flops(
 
     Returns:
         dict with total FLOPs for the training run
+
     """
     per_step = estimate_transformer_flops(num_params, seq_len, batch_size)
     total = per_step["total_flops"] * num_steps

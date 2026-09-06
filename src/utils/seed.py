@@ -20,6 +20,7 @@ def seed_everything(seed: int, deterministic: bool = False) -> int:
 
     Returns:
         The seed that was set (for logging)
+
     """
     random.seed(seed)
     os.environ["PYTHONHASHSEED"] = str(seed)

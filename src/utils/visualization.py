@@ -75,7 +75,7 @@ def setup_style():
             "axes.spines.right": False,
             "lines.linewidth": 1.5,
             "lines.markersize": 4,
-        }
+        },
     )
 
 
@@ -102,6 +102,7 @@ def plot_eigenvalue_spectrum(
         highlight_k: if set, shade the first k eigenvalues (workspace).
         save_path: if set, save figure to this path.
         ax: existing axes to draw on.
+
     """
     if not _ensure_mpl():
         return
@@ -122,7 +123,11 @@ def plot_eigenvalue_spectrum(
             label=f"k={highlight_k} (workspace)",
         )
         ax.fill_between(
-            x[:highlight_k], 1e-10, eigenvalues[:highlight_k], alpha=0.15, color="#b2182b"
+            x[:highlight_k],
+            1e-10,
+            eigenvalues[:highlight_k],
+            alpha=0.15,
+            color="#b2182b",
         )
 
     ax.set_xlabel("Index")
@@ -156,6 +161,7 @@ def plot_cka_heatmap(
         title: plot title.
         save_path: save path.
         ax: existing axes.
+
     """
     if not _ensure_mpl():
         return
@@ -200,6 +206,7 @@ def plot_svcca_curve(
         threshold: cumulative threshold line.
         save_path: save path.
         ax: existing axes.
+
     """
     if not _ensure_mpl():
         return
@@ -258,6 +265,7 @@ def plot_representation_2d(
         ax: existing axes.
         n_components: dimensions for projection.
         perplexity: t-SNE perplexity.
+
     """
     if not _ensure_mpl():
         return
@@ -288,7 +296,12 @@ def plot_representation_2d(
         for i, lbl in enumerate(unique_labels):
             mask = labels == lbl
             ax.scatter(
-                projected[mask, 0], projected[mask, 1], c=[cmap(i)], s=8, alpha=0.6, label=str(lbl)
+                projected[mask, 0],
+                projected[mask, 1],
+                c=[cmap(i)],
+                s=8,
+                alpha=0.6,
+                label=str(lbl),
             )
         ax.legend(markerscale=2, fontsize=7, loc="best")
     else:
@@ -323,6 +336,7 @@ def plot_stacked_losses(
         title: plot title.
         save_path: save path.
         ax: existing axes.
+
     """
     if not _ensure_mpl():
         return
@@ -342,7 +356,11 @@ def plot_stacked_losses(
 
     colors = _cmap("Set2", len(keys))
     ax.stackplot(
-        steps, values, labels=keys, colors=[colors(i) for i in range(len(keys))], alpha=0.8
+        steps,
+        values,
+        labels=keys,
+        colors=[colors(i) for i in range(len(keys))],
+        alpha=0.8,
     )
     ax.set_xlabel("Step")
     ax.set_ylabel("Loss")
@@ -458,6 +476,7 @@ def plot_scaling_curve(
         x_label: x-axis label.
         save_path: save path.
         ax: existing axes.
+
     """
     if not _ensure_mpl():
         return
@@ -552,6 +571,7 @@ def plot_gating_pattern(
         title: plot title.
         save_path: save path.
         ax: existing axes.
+
     """
     if not _ensure_mpl():
         return
@@ -624,6 +644,7 @@ def plot_rank_utilization(
         title: plot title.
         save_path: save path.
         ax: existing axes.
+
     """
     if not _ensure_mpl():
         return
@@ -634,7 +655,11 @@ def plot_rank_utilization(
 
     ax.plot(steps, effective_rank, color="#2166ac", label="Effective rank")
     ax.axhline(
-        max_rank, color="#b2182b", linestyle="--", linewidth=1, label=f"Max rank (k={max_rank})"
+        max_rank,
+        color="#b2182b",
+        linestyle="--",
+        linewidth=1,
+        label=f"Max rank (k={max_rank})",
     )
     ax.axhline(0.8 * max_rank, color="#4393c3", linestyle=":", linewidth=1, label="80% utilization")
 
@@ -666,6 +691,7 @@ def create_training_dashboard(
     Args:
         log_dir: directory containing log.csv.
         output_path: if set, save dashboard to this path.
+
     """
     if not _ensure_mpl():
         return
@@ -781,6 +807,7 @@ def plot_spectral_waterfall(
         highlight_k: optional workspace dimension to mark.
         title: plot title.
         save_path: save path.
+
     """
     if not _ensure_mpl():
         return
@@ -837,6 +864,7 @@ def plot_information_flow(
             value (in nats or bits). Keys like 'level_0', 'level_1', etc.
         title: plot title.
         save_path: save path.
+
     """
     if not _ensure_mpl():
         return
@@ -857,7 +885,12 @@ def plot_information_flow(
     cumsum = np.cumsum(values)
     ax2 = ax.twinx()
     ax2.plot(
-        range(len(keys)), cumsum, color="#b2182b", marker="o", linewidth=1.5, label="Cumulative"
+        range(len(keys)),
+        cumsum,
+        color="#b2182b",
+        marker="o",
+        linewidth=1.5,
+        label="Cumulative",
     )
     ax2.set_ylabel("Cumulative information (nats)")
 
@@ -895,6 +928,7 @@ def plot_swip_spectral_shaping(
         target_variance: target background variance.
         title: plot title.
         save_path: save path.
+
     """
     if not _ensure_mpl():
         return
@@ -902,13 +936,22 @@ def plot_swip_spectral_shaping(
 
     x = np.arange(len(eigenvalues_before))
     ax.semilogy(
-        x, eigenvalues_before, color="#2166ac", alpha=0.6, label="Before SWIP", linewidth=1.5
+        x,
+        eigenvalues_before,
+        color="#2166ac",
+        alpha=0.6,
+        label="Before SWIP",
+        linewidth=1.5,
     )
     ax.semilogy(x, eigenvalues_after, color="#b2182b", label="After SWIP", linewidth=1.5)
 
     # Workspace boundary
     ax.axvline(
-        k_workspace - 0.5, color="#762a83", linestyle="--", linewidth=1, label=f"k={k_workspace}"
+        k_workspace - 0.5,
+        color="#762a83",
+        linestyle="--",
+        linewidth=1,
+        label=f"k={k_workspace}",
     )
     # Target variance line
     ax.axhline(
@@ -960,6 +1003,7 @@ def plot_spc_band_analysis(
 
     Returns:
         (fig, ax) tuple.
+
     """
     if not _ensure_mpl():
         return None, None
@@ -1043,6 +1087,7 @@ def plot_wsd_drift(
 
     Returns:
         fig, ax
+
     """
     _ensure_mpl()
     import matplotlib.pyplot as plt
@@ -1057,7 +1102,11 @@ def plot_wsd_drift(
     drift_values = np.array(drift_values)
 
     ax.semilogy(
-        steps, drift_values + 1e-10, color="#d53e4f", alpha=0.3, label="Instantaneous drift"
+        steps,
+        drift_values + 1e-10,
+        color="#d53e4f",
+        alpha=0.3,
+        label="Instantaneous drift",
     )
     if running_drift is not None:
         ax.semilogy(
@@ -1110,6 +1159,7 @@ def plot_cmc_consistency(
 
     Returns:
         fig, axes
+
     """
     _ensure_mpl()
     import matplotlib.pyplot as plt
@@ -1274,6 +1324,7 @@ def plot_puc_overconfidence_timeline(
         title: plot title.
         save_path: path to save figure.
         ax: existing axes.
+
     """
     if not _ensure_mpl():
         return
@@ -1339,6 +1390,7 @@ def plot_rdc_drift_ratio(
         title: plot title.
         save_path: path to save figure.
         ax: existing axes.
+
     """
     if not _ensure_mpl():
         return
@@ -1363,7 +1415,11 @@ def plot_rdc_drift_ratio(
         ax2 = ax.twinx()
         ax2.plot(steps, np.array(ortho_drift_norms), color="#e41a1c", alpha=0.4, label="||Δz_⊥||")
         ax2.plot(
-            steps, np.array(workspace_drift_norms), color="#4daf4a", alpha=0.4, label="||Δz_∥||"
+            steps,
+            np.array(workspace_drift_norms),
+            color="#4daf4a",
+            alpha=0.4,
+            label="||Δz_∥||",
         )
         ax2.set_ylabel("Drift norm")
         ax2.legend(fontsize=8, loc="upper right")
@@ -1400,6 +1456,7 @@ def plot_wsr_sharpness(
         directional_sharpness: array of directional sharpness values (optional).
         title: plot title.
         save_path: path to save figure.
+
     """
     _ensure_mpl()
     import matplotlib.pyplot as plt
@@ -1457,7 +1514,11 @@ def plot_wsr_sharpness(
 
 
 def plot_jawp_workspace_evolution(
-    steps, active_k, workspace_loss, title="JAWP Workspace Evolution", save_path=None
+    steps,
+    active_k,
+    workspace_loss,
+    title="JAWP Workspace Evolution",
+    save_path=None,
 ):
     """Plot JAWP workspace dimension curriculum and loss."""
     _ensure_mpl()
@@ -1483,7 +1544,11 @@ def plot_jawp_workspace_evolution(
 
 
 def plot_cgn_gate_distribution(
-    steps, gate_visible, gate_masked, title="CGN Gate Distribution", save_path=None
+    steps,
+    gate_visible,
+    gate_masked,
+    title="CGN Gate Distribution",
+    save_path=None,
 ):
     """Plot CGN visible vs masked gate probabilities over training."""
     _ensure_mpl()
@@ -1504,7 +1569,11 @@ def plot_cgn_gate_distribution(
 
 
 def plot_pcr_cascade_capacity(
-    steps, level_losses, level_dims=None, title="PCR Cascade Capacity", save_path=None
+    steps,
+    level_losses,
+    level_dims=None,
+    title="PCR Cascade Capacity",
+    save_path=None,
 ):
     """Plot PCR per-level prediction losses and capacity bounds."""
     _ensure_mpl()
@@ -1535,7 +1604,10 @@ def plot_pcr_cascade_capacity(
 
 
 def plot_gwp_mechanism_summary(
-    mechanism_names, mechanism_losses, title="GWP Mechanism Loss Summary", save_path=None
+    mechanism_names,
+    mechanism_losses,
+    title="GWP Mechanism Loss Summary",
+    save_path=None,
 ):
     """Plot summary of all active GWP mechanism losses."""
     _ensure_mpl()
@@ -1558,7 +1630,11 @@ def plot_gwp_mechanism_summary(
 
 
 def plot_ema_tau_schedule(
-    steps, tau_values, schedule_type="cosine", title="EMA Tau Schedule", save_path=None
+    steps,
+    tau_values,
+    schedule_type="cosine",
+    title="EMA Tau Schedule",
+    save_path=None,
 ):
     """Plot EMA tau schedule over training."""
     _ensure_mpl()
@@ -1568,7 +1644,11 @@ def plot_ema_tau_schedule(
     ax.plot(steps, tau_values, color="#1f77b4", linewidth=2, label=f"{schedule_type} schedule")
     ax.axhline(y=1.0, color="red", linestyle="--", alpha=0.5, label="tau=1.0 (frozen -- BAD)")
     ax.axhline(
-        y=0.9999, color="green", linestyle="--", alpha=0.5, label="tau=0.9999 (near-frozen -- GOOD)"
+        y=0.9999,
+        color="green",
+        linestyle="--",
+        alpha=0.5,
+        label="tau=0.9999 (near-frozen -- GOOD)",
     )
     ax.set_xlabel("Training step")
     ax.set_ylabel("EMA tau")
@@ -1582,7 +1662,10 @@ def plot_ema_tau_schedule(
 
 
 def plot_workspace_quality_components(
-    steps, components_dict, title="Workspace Quality Components", save_path=None
+    steps,
+    components_dict,
+    title="Workspace Quality Components",
+    save_path=None,
 ):
     """Plot each component of the 10-component workspace_quality metric."""
     _ensure_mpl()

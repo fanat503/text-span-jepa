@@ -82,6 +82,7 @@ class SparseAutoencoder(nn.Module):
             latent: sparse latent representation
             loss: total loss (MSE + sparsity penalty)
             info: dict with auxiliary information
+
         """
         latent, topk_idx, topk_vals = self.encode(x)
         recons = self.decode(latent)
@@ -148,7 +149,8 @@ class SparseAutoencoder(nn.Module):
             # All features dead — reinitialize from random
             nn.init.xavier_uniform_(self.encoder.weight[:, dead_mask])
             self.decoder.weight.data[dead_mask] = F.normalize(
-                self.encoder.weight[:, dead_mask].T, dim=1
+                self.encoder.weight[:, dead_mask].T,
+                dim=1,
             )
         else:
             # Sample from alive features
@@ -195,6 +197,7 @@ class SAETrainer:
             x: (B, D) input representations
         Returns:
             info dict with losses
+
         """
         self.sae.train()
         x = x.to(self.device)
@@ -238,6 +241,7 @@ class SAETrainer:
 
         Returns:
             dict with average metrics
+
         """
         self.sae.eval()
         total_recons = 0

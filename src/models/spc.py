@@ -174,6 +174,7 @@ def _dct_basis(D: int, device="cpu", dtype=torch.float32) -> torch.Tensor:
 
     Returns:
         (D, D) orthonormal DCT-II basis matrix.
+
     """
     n = torch.arange(D, device=device, dtype=dtype).unsqueeze(1)  # (D, 1)
     k = torch.arange(D, device=device, dtype=dtype).unsqueeze(0)  # (1, D)
@@ -206,10 +207,17 @@ class SpectralPredictiveCoding(nn.Module):
         weight_lr: learning rate for band weight updates (default 0.01).
             Used for online weight adaptation during training.
         eps: numerical stability constant (default 1e-6).
+
     """
 
     def __init__(
-        self, embed_dim=768, n_bands=8, init="dct", min_weight=0.1, weight_lr=0.01, eps=1e-6
+        self,
+        embed_dim=768,
+        n_bands=8,
+        init="dct",
+        min_weight=0.1,
+        weight_lr=0.01,
+        eps=1e-6,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -246,7 +254,9 @@ class SpectralPredictiveCoding(nn.Module):
         with torch.no_grad():
             if mode == "dct":
                 basis = _dct_basis(
-                    self.embed_dim, device=self.freq_basis.device, dtype=self.freq_basis.dtype
+                    self.embed_dim,
+                    device=self.freq_basis.device,
+                    dtype=self.freq_basis.dtype,
                 )
                 self.freq_basis.copy_(basis)
             elif mode == "random":
@@ -279,6 +289,7 @@ class SpectralPredictiveCoding(nn.Module):
 
         Returns:
             (n_bands,) tensor with Σ w_b = n_bands and w_b ≥ min_weight.
+
         """
         w = F.softmax(self.log_band_weights, dim=0) * self.n_bands
         # Ensure minimum weight
@@ -295,6 +306,7 @@ class SpectralPredictiveCoding(nn.Module):
 
         Returns:
             list of (..., band_dim) tensors, one per band.
+
         """
         # Project onto frequency basis
         z_freq = z @ self.freq_basis  # (..., D) in frequency domain
@@ -315,6 +327,7 @@ class SpectralPredictiveCoding(nn.Module):
 
         Returns:
             (..., D) tensor.
+
         """
         z_freq = torch.cat(bands, dim=-1)  # (..., D)
         # Inverse transform: F^T since F is orthonormal
@@ -330,6 +343,7 @@ class SpectralPredictiveCoding(nn.Module):
         Returns:
             loss: scalar tensor (differentiable w.r.t. z_pred, F, log_weights).
             info: dict with diagnostics.
+
         """
         D = z_pred.size(-1)
         z_target_detached = z_target.detach()
@@ -420,6 +434,7 @@ class SpectralPredictiveCoding(nn.Module):
 
         Returns:
             dict with per-band variance, predictability, SNR, etc.
+
         """
         z_pred.size(-1)
         pred_bands = self._decompose_bands(z_pred)
@@ -453,7 +468,7 @@ class SpectralPredictiveCoding(nn.Module):
         analysis["spectral_tilt"] = (
             math.log(
                 sum(target_variances[self.n_bands // 2 :])
-                / (sum(target_variances[: self.n_bands // 2]) + self.eps)
+                / (sum(target_variances[: self.n_bands // 2]) + self.eps),
             )
             if sum(target_variances[: self.n_bands // 2]) > 0
             else 0.0

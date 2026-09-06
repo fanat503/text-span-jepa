@@ -71,6 +71,7 @@ class MLMBaseline(nn.Module):
 
         Returns:
             logits: (B, T, vocab_size)
+
         """
         h, _ = self.encoder(input_ids)
         logits = self.mlm_head(h)
@@ -92,6 +93,7 @@ class MLMBaseline(nn.Module):
         Returns:
             loss: scalar tensor (differentiable)
             info: dict with loss_mlm and mlm_accuracy
+
         """
         logits = self.forward(masked_input_ids)
         # Boolean indexing for masked positions — vectorized, no loop

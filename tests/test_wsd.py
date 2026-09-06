@@ -168,7 +168,8 @@ class TestWSDIntegration:
 
         jawp = JAWPModule(embed_dim=64, k_start=8, k_end=8)
         optimizer = torch.optim.Adam(
-            list(jawp.parameters()) + list(wsd_module.parameters()), lr=1e-3
+            list(jawp.parameters()) + list(wsd_module.parameters()),
+            lr=1e-3,
         )
 
         for step in range(10):

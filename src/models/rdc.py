@@ -90,6 +90,7 @@ class RepresentationDriftCompensation(nn.Module):
         warmup_steps: steps before RDC activates.
         k_workspace: workspace dimension for drift decomposition.
             If None, auto-set to embed_dim // 10.
+
     """
 
     def __init__(
@@ -138,6 +139,7 @@ class RepresentationDriftCompensation(nn.Module):
         Returns:
             loss: scalar tensor (≥ 0).
             info: dict with diagnostics.
+
         """
         _B, _T, D = z_current.shape
 
@@ -197,7 +199,7 @@ class RepresentationDriftCompensation(nn.Module):
             self.running_drift_norm.mul_(0.99).add_(0.01 * mean_total_drift.sqrt().item())
             self.running_ortho_drift_norm.mul_(0.99).add_(0.01 * mean_ortho_drift.sqrt().item())
             self.running_workspace_drift_norm.mul_(0.99).add_(
-                0.01 * mean_workspace_drift.sqrt().item()
+                0.01 * mean_workspace_drift.sqrt().item(),
             )
 
             # Drift ratio: ||Δz_⊥|| / ||Δz|| (0 = all drift in workspace, 1 = all orthogonal)

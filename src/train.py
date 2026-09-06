@@ -376,7 +376,7 @@ def load_checkpoint(path, model, optimizer, scaler, model_name="text_span_jepa")
                 and model.wsr is not None
             ):
                 model.wsr.running_spectral_sharpness.copy_(
-                    checkpoint["wsr_running_spectral_sharpness"]
+                    checkpoint["wsr_running_spectral_sharpness"],
                 )
             if (
                 "wsr_running_directional_sharpness" in checkpoint
@@ -384,7 +384,7 @@ def load_checkpoint(path, model, optimizer, scaler, model_name="text_span_jepa")
                 and model.wsr is not None
             ):
                 model.wsr.running_directional_sharpness.copy_(
-                    checkpoint["wsr_running_directional_sharpness"]
+                    checkpoint["wsr_running_directional_sharpness"],
                 )
             if (
                 "wsr_running_grad_norm" in checkpoint
@@ -412,7 +412,7 @@ def load_checkpoint(path, model, optimizer, scaler, model_name="text_span_jepa")
         extra_state = checkpoint.get("extra", None)
         logger.info(
             f"Loaded checkpoint: epoch={epoch}, step={global_step}, "
-            f"ema_step={ema_step}, mask_step={mask_step}"
+            f"ema_step={ema_step}, mask_step={mask_step}",
         )
         return epoch, global_step, ema_step, mask_step, extra_state
 
@@ -497,13 +497,18 @@ def create_model(model_name, model_cfg, vocab_size, max_seq_len, device):
         )()
     else:
         raise ValueError(
-            f"Unknown model_name: {model_name}. " f"Supported: text_span_jepa, mlm, data2vec"
+            f"Unknown model_name: {model_name}. " f"Supported: text_span_jepa, mlm, data2vec",
         )
     return model
 
 
 def compute_loss(
-    model, masked_input_ids, original_input_ids, mask_positions, current_step=0, total_steps=1
+    model,
+    masked_input_ids,
+    original_input_ids,
+    mask_positions,
+    current_step=0,
+    total_steps=1,
 ):
     """Compute loss for any model type — unified interface.
 
@@ -548,14 +553,14 @@ def get_param_groups(model, model_name, wd=0.04):
                     p
                     for n, p in model.encoder.named_parameters()
                     if ("bias" not in n) and (len(p.shape) != 1)
-                ]
+                ],
             },
             {
                 "params": [
                     p
                     for n, p in model.predictor.named_parameters()
                     if ("bias" not in n) and (len(p.shape) != 1)
-                ]
+                ],
             },
             {
                 "params": [
@@ -593,7 +598,7 @@ def get_param_groups(model, model_name, wd=0.04):
                     p
                     for n, p in model.encoder.named_parameters()
                     if ("bias" not in n) and (len(p.shape) != 1)
-                ]
+                ],
             },
             {
                 "params": [
@@ -614,7 +619,7 @@ def get_param_groups(model, model_name, wd=0.04):
                     p
                     for n, p in model.encoder.named_parameters()
                     if ("bias" not in n) and (len(p.shape) != 1)
-                ]
+                ],
             },
             {
                 "params": [
@@ -694,7 +699,7 @@ def _build_data_pipeline(args, seed):
         )
     except Exception as e:
         logger.warning(
-            f"Validation unavailable ({type(e).__name__}: {e}) — training without validation"
+            f"Validation unavailable ({type(e).__name__}: {e}) — training without validation",
         )
         val_dataloader = None
 
@@ -799,7 +804,11 @@ def _restore_training_state(
         load_path = os.path.join(log_dir, r_file) if r_file else latest_path
         if os.path.exists(load_path):
             start_epoch, global_step, ema_step, mask_step, extra = load_checkpoint(
-                load_path, model, optimizer, scaler, model_name=model_name
+                load_path,
+                model,
+                optimizer,
+                scaler,
+                model_name=model_name,
             )
             if extra and "best_val_loss" in extra:
                 best_val_loss = extra["best_val_loss"]
@@ -823,7 +832,7 @@ def _warn_unknown_config_keys(args):
         defaults_path = os.path.join(base, "defaults.yaml")
         if not os.path.exists(defaults_path):
             defaults_path = os.path.join(base, "..", "defaults.yaml")
-        with open(defaults_path, "r") as f:
+        with open(defaults_path) as f:
             known = yaml.safe_load(f)
     except Exception:
         return
@@ -1002,11 +1011,11 @@ def main(args):
     # ---- Training Loop ----
     logger.info(
         f"Starting training: {num_epochs} epochs, {total_steps} total steps, "
-        f"model={model_name}, grad_accum={grad_accum_steps}"
+        f"model={model_name}, grad_accum={grad_accum_steps}",
     )
     logger.info(
         f"Mask curriculum: start={mask_ratio_start}, end={mask_ratio_end}, "
-        f"curriculum_steps={curriculum_steps}"
+        f"curriculum_steps={curriculum_steps}",
     )
 
     for epoch in range(start_epoch, num_epochs):
@@ -1017,7 +1026,7 @@ def main(args):
         for itr, batch in enumerate(dataloader):
             # Collate with masking
             collated = mask_collator(
-                [{"input_ids": batch["input_ids"][i]} for i in range(batch["input_ids"].size(0))]
+                [{"input_ids": batch["input_ids"][i]} for i in range(batch["input_ids"].size(0))],
             )
             masked_input_ids = collated["masked_input_ids"].to(device)
             original_input_ids = collated["original_input_ids"].to(device)
@@ -1089,7 +1098,8 @@ def main(args):
                     _cmc_secondary = getattr(model, "_cmc_pass", None)
                     if _cmc_primary is not None and _cmc_secondary is not None:
                         loss_cmc_extra, cmc_info = model.compute_cmc_between_passes(
-                            _cmc_primary, _cmc_secondary
+                            _cmc_primary,
+                            _cmc_secondary,
                         )
                         total_loss = total_loss + model.config.lambda_cmc * loss_cmc_extra
                         loss_dict["loss_cmc"] = float(loss_cmc_extra.item())
@@ -1235,7 +1245,7 @@ def main(args):
                 mem = torch.cuda.max_memory_allocated() / 1024.0**2 if device.type == "cuda" else 0
                 logger.info(
                     f"[{epoch+1}, {itr:5d}] loss={loss_meter.avg:.3f} "
-                    f"lr={new_lr:.2e} wd={new_wd:.2e} mem={mem:.0f}MB"
+                    f"lr={new_lr:.2e} wd={new_wd:.2e} mem={mem:.0f}MB",
                 )
                 # Log individual loss components
                 logger.info(
@@ -1245,7 +1255,7 @@ def main(args):
                     f'decoder={loss_dict.get("loss_decoder", 0):.4f} '
                     f'var={loss_dict.get("loss_variance", 0):.4f} '
                     f'cov={loss_dict.get("loss_covariance", 0):.4f} '
-                    f'dec_acc={loss_dict.get("decoder_accuracy", 0):.3f}'
+                    f'dec_acc={loss_dict.get("decoder_accuracy", 0):.3f}',
                 )
                 if diag_dict:
                     logger.info(
@@ -1254,7 +1264,7 @@ def main(args):
                         f'collapsed={diag_dict.get("collapsed_dim_ratio_online",0):.3f} '
                         f'mask_frac={diag_dict.get("mask_fraction",0):.2f} '
                         f'target_center_norm={diag_dict.get("target_center_norm",0):.2f} '
-                        f'ws_quality={diag_dict.get("workspace_quality",0):.3f}'
+                        f'ws_quality={diag_dict.get("workspace_quality",0):.3f}',
                     )
                     # JAWP-specific diagnostics
                     if "jawk_k" in loss_dict:
@@ -1264,7 +1274,7 @@ def main(args):
                             f'ws_util={loss_dict.get("jawk_workspace_utilization",0):.3f} '
                             f'ws_cos={loss_dict.get("jawk_workspace_cosine",0):.3f} '
                             f'ortho={loss_dict.get("jawk_ortho_score",0):.3f} '
-                            f'pca_align={loss_dict.get("jawk_pca_alignment",0):.3f}'
+                            f'pca_align={loss_dict.get("jawk_pca_alignment",0):.3f}',
                         )
                     # CGN-specific diagnostics
                     if "cgn_tau" in loss_dict:
@@ -1273,7 +1283,7 @@ def main(args):
                             f'tau={loss_dict.get("cgn_tau",0):.3f} '
                             f'gate_diff={loss_dict.get("cgn_gate_diff",0):.3f} '
                             f'routing_gap={loss_dict.get("cgn_routing_gap",0):.3f} '
-                            f'sparsity={loss_dict.get("cgn_sparsity",0):.3f}'
+                            f'sparsity={loss_dict.get("cgn_sparsity",0):.3f}',
                         )
 
                 # CSV logging
@@ -1413,7 +1423,7 @@ def _validate(
             if i >= max_batches:
                 break
             collated = mask_collator(
-                [{"input_ids": batch["input_ids"][j]} for j in range(batch["input_ids"].size(0))]
+                [{"input_ids": batch["input_ids"][j]} for j in range(batch["input_ids"].size(0))],
             )
             masked = collated["masked_input_ids"].to(device)
             original = collated["original_input_ids"].to(device)
@@ -1439,11 +1449,15 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--fname", type=str, default="config/wikitext/textspanjepa_wikitext_small.yaml"
+        "--fname",
+        type=str,
+        default="config/wikitext/textspanjepa_wikitext_small.yaml",
     )
     parser.add_argument("--output_dir", type=str, default=None, help="Override output directory")
     parser.add_argument(
-        "--no_defaults", action="store_true", help="Skip merging defaults.yaml (use config as-is)"
+        "--no_defaults",
+        action="store_true",
+        help="Skip merging defaults.yaml (use config as-is)",
     )
     args = parser.parse_args()
 
@@ -1452,7 +1466,7 @@ if __name__ == "__main__":
     # come from defaults.yaml. Without this merge, ablation configs
     # are broken (missing embed_dim, encoder_depth, etc.).
     # I-JEPA / C-JEPA pattern: base config + experiment overrides.
-    with open(args.fname, "r") as f:
+    with open(args.fname) as f:
         config = yaml.safe_load(f)
 
     if not args.no_defaults:
@@ -1463,7 +1477,7 @@ if __name__ == "__main__":
             # Try repo root
             defaults_path = os.path.join(script_dir, "..", "defaults.yaml")
         if os.path.exists(defaults_path):
-            with open(defaults_path, "r") as f:
+            with open(defaults_path) as f:
                 defaults = yaml.safe_load(f)
             config = _deep_merge(defaults, config)
 

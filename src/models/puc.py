@@ -63,6 +63,7 @@ class PredictionUncertaintyCalibration(nn.Module):
         use_differentiable_entropy: if True, entropy is computed from
             batch-covariance eigenvalues WITH autograd (gradient flows to
             z_pred); default False keeps the legacy buffer-based estimate.
+
     """
 
     def __init__(
@@ -134,6 +135,7 @@ class PredictionUncertaintyCalibration(nn.Module):
         Returns:
             loss: scalar tensor (≥ 0).
             info: dict with diagnostics.
+
         """
         _B, _T, D = z_pred.shape
         z_flat = z_pred.reshape(-1, D)  # (N, D) where N = B*T
@@ -162,7 +164,7 @@ class PredictionUncertaintyCalibration(nn.Module):
 
             # Update running eigenvalues
             self.running_eigenvalues.mul_(self.ema_beta).add_(
-                (1 - self.ema_beta) * batch_eigenvalues
+                (1 - self.ema_beta) * batch_eigenvalues,
             )
 
             # Oja's rule: update projection vectors toward eigenvectors
@@ -242,7 +244,8 @@ class PredictionUncertaintyCalibration(nn.Module):
         with torch.no_grad():
             self.running_entropy.mul_(0.99).add_(0.01 * estimated_entropy)
             overconfidence = max(
-                0.0, (self.target_entropy - estimated_entropy) / (self.target_entropy + 1e-8)
+                0.0,
+                (self.target_entropy - estimated_entropy) / (self.target_entropy + 1e-8),
             )
             self.running_overconfidence.mul_(0.99).add_(0.01 * overconfidence)
             self.total_steps.add_(1)

@@ -30,9 +30,7 @@ def _build(meta_use_bf16=True):
         "meta": {"use_bfloat16": meta_use_bf16},
     }
     # model_name="other" -> get_param_groups fallback branch, ema_scheduler=None.
-    out = _build_optimization(
-        args, model, "other", {}, types.SimpleNamespace(type="cuda"), ipe=10
-    )
+    out = _build_optimization(args, model, "other", {}, types.SimpleNamespace(type="cuda"), ipe=10)
     return out[4]  # scaler
 
 

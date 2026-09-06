@@ -64,7 +64,7 @@ class FutureTokenProbe:
         self.vocab_size = vocab_size
         self.offsets = offsets
         self.probes = nn.ModuleDict(
-            {f"offset_{d}": nn.Linear(embed_dim, vocab_size) for d in offsets}
+            {f"offset_{d}": nn.Linear(embed_dim, vocab_size) for d in offsets},
         )
 
     def evaluate(self, model, dataset, device="cuda", max_steps=5000):
@@ -86,7 +86,7 @@ class FutureTokenProbe:
                     batch.to(device) if isinstance(batch, torch.Tensor) else batch[0].to(device)
                 )
                 _B, T = input_ids.shape
-                if T <= d:
+                if d >= T:
                     continue
                 with torch.no_grad():
                     h, _ = model.encoder(input_ids)

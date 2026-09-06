@@ -20,6 +20,7 @@ class TextDataset(Dataset):
             matching DataLoader drop_last behavior for training).
             Set to False for evaluation to use all data.
         pad_id: padding token id for incomplete final chunk (default: 0)
+
     """
 
     def __init__(self, token_ids, seq_len=512, drop_last=True, pad_id=0):
@@ -43,7 +44,10 @@ class TextDataset(Dataset):
 
 
 def load_wikitext103(
-    tokenizer_name="gpt2", seq_len=512, split="train", data_dir="/kaggle/input/wikitext-103"
+    tokenizer_name="gpt2",
+    seq_len=512,
+    split="train",
+    data_dir="/kaggle/input/wikitext-103",
 ):
     """Load WikiText-103 dataset for Kaggle."""
     tokenizer = GPT2Tokenizer.from_pretrained(tokenizer_name)
@@ -71,10 +75,10 @@ def load_wikitext103(
         except Exception:
             raise FileNotFoundError(
                 f"Could not find WikiText-103 {split} data in {data_dir}. "
-                f"Add the wikitext-103 dataset to your Kaggle notebook."
+                f"Add the wikitext-103 dataset to your Kaggle notebook.",
             )
     else:
-        with open(filepath, "r", encoding="utf-8") as f:
+        with open(filepath, encoding="utf-8") as f:
             text = f.read()
 
     token_ids = tokenizer.encode(text)

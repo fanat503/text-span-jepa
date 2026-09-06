@@ -35,7 +35,13 @@ class LayerwiseProbe:
     """
 
     def __init__(
-        self, embed_dim=768, num_classes=2, lr=1e-3, max_epochs=30, patience=5, device="cpu"
+        self,
+        embed_dim=768,
+        num_classes=2,
+        lr=1e-3,
+        max_epochs=30,
+        patience=5,
+        device="cpu",
     ):
         self.embed_dim = embed_dim
         self.num_classes = num_classes
@@ -99,6 +105,7 @@ class LayerwiseProbe:
 
         Returns:
             dict with per-layer accuracy and peak layer
+
         """
         with torch.enable_grad():
             accuracies = []
@@ -137,6 +144,7 @@ class LayerwiseProbe:
 
         Returns:
             dict with comparison
+
         """
         jepa_result = self.probe_all_layers(jepa_layers, labels, f"{task_name}_jepa")
         baseline_result = self.probe_all_layers(baseline_layers, labels, f"{task_name}_baseline")
@@ -175,6 +183,7 @@ class LayerwiseCKA:
 
         Returns:
             (L_jepa, L_baseline) CKA matrix
+
         """
         from src.models.collapse import CollapseDiagnostics
 
@@ -208,6 +217,7 @@ class LayerwiseCKA:
 
         Returns:
             dict with per-layer CKA and mean
+
         """
         from src.models.collapse import CollapseDiagnostics
 
@@ -247,6 +257,7 @@ class LayerwiseGeometry:
 
         Returns:
             dict with per-layer geometry
+
         """
         from src.interp.representation_geometry import RepresentationGeometry
 
@@ -318,6 +329,7 @@ class LayerRoutingAnalysis:
 
         Returns:
             dict with (n_layers, n_tasks) routing matrix
+
         """
         n_layers = len(layer_representations)
         task_names = list(task_labels_dict.keys())

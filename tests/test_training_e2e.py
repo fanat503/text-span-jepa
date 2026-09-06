@@ -119,7 +119,10 @@ def _config(folder, epochs, load_checkpoint=False):
 
 
 def _global_step(folder):
-    ckpt = safe_torch_load(os.path.join(str(folder), "checkpoint-latest.pth.tar"), map_location="cpu")
+    ckpt = safe_torch_load(
+        os.path.join(str(folder), "checkpoint-latest.pth.tar"),
+        map_location="cpu",
+    )
     return ckpt["global_step"]
 
 
@@ -199,5 +202,6 @@ class TestCheckpointRoundTrip:
 
         assert int(model.cgn.total_steps.item()) == 5000
         assert torch.equal(
-            model.cgn.gate_logits_visible.detach(), vis_before
+            model.cgn.gate_logits_visible.detach(),
+            vis_before,
         ), "gate logits must survive the checkpoint round trip"

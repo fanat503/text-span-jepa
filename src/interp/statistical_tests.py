@@ -45,6 +45,7 @@ class BootstrapCI:
 
         Returns:
             dict with mean, CI bounds, std
+
         """
         rng = np.random.RandomState(seed)
 
@@ -112,6 +113,7 @@ class BootstrapCI:
 
         Returns:
             dict with difference CI and significance
+
         """
         rng = np.random.RandomState(seed)
 
@@ -184,6 +186,7 @@ class PairedPermutationTest:
 
         Returns:
             dict with p-value and effect size
+
         """
         if isinstance(values_a, torch.Tensor):
             values_a = values_a.cpu().numpy()
@@ -194,7 +197,7 @@ class PairedPermutationTest:
         values_b = np.array(values_b, dtype=float)
 
         N = len(values_a)
-        if N != len(values_b) or N < 2:
+        if len(values_b) != N or N < 2:
             return {
                 "p_value": 1.0,
                 "effect_size": 0.0,
@@ -242,6 +245,7 @@ class MultipleComparisonCorrection:
     Methods:
     - Bonferroni: conservative, p_i * n_tests
     - Benjamini-Hochberg (FDR): less conservative, controls false discovery rate
+
     """
 
     @staticmethod
@@ -263,6 +267,7 @@ class MultipleComparisonCorrection:
 
         Returns:
             dict with corrected p-values and list of significant indices
+
         """
         n = len(p_values)
         if n == 0:
@@ -382,6 +387,7 @@ class BayesianComparison:
 
         Returns:
             dict with probability and credible interval
+
         """
         rng = np.random.RandomState(seed)
 
@@ -452,6 +458,7 @@ class MetricComparisonReport:
 
         Returns:
             dict with per-metric statistics and corrected significance
+
         """
         results = {}
         raw_p_values = []
@@ -480,12 +487,16 @@ class MetricComparisonReport:
 
             # Paired permutation test
             perm = PairedPermutationTest.compute(
-                jepa_vals, base_vals, n_permutations=min(n_permutations, 5000)
+                jepa_vals,
+                base_vals,
+                n_permutations=min(n_permutations, 5000),
             )
 
             # Bayesian
             bayes = BayesianComparison.probability_a_greater_b(
-                jepa_vals, base_vals, n_bootstrap=min(n_bootstrap, 2000)
+                jepa_vals,
+                base_vals,
+                n_bootstrap=min(n_bootstrap, 2000),
             )
 
             results[name] = {

@@ -43,7 +43,9 @@ class TestSWIPCore:
     def test_swip_loss_zero_for_isotropic(self):
         """SWIP loss should be ~0 when background is already isotropic."""
         swip = SWIPModule(
-            embed_dim=self.embed_dim, k_workspace=self.k_workspace, target_variance=1.0
+            embed_dim=self.embed_dim,
+            k_workspace=self.k_workspace,
+            target_variance=1.0,
         )
         # Isotropic: all eigenvalues = 1.0
         z = torch.randn(1000, self.embed_dim)  # Large N for good statistics
@@ -54,7 +56,9 @@ class TestSWIPCore:
     def test_swip_high_anisotropy_gives_high_loss(self):
         """Highly anisotropic representations should give higher loss."""
         swip = SWIPModule(
-            embed_dim=self.embed_dim, k_workspace=self.k_workspace, target_variance=1.0
+            embed_dim=self.embed_dim,
+            k_workspace=self.k_workspace,
+            target_variance=1.0,
         )
         # Create anisotropic data: first dim has 100x variance
         z = torch.randn(100, self.embed_dim)
@@ -66,7 +70,9 @@ class TestSWIPCore:
     def test_swip_with_jawp_workspace(self):
         """SWIP should use JAWP Q for workspace identification."""
         swip = SWIPModule(
-            embed_dim=self.embed_dim, k_workspace=self.k_workspace, use_jawp_workspace=True
+            embed_dim=self.embed_dim,
+            k_workspace=self.k_workspace,
+            use_jawp_workspace=True,
         )
         z = torch.randn(32, self.embed_dim)
         # Random orthonormal Q
@@ -79,7 +85,9 @@ class TestSWIPCore:
     def test_swip_without_jawp_workspace(self):
         """SWIP should fall back to PCA when no Q is provided."""
         swip = SWIPModule(
-            embed_dim=self.embed_dim, k_workspace=self.k_workspace, use_jawp_workspace=True
+            embed_dim=self.embed_dim,
+            k_workspace=self.k_workspace,
+            use_jawp_workspace=True,
         )
         z = torch.randn(32, self.embed_dim)
         loss, _info = swip(z, workspace_Q=None)
@@ -310,7 +318,10 @@ class TestSWIPIntegration:
         mask[:, 4:8] = 1
 
         loss, loss_dict, _diag_dict = model.compute_loss_with_targets(
-            masked_ids, original_ids, mask, current_step=100
+            masked_ids,
+            original_ids,
+            mask,
+            current_step=100,
         )
         assert loss.item() >= 0
         assert not math.isnan(loss.item())
@@ -348,7 +359,10 @@ class TestSWIPIntegration:
         mask[:, 4:8] = 1
 
         loss, loss_dict, _diag_dict = model.compute_loss_with_targets(
-            masked_ids, original_ids, mask, current_step=100
+            masked_ids,
+            original_ids,
+            mask,
+            current_step=100,
         )
         assert loss.item() >= 0
         assert not math.isnan(loss.item())

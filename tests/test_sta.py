@@ -22,7 +22,11 @@ class TestSTABasic:
 
     def test_construction_custom(self):
         sta = SpectralTransportAlignment(
-            embed_dim=128, eta=0.05, ema_beta=0.99, warmup_steps=200, update_interval=5
+            embed_dim=128,
+            eta=0.05,
+            ema_beta=0.99,
+            warmup_steps=200,
+            update_interval=5,
         )
         assert sta.embed_dim == 128
         assert sta.eta == 0.05
@@ -105,7 +109,10 @@ class TestSTAWasserstein:
     def test_w1_zero_for_same_spectrum(self):
         """W1 should be ~0 when current and reference spectra match."""
         sta = SpectralTransportAlignment(
-            embed_dim=64, ema_beta=0.0, warmup_steps=0, update_interval=1
+            embed_dim=64,
+            ema_beta=0.0,
+            warmup_steps=0,
+            update_interval=1,
         )
         # Create z with a specific spectrum
         z = torch.randn(32, 64)
@@ -216,7 +223,10 @@ class TestSTAIntegration:
     def test_spectral_drift_detected(self):
         """STA should detect when the spectrum changes significantly."""
         sta = SpectralTransportAlignment(
-            embed_dim=64, warmup_steps=0, ema_beta=0.999, update_interval=1
+            embed_dim=64,
+            warmup_steps=0,
+            ema_beta=0.999,
+            update_interval=1,
         )
         # Establish a reference with one scale
         z1 = torch.randn(32, 64)
