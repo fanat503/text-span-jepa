@@ -509,10 +509,13 @@ def compute_loss(
     mask_positions,
     current_step=0,
     total_steps=1,
+    want_diag=True,
 ):
     """Compute loss for any model type — unified interface.
 
     Always returns (total_loss, loss_dict, diag_dict) for consistency.
+    want_diag=False skips the SVD/CKA diagnostics pack (95-99% of step
+    wall-time) for call sites that discard it.
     """
     if hasattr(model, "compute_loss_with_targets"):
         # JEPA model — returns (loss, loss_dict, diag_dict)
@@ -522,6 +525,7 @@ def compute_loss(
             mask_positions,
             current_step=current_step,
             total_steps=total_steps,
+            want_diag=want_diag,
         )
     elif hasattr(model, "forward") and hasattr(model, "regression_head"):
         # data2vec — returns (loss, info_dict)
@@ -1050,6 +1054,9 @@ def main(args):
                     mask_positions,
                     current_step=global_step,
                     total_steps=total_steps,
+                    # Diagnostics only on log steps: the SVD/CKA pack is the
+                    # dominant step cost and is otherwise discarded (B19).
+                    want_diag=(itr % log_freq == 0),
                 )
                 # Snapshot the PRIMARY pass slot tensor for GAC before a CMC
                 # second forward re-stashes it (restored below the branch).
@@ -1091,6 +1098,7 @@ def main(args):
                             second_mask,
                             current_step=global_step,
                             total_steps=total_steps,
+                            want_diag=False,
                         )
                     # Wire the consistency term: bridge compact slot predictions
                     # from both passes into full-sequence space and add
@@ -1436,6 +1444,7 @@ def _validate(
                 mask,
                 current_step=current_step,
                 total_steps=total_steps,
+                want_diag=False,
             )
             val_losses.append(total_loss.item())
     model.train()

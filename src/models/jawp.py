@@ -322,8 +322,15 @@ class JAWPModule(nn.Module):
 
         """
         D = z_pred.size(-1)
-        k = self.current_k(step)
-        self.active_k.fill_(k)
+        if self.training:
+            k = self.current_k(step)
+            self.active_k.fill_(k)
+        else:
+            # Eval-safety (B9): eval uses the training curriculum position —
+            # filling from step (0 during validation) reset k to k_start on
+            # every validation pass, and the epoch checkpoint saved right
+            # after validation carried that reset value.
+            k = int(self.active_k.item())
 
         Q = self.workspace_Q[:, :k]  # (D, k) — LEARNED, gets gradients
 

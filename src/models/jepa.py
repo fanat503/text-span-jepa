@@ -598,6 +598,7 @@ class TextSpanJEPA(nn.Module):
         mask_positions,
         current_step=0,
         total_steps=1,
+        want_diag=True,
     ):
         if masked_input_ids.size(0) == 0:
             zero = torch.tensor(0.0, device=masked_input_ids.device)
@@ -869,30 +870,37 @@ class TextSpanJEPA(nn.Module):
         if pcr_info:
             loss_dict.update({f"pcr_{k}": v for k, v in pcr_info.items()})
 
-        diag_dict = self.diagnostics.compute(
-            h_online.detach(),
-            h_target.detach(),
-            prev_target_h=self._prev_target_h,
-        )
-        diag_dict["target_center_norm"] = self.target_centering.center.norm().item()
-        diag_dict["mask_fraction"] = mask_positions.float().mean().item()
+        if want_diag:
+            diag_dict = self.diagnostics.compute(
+                h_online.detach(),
+                h_target.detach(),
+                prev_target_h=self._prev_target_h,
+            )
+            diag_dict["target_center_norm"] = self.target_centering.center.norm().item()
+            diag_dict["mask_fraction"] = mask_positions.float().mean().item()
 
-        jspace_dict = self.jspace_metrics.compute(
-            h_online.detach(),
-            h_target.detach(),
-            predictor_h=None,
-        )
-        diag_dict.update(jspace_dict)
+            jspace_dict = self.jspace_metrics.compute(
+                h_online.detach(),
+                h_target.detach(),
+                predictor_h=None,
+            )
+            diag_dict.update(jspace_dict)
 
-        if h_online.size(0) * h_online.size(1) >= 2:
-            diag_dict["embedding_std_per_dim"] = h_online.std(dim=(0, 1)).mean().item()
+            if h_online.size(0) * h_online.size(1) >= 2:
+                diag_dict["embedding_std_per_dim"] = h_online.std(dim=(0, 1)).mean().item()
+            else:
+                diag_dict["embedding_std_per_dim"] = 0.0
+
+            # workspace_quality composite metric — single scalar health score
+            diag_dict["workspace_quality"] = CollapseDiagnostics.workspace_quality(diag_dict)
+
+            self._prev_target_h = h_target.detach().clone()
         else:
-            diag_dict["embedding_std_per_dim"] = 0.0
-
-        # workspace_quality composite metric — single scalar health score
-        diag_dict["workspace_quality"] = CollapseDiagnostics.workspace_quality(diag_dict)
-
-        self._prev_target_h = h_target.detach().clone()
+            # Gated out for non-log training steps, the CMC second pass and
+            # validation: the SVD/CKA pack costs 95-99% of the step wall-time
+            # and its result was discarded at every one of those call sites
+            # (B19). Consumers treat an empty diag_dict as "nothing to log".
+            diag_dict = {}
         return total_loss, loss_dict, diag_dict
 
     def compute_cmc_loss(self, z_pred_primary, z_pred_secondary, overlap_mask):
