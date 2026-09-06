@@ -674,9 +674,21 @@ def _build_data_pipeline(args, seed):
     """
     data_cfg = args.get("data", {})
     seq_len = data_cfg.get("max_seq_len", 512)
+    dataset_name = data_cfg.get("dataset", "wikitext103")
 
     logger.info("Loading dataset...")
     from src.datasets.kaggle import get_mask_token_id, load_wikitext103, make_dataloader
+
+    # B12: the dataset key used to be silently ignored — a `dataset:
+    # tinystories` config trained WikiText-103. Fail loudly until a real
+    # loader for the named corpus exists (follow-up batch).
+    supported_datasets = {"wikitext103"}
+    if dataset_name not in supported_datasets:
+        raise ValueError(
+            f"data.dataset={dataset_name!r} has no loader in this repo "
+            f"(supported: {sorted(supported_datasets)}); without this check "
+            "a config claiming another corpus silently trains WikiText-103"
+        )
 
     dataset, tokenizer = load_wikitext103(
         tokenizer_name=data_cfg.get("tokenizer", "gpt2"),
@@ -1076,24 +1088,36 @@ def main(args):
                     and getattr(model.config, "lambda_cmc", 0.0) > 0
                 ):
                     with torch.no_grad():
-                        # Generate second mask for same input
+                        # Generate second mask for same input. bool() is the
+                        # mask contract everywhere downstream (the collator
+                        # produces bool masks); generate_second_mask returns
+                        # long, and indexing an input with a long (B, T)
+                        # tensor selects ROWS, not positions.
                         second_mask = model.cmc.generate_second_mask(
                             seq_len=mask_positions.size(1),
                             batch_size=mask_positions.size(0),
                             mask_ratio=mask_positions.float().mean().item(),
                             device=mask_positions.device,
-                        )
+                        ).bool()
                         overlap = model.cmc.compute_overlap_mask(mask_positions, second_mask)
-                    # Second forward pass (detached — only provides gradient
-                    # to z_pred_secondary, not to encoder weights)
+                    # Second forward pass under mask m2. The INPUT must be the
+                    # original masked with m2 — passing the m1-masked input
+                    # here (the old behaviour) meant the encoder never saw a
+                    # differently-masked sequence, so cross-mask consistency
+                    # was never actually exercised (B3). The graph stays live:
+                    # the CMC term backpropagates into encoder+predictor
+                    # through z_pred_secondary (stop-grad applies to the
+                    # primary pass only).
                     with torch.amp.autocast(
                         autocast_device,
                         enabled=use_bfloat16,
                         dtype=torch.bfloat16 if use_bfloat16 else torch.float32,
                     ):
+                        second_masked_input = original_input_ids.clone()
+                        second_masked_input[second_mask] = mask_token_id
                         _, _loss_dict_2, _ = compute_loss(
                             model,
-                            masked_input_ids,
+                            second_masked_input,
                             original_input_ids,
                             second_mask,
                             current_step=global_step,
