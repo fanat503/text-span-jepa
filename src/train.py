@@ -720,7 +720,12 @@ def _build_optimization(args, model, model_name, model_cfg, device, ipe):
 
     # AMP: respect device availability
     use_bfloat16 = args.get("meta", {}).get("use_bfloat16", True) and device.type == "cuda"
-    scaler = torch.amp.GradScaler("cuda", enabled=use_bfloat16)
+    # bf16 (the only AMP mode in this repo) needs no loss scaling; fp16 is unused.
+    # A disabled GradScaler is a pass-through: scale()=identity, get_scale()=1.0,
+    # step()=optimizer.step(), state_dict()={} — so clip_grad_norm_ below sees
+    # UNSCALED gradients (fixes the effective-clip ~1e-5 bug) and checkpoint
+    # plumbing is unchanged in both directions.
+    scaler = torch.amp.GradScaler("cuda", enabled=False)
 
     num_epochs = opt_cfg.get("epochs", 50)
     total_steps = int(opt_cfg.get("ipe_scale", 1.0) * num_epochs * ipe)
@@ -1172,9 +1177,10 @@ def main(args):
                     _qgrad = model.jawp.workspace_Q.grad
                     if _qgrad is not None:
                         k_active_cap = int(model.jawp.active_k.item())
-                        # scaler.step() has ALREADY unscaled .grad in-place here;
-                        # only the accumulation factor remains. Dividing by
-                        # get_scale() too would silence mode='gradient' on AMP.
+                        # Gradients are never loss-scaled (scaler is disabled: bf16
+                        # needs no loss scaling) — only the accumulation factor
+                        # remains. Dividing by get_scale() too would silence
+                        # mode='gradient' if an fp16 path is ever added.
                         model.wsr.set_lagged_gradient(_qgrad[:, :k_active_cap] / grad_accum_steps)
 
                 # JAWP Stiefel manifold retraction — MUST run after optimizer.step()
@@ -1311,7 +1317,14 @@ def main(args):
         val_loss = None
         if val_dataloader is not None:
             val_loss = _validate(
-                model, val_dataloader, mask_collator, device, model_name, max_batches=50
+                model,
+                val_dataloader,
+                mask_collator,
+                device,
+                model_name,
+                max_batches=50,
+                current_step=global_step,
+                total_steps=total_steps,
             )
             logger.info(f"  Validation loss: {val_loss:.4f}")
             if val_loss < best_val_loss:
@@ -1382,7 +1395,16 @@ def main(args):
     logger.info(f"Training complete! Best val loss: {best_val_loss:.4f}")
 
 
-def _validate(model, val_dataloader, mask_collator, device, model_name, max_batches=50):
+def _validate(
+    model,
+    val_dataloader,
+    mask_collator,
+    device,
+    model_name,
+    max_batches=50,
+    current_step=0,
+    total_steps=1,
+):
     """Run validation and return average loss."""
     model.eval()
     val_losses = []
@@ -1397,10 +1419,19 @@ def _validate(model, val_dataloader, mask_collator, device, model_name, max_batc
             original = collated["original_input_ids"].to(device)
             mask = collated["mask_positions"].to(device)
 
-            total_loss, _, _ = compute_loss(model, masked, original, mask)
+            total_loss, _, _ = compute_loss(
+                model,
+                masked,
+                original,
+                mask,
+                current_step=current_step,
+                total_steps=total_steps,
+            )
             val_losses.append(total_loss.item())
     model.train()
-    return np.mean(val_losses) if val_losses else float("inf")
+    # float() cast: np.mean returns np.float64, which is not weights_only-allowlisted
+    # and would poison every checkpoint's best_val_loss (forces the legacy-pickle path).
+    return float(np.mean(val_losses)) if val_losses else float("inf")
 
 
 if __name__ == "__main__":

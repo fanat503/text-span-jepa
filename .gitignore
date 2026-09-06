@@ -42,6 +42,18 @@ wandb/
 mlruns/
 lightning_logs/
 
+# Environments / secrets
+.env
+.env.*
+
+# Experiment artifacts (results/ is created by scripts/run_experiment.sh)
+results/
+checkpoints/
+*.safetensors
+*.ckpt
+*.pkl
+*.pickle
+
 # Jupyter
 .ipynb_checkpoints/
 

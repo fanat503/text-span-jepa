@@ -1195,7 +1195,7 @@ class TestCheckpoint:
             lr=1e-3,
         )
 
-        checkpoint = torch.load(ckpt_path, map_location=torch.device("cpu"))
+        checkpoint = torch.load(ckpt_path, map_location=torch.device("cpu"), weights_only=True)
         epoch = checkpoint.get("epoch", 0)
         global_step = checkpoint.get("global_step", 0)
 
@@ -1221,7 +1221,7 @@ class TestCheckpoint:
         buf = io.BytesIO()
         torch.save(model_state, buf)
         buf.seek(0)
-        loaded = torch.load(buf, weights_only=False)
+        loaded = torch.load(buf, weights_only=True)
         assert loaded["global_step"] == 42
 
 
