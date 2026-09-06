@@ -20,6 +20,7 @@ def direction_ablation(representations, direction):
         direction: (D,) unit vector to ablate
     Returns:
         ablated: same shape as representations, with direction removed
+
     """
     if representations.dim() == 3:
         B, T, D = representations.shape
@@ -49,6 +50,7 @@ def feature_steering(representations, direction, scale=1.0):
         scale: scaling factor (positive or negative)
     Returns:
         steered: same shape as representations, steered along direction
+
     """
     direction = F.normalize(direction, dim=0)
     steered = representations + scale * direction
@@ -67,6 +69,7 @@ def activation_patching(source_reps, target_reps, patch_mask):
         patch_mask: (B, T) boolean mask — True = patch from source
     Returns:
         patched: (B, T, D) mixed representations
+
     """
     mask = patch_mask.unsqueeze(-1).float()  # (B, T, 1)
     return target_reps * (1 - mask) + source_reps * mask
@@ -74,7 +77,13 @@ def activation_patching(source_reps, target_reps, patch_mask):
 
 @torch.no_grad()
 def intervention_predictability_score(
-    model, input_ids, direction, probe_fn, scales=(-2, -1, 0, 1, 2), layer_idx=-1, device="cpu"
+    model,
+    input_ids,
+    direction,
+    probe_fn,
+    scales=(-2, -1, 0, 1, 2),
+    layer_idx=-1,
+    device="cpu",
 ):
     """Measure how predictable the effect of an intervention is.
 
@@ -96,6 +105,7 @@ def intervention_predictability_score(
 
     Returns:
         dict with 'predictability', 'monotonicity', 'probe_values'
+
     """
     model.eval()
     input_ids = input_ids.to(device)
@@ -172,6 +182,7 @@ class CausalIntervention:
 
         Returns:
             dict with per-direction results for both models
+
         """
         results = {}
         input_ids = input_ids.to(self.device)
@@ -217,15 +228,26 @@ class CausalIntervention:
 
         Returns:
             dict with predictability scores for both models
+
         """
         direction = direction.to(self.device)
 
         jepa_result = intervention_predictability_score(
-            self.jepa, input_ids, direction, probe_fn, scales, device=self.device
+            self.jepa,
+            input_ids,
+            direction,
+            probe_fn,
+            scales,
+            device=self.device,
         )
 
         baseline_result = intervention_predictability_score(
-            self.baseline, input_ids, direction, probe_fn, scales, device=self.device
+            self.baseline,
+            input_ids,
+            direction,
+            probe_fn,
+            scales,
+            device=self.device,
         )
 
         return {

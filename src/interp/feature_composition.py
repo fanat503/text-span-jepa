@@ -37,6 +37,7 @@ class FeatureCompositionScore:
             sae_model: trained SparseAutoencoder
             encoder_model: encoder model (for generating representations)
             device: compute device
+
         """
         self.sae = sae_model
         self.encoder = encoder_model
@@ -44,7 +45,12 @@ class FeatureCompositionScore:
 
     @torch.no_grad()
     def feature_arithmetic_test(
-        self, input_ids_a, input_ids_b, input_ids_ab, sae_feature_a_idx, sae_feature_b_idx
+        self,
+        input_ids_a,
+        input_ids_b,
+        input_ids_ab,
+        sae_feature_a_idx,
+        sae_feature_b_idx,
     ):
         """Test feature arithmetic: A + B ≈ AB.
 
@@ -57,6 +63,7 @@ class FeatureCompositionScore:
 
         Returns:
             dict with arithmetic test results
+
         """
         self.sae.eval()
         self.encoder.eval()
@@ -120,6 +127,7 @@ class FeatureCompositionScore:
 
         Returns:
             dict with aggregate composition score
+
         """
         results = []
         placebos = []
@@ -182,6 +190,7 @@ class FeatureCompositionScore:
 
         Returns:
             int: feature index with highest discrimination score
+
         """
         z_pos, _, _ = self.sae.encode(pos_reps)
         z_neg, _, _ = self.sae.encode(neg_reps)
@@ -198,7 +207,12 @@ class FeatureCompositionScore:
 
     @staticmethod
     def compare_models(
-        jepa_sae, baseline_sae, jepa_encoder, baseline_encoder, test_pairs, device="cpu"
+        jepa_sae,
+        baseline_sae,
+        jepa_encoder,
+        baseline_encoder,
+        test_pairs,
+        device="cpu",
     ):
         """Compare composition scores between JEPA and baseline.
 
@@ -212,6 +226,7 @@ class FeatureCompositionScore:
 
         Returns:
             dict with comparison
+
         """
         jepa_scorer = FeatureCompositionScore(jepa_sae, jepa_encoder, device)
         baseline_scorer = FeatureCompositionScore(baseline_sae, baseline_encoder, device)
@@ -255,6 +270,7 @@ class FeatureInterferenceScore:
 
         Returns:
             dict with interference metrics
+
         """
         try:
             z, _, _ = sae.encode(representations)

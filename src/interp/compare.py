@@ -39,6 +39,7 @@ class RepresentationComparator:
 
         Returns:
             dict with 'jepa' and 'baseline' representation tensors
+
         """
         self.jepa.eval()
         self.baseline.eval()
@@ -80,6 +81,7 @@ class RepresentationComparator:
 
         Returns:
             dict with comparison metrics
+
         """
         from src.models.collapse import CollapseDiagnostics
 
@@ -151,6 +153,7 @@ class RepresentationComparator:
 
         Returns:
             dict with all comparison results
+
         """
         # 1. Extract representations
         reps = self.extract_representations(dataloader, max_batches)
@@ -190,6 +193,7 @@ class RepresentationComparator:
 
         Returns:
             dict with feature tensors
+
         """
         features = {}
 
@@ -225,6 +229,7 @@ def extract_linguistic_features(tokens):
 
     Returns:
         dict of feature_name -> float value
+
     """
     features = {}
     if not tokens:
@@ -237,7 +242,8 @@ def extract_linguistic_features(tokens):
     features["avg_token_len"] = sum(len(t) for t in tokens) / max(len(tokens), 1)
     features["has_digit"] = 1.0 if any(c.isdigit() for t in tokens for c in t) else 0.0
     features["frac_upper"] = sum(1 for t in tokens if t[0].isupper() if len(t) > 0) / max(
-        len(tokens), 1
+        len(tokens),
+        1,
     )
     features["has_punct"] = 1.0 if any(not t.isalnum() for t in tokens) else 0.0
 

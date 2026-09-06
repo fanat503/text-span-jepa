@@ -33,7 +33,13 @@ class Attention(nn.Module):
     """Multi-head self-attention for bidirectional encoder."""
 
     def __init__(
-        self, dim, num_heads=8, qkv_bias=False, qk_scale=None, attn_drop=0.0, proj_drop=0.0
+        self,
+        dim,
+        num_heads=8,
+        qkv_bias=False,
+        qk_scale=None,
+        attn_drop=0.0,
+        proj_drop=0.0,
     ):
         super().__init__()
         self.num_heads = num_heads
@@ -54,7 +60,10 @@ class Attention(nn.Module):
         # Micro-opt: use scaled_dot_product_attention when available (PyTorch 2.0+)
         if hasattr(F, "scaled_dot_product_attention"):
             x = F.scaled_dot_product_attention(
-                q, k, v, dropout_p=self.attn_drop.p if self.training else 0.0
+                q,
+                k,
+                v,
+                dropout_p=self.attn_drop.p if self.training else 0.0,
             )
             x = x.transpose(1, 2).reshape(B, N, C)
         else:
@@ -69,7 +78,12 @@ class Attention(nn.Module):
 
 class MLP(nn.Module):
     def __init__(
-        self, in_features, hidden_features=None, out_features=None, act_layer=nn.GELU, drop=0.0
+        self,
+        in_features,
+        hidden_features=None,
+        out_features=None,
+        act_layer=nn.GELU,
+        drop=0.0,
     ):
         super().__init__()
         out_features = out_features or in_features
@@ -116,7 +130,10 @@ class Block(nn.Module):
         self.norm2 = norm_layer(dim)
         mlp_hidden_dim = int(dim * mlp_ratio)
         self.mlp = MLP(
-            in_features=dim, hidden_features=mlp_hidden_dim, act_layer=act_layer, drop=drop
+            in_features=dim,
+            hidden_features=mlp_hidden_dim,
+            act_layer=act_layer,
+            drop=drop,
         )
 
     def forward(self, x):
@@ -160,7 +177,8 @@ class TextSpanJEPLEncoder(nn.Module):
         # Token + position embeddings
         self.token_embedding = nn.Embedding(vocab_size, embed_dim)
         self.pos_embedding = nn.Parameter(
-            torch.zeros(1, max_seq_len, embed_dim), requires_grad=True
+            torch.zeros(1, max_seq_len, embed_dim),
+            requires_grad=True,
         )
 
         dpr = [x.item() for x in torch.linspace(0, drop_path_rate, depth)]
@@ -178,7 +196,7 @@ class TextSpanJEPLEncoder(nn.Module):
                     norm_layer=norm_layer,
                 )
                 for i in range(depth)
-            ]
+            ],
         )
         self.norm = norm_layer(embed_dim)
 
@@ -219,6 +237,7 @@ class TextSpanJEPLEncoder(nn.Module):
             hidden_states: (B, T, embed_dim)
             token_embeds: (B, T, embed_dim) raw token embeddings
             intermediates: list of (B, T, embed_dim) per layer (only if return_intermediates=True)
+
         """
         _B, T = input_ids.shape
         token_embeds = self.token_embedding(input_ids)
@@ -256,6 +275,7 @@ class TextSpanJEPLEncoder(nn.Module):
 
         Returns:
             list of (B, T, embed_dim) tensors, one per block
+
         """
         _B, T = input_ids.shape
         token_embeds = self.token_embedding(input_ids)

@@ -112,7 +112,10 @@ class TestPCRStiefel:
 
     def test_identity_init_orthonormal(self):
         pcr = PredictiveCascadeRefinement(
-            embed_dim=64, n_levels=2, level_dims=[16, 8], init="identity"
+            embed_dim=64,
+            n_levels=2,
+            level_dims=[16, 8],
+            init="identity",
         )
         Q = pcr.workspace_Q.data
         gram = Q.T @ Q
@@ -122,7 +125,10 @@ class TestPCRStiefel:
 
     def test_random_init_orthonormal(self):
         pcr = PredictiveCascadeRefinement(
-            embed_dim=64, n_levels=2, level_dims=[16, 8], init="random"
+            embed_dim=64,
+            n_levels=2,
+            level_dims=[16, 8],
+            init="random",
         )
         Q = pcr.workspace_Q.data
         gram = Q.T @ Q
@@ -429,16 +435,18 @@ class TestPCRIntegration:
         mask[:, 4:8] = 1
 
         total_loss, _loss_dict, _diag_dict = model.compute_loss_with_targets(
-            masked_ids, original_ids, mask, current_step=2000, total_steps=10000
+            masked_ids,
+            original_ids,
+            mask,
+            current_step=2000,
+            total_steps=10000,
         )
         assert total_loss.item() >= 0
         assert not math.isnan(total_loss.item())
         assert not math.isinf(total_loss.item())
 
-    def test_checkpoint_pcr_roundtrip(self):
+    def test_checkpoint_pcr_roundtrip(self, tmp_path):
         """PCR state should survive checkpoint save/load."""
-        import tempfile
-
         from src.models.jepa import TextSpanJEPA, TextSpanJEPAConfig
         from src.train import load_checkpoint, save_checkpoint
 
@@ -461,12 +469,36 @@ class TestPCRIntegration:
         with torch.no_grad():
             model.pcr.workspace_Q.add_(torch.randn_like(model.pcr.workspace_Q) * 0.01)
         original_Q = model.pcr.workspace_Q.data.clone()
+        original_gates = [g.data.clone() for g in model.pcr.level_gates]
 
-        with tempfile.NamedTemporaryFile(suffix=".pth") as f:
-            save_checkpoint(f.name, model, optimizer, None, 0, 0, 0, 0, model_name="text_span_jepa")
-            load_checkpoint(f.name, model, optimizer, None, model_name="text_span_jepa")
+        ckpt_path = str(tmp_path / "pcr-ckpt.pth.tar")
+        save_checkpoint(
+            ckpt_path,
+            model,
+            optimizer,
+            None,
+            2,
+            137,
+            99,
+            55,
+            model_name="text_span_jepa",
+        )
+
+        # Corrupt in-memory state AFTER save: load must restore from the checkpoint,
+        # otherwise the allclose assert below is a no-op tautology
+        with torch.no_grad():
+            model.pcr.workspace_Q.add_(torch.randn_like(model.pcr.workspace_Q) * 0.5)
+            for g in model.pcr.level_gates:
+                g.data.add_(torch.randn_like(g.data) * 0.5)
+
+        loaded = load_checkpoint(ckpt_path, model, optimizer, None, model_name="text_span_jepa")
 
         assert torch.allclose(model.pcr.workspace_Q.data, original_Q, atol=1e-5)
+        for restored, saved in zip(model.pcr.level_gates, original_gates):
+            assert torch.allclose(restored.data, saved, atol=1e-5)
+        epoch, global_step, ema_step, mask_step, extra_state = loaded
+        assert (epoch, global_step, ema_step, mask_step) == (2, 137, 99, 55)
+        assert extra_state is None
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -489,7 +521,10 @@ class TestPCRConfig:
 
         with pytest.raises(ValueError):
             config = TextSpanJEPAConfig(
-                embed_dim=64, num_heads=4, use_pcr=True, pcr_warmup_steps=-1
+                embed_dim=64,
+                num_heads=4,
+                use_pcr=True,
+                pcr_warmup_steps=-1,
             )
             config.validate()
 

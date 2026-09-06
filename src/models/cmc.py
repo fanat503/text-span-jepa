@@ -131,6 +131,7 @@
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import torch
 from torch import nn
@@ -153,6 +154,7 @@ class CrossMaskConsistency(nn.Module):
         interval: compute CMC every `interval` steps (for "interval" mode).
         stop_grad_primary: if True, stop gradient through primary prediction.
             Recommended True to avoid interfering with main JEPA objective.
+
     """
 
     def __init__(
@@ -185,6 +187,7 @@ class CrossMaskConsistency(nn.Module):
 
         Returns:
             True if CMC should be computed.
+
         """
         if self.mode == "always":
             return True
@@ -207,6 +210,7 @@ class CrossMaskConsistency(nn.Module):
 
         Returns:
             overlap: (B, T) binary mask. 1 = masked in BOTH.
+
         """
         return (mask_1 * mask_2).long()
 
@@ -234,6 +238,7 @@ class CrossMaskConsistency(nn.Module):
 
         Returns:
             mask: (B, T) binary mask. 1 = masked, 0 = visible.
+
         """
         mask = torch.zeros(batch_size, seq_len, dtype=torch.long, device=device)
         min_span, max_span = span_length_range
@@ -259,7 +264,7 @@ class CrossMaskConsistency(nn.Module):
         z_pred_primary: torch.Tensor,
         z_pred_secondary: torch.Tensor,
         overlap_mask: torch.Tensor,
-    ) -> tuple[torch.Tensor, dict[str, any]]:
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
         """Compute Cross-Mask Consistency loss.
 
         Args:
@@ -270,6 +275,7 @@ class CrossMaskConsistency(nn.Module):
         Returns:
             loss: scalar tensor (≥ 0).
             info: dict with diagnostics.
+
         """
         B, T, _D = z_pred_primary.shape
 
@@ -375,6 +381,7 @@ class CrossMaskConsistency(nn.Module):
 
         Returns:
             Upper bound on prediction difference under different masks.
+
         """
         return probe_norm * math.sqrt(max(cmc_loss, 0.0))
 
@@ -394,6 +401,7 @@ class CrossMaskConsistency(nn.Module):
 
         Returns:
             Upper bound on representation variance across masks.
+
         """
         return cmc_loss / 2.0 + jepa_loss
 

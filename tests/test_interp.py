@@ -166,7 +166,11 @@ class TestCausalIntervention:
         from src.models.encoder import TextSpanJEPLEncoder
 
         enc = TextSpanJEPLEncoder(
-            vocab_size=100, max_seq_len=16, embed_dim=32, depth=2, num_heads=4
+            vocab_size=100,
+            max_seq_len=16,
+            embed_dim=32,
+            depth=2,
+            num_heads=4,
         )
 
         class MockModel:
@@ -255,10 +259,15 @@ class TestComparator:
         from src.models.encoder import TextSpanJEPLEncoder
 
         enc = TextSpanJEPLEncoder(
-            vocab_size=100, max_seq_len=16, embed_dim=32, depth=2, num_heads=4
+            vocab_size=100,
+            max_seq_len=16,
+            embed_dim=32,
+            depth=2,
+            num_heads=4,
         )
         comp = RepresentationComparator(
-            type("M", (), {"encoder": enc}), type("M", (), {"encoder": enc})
+            type("M", (), {"encoder": enc}),
+            type("M", (), {"encoder": enc}),
         )
         jepa_reps = torch.randn(20, 32)
         baseline_reps = torch.randn(20, 32)
@@ -340,7 +349,9 @@ class TestPolysemanticity:
         from src.interp.polysemanticity import PolysemanticityIndex
 
         psi = PolysemanticityIndex(
-            n_clusters_range=(2, 3), n_top_activations=20, n_dimensions_sample=4
+            n_clusters_range=(2, 3),
+            n_top_activations=20,
+            n_dimensions_sample=4,
         )
         reps = torch.randn(50, 16)
         result = psi.compute(reps)
@@ -352,7 +363,9 @@ class TestPolysemanticity:
         from src.interp.polysemanticity import PolysemanticityIndex
 
         psi = PolysemanticityIndex(
-            n_clusters_range=(2, 3), n_top_activations=20, n_dimensions_sample=4
+            n_clusters_range=(2, 3),
+            n_top_activations=20,
+            n_dimensions_sample=4,
         )
         reps = torch.randn(50, 16)
         labels = torch.randint(0, 3, (50,))
@@ -418,7 +431,11 @@ class TestCausalScrubbing:
         from src.models.encoder import TextSpanJEPLEncoder
 
         enc = TextSpanJEPLEncoder(
-            vocab_size=100, max_seq_len=16, embed_dim=32, depth=2, num_heads=4
+            vocab_size=100,
+            max_seq_len=16,
+            embed_dim=32,
+            depth=2,
+            num_heads=4,
         )
 
         class MockModel:
@@ -431,7 +448,11 @@ class TestCausalScrubbing:
         probe_fn = lambda h: h.norm(dim=-1).mean()
         ids = torch.randint(0, 100, (2, 16))
         result = InterventionPredictabilityScorer.compute_predictability(
-            MockModel(), ids, direction, probe_fn, device="cpu"
+            MockModel(),
+            ids,
+            direction,
+            probe_fn,
+            device="cpu",
         )
         assert "predictability" in result
         assert "monotonicity" in result
@@ -879,7 +900,11 @@ class TestProbeGeneralization:
         tgt_labels = (tgt_reps[:, 0] > 0).long()
         with torch.enable_grad():
             result = pgt.cross_dataset_generalization(
-                src_reps, src_labels, tgt_reps, tgt_labels, "test"
+                src_reps,
+                src_labels,
+                tgt_reps,
+                tgt_labels,
+                "test",
             )
         assert "source_accuracy" in result
         assert "target_accuracy" in result
@@ -1034,7 +1059,10 @@ class TestScaling:
         from src.interp.scaling import InterpretabilityEfficiency
 
         result = InterpretabilityEfficiency.compute_efficiency(
-            interp_metric=0.85, flops=1e18, baseline_interp=0.70, baseline_flops=1e18
+            interp_metric=0.85,
+            flops=1e18,
+            baseline_interp=0.70,
+            baseline_flops=1e18,
         )
         assert "efficiency_ratio" in result
         assert result["jepa_more_efficient"]
@@ -1141,7 +1169,11 @@ class TestRobustness:
         from src.models.encoder import TextSpanJEPLEncoder
 
         enc = TextSpanJEPLEncoder(
-            vocab_size=100, max_seq_len=16, embed_dim=32, depth=2, num_heads=4
+            vocab_size=100,
+            max_seq_len=16,
+            embed_dim=32,
+            depth=2,
+            num_heads=4,
         )
 
         class M:

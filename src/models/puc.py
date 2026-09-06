@@ -31,6 +31,7 @@
 from __future__ import annotations
 
 import math
+from typing import Any
 
 import torch
 import torch.nn.functional as F
@@ -62,6 +63,7 @@ class PredictionUncertaintyCalibration(nn.Module):
         use_differentiable_entropy: if True, entropy is computed from
             batch-covariance eigenvalues WITH autograd (gradient flows to
             z_pred); default False keeps the legacy buffer-based estimate.
+
     """
 
     def __init__(
@@ -122,7 +124,7 @@ class PredictionUncertaintyCalibration(nn.Module):
         z_pred: torch.Tensor,
         z_target: torch.Tensor | None = None,
         step: int = 0,
-    ) -> tuple[torch.Tensor, dict[str, any]]:
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
         """Compute PUC calibration loss.
 
         Args:
@@ -133,6 +135,7 @@ class PredictionUncertaintyCalibration(nn.Module):
         Returns:
             loss: scalar tensor (≥ 0).
             info: dict with diagnostics.
+
         """
         _B, _T, D = z_pred.shape
         z_flat = z_pred.reshape(-1, D)  # (N, D) where N = B*T
@@ -161,7 +164,7 @@ class PredictionUncertaintyCalibration(nn.Module):
 
             # Update running eigenvalues
             self.running_eigenvalues.mul_(self.ema_beta).add_(
-                (1 - self.ema_beta) * batch_eigenvalues
+                (1 - self.ema_beta) * batch_eigenvalues,
             )
 
             # Oja's rule: update projection vectors toward eigenvectors
@@ -241,7 +244,8 @@ class PredictionUncertaintyCalibration(nn.Module):
         with torch.no_grad():
             self.running_entropy.mul_(0.99).add_(0.01 * estimated_entropy)
             overconfidence = max(
-                0.0, (self.target_entropy - estimated_entropy) / (self.target_entropy + 1e-8)
+                0.0,
+                (self.target_entropy - estimated_entropy) / (self.target_entropy + 1e-8),
             )
             self.running_overconfidence.mul_(0.99).add_(0.01 * overconfidence)
             self.total_steps.add_(1)
@@ -261,7 +265,7 @@ class PredictionUncertaintyCalibration(nn.Module):
 
         return final_loss, info
 
-    def checkpoint_dict(self) -> dict[str, any]:
+    def checkpoint_dict(self) -> dict[str, Any]:
         """Get state for checkpoint save."""
         return {
             "running_mean": self.running_mean.clone(),
@@ -272,7 +276,7 @@ class PredictionUncertaintyCalibration(nn.Module):
             "proj_vectors": self.proj_vectors.clone(),
         }
 
-    def load_checkpoint(self, ckpt: dict[str, any]):
+    def load_checkpoint(self, ckpt: dict[str, Any]):
         """Restore from checkpoint."""
         if "running_mean" in ckpt:
             self.running_mean.copy_(ckpt["running_mean"])

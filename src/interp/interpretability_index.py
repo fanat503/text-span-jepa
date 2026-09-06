@@ -86,6 +86,7 @@ class InterpretabilityIndex:
         """
         Args:
             custom_weights: override default weights {metric_name: weight}
+
         """
         self.weights = {}
         for name, defn in METRIC_DEFINITIONS.items():
@@ -101,6 +102,7 @@ class InterpretabilityIndex:
 
         Returns:
             dict with index, per-component breakdown, and missing metrics
+
         """
         normalized = {}
         component_scores = {}
@@ -242,7 +244,8 @@ class InterpretabilityIndex:
 
     @staticmethod
     def from_collapse_diagnostics(
-        collapse_metrics: dict[str, float], extra_metrics: dict[str, float] | None = None
+        collapse_metrics: dict[str, float],
+        extra_metrics: dict[str, float] | None = None,
     ) -> dict[str, float]:
         """Convert CollapseDiagnostics output to InterpretabilityIndex format.
 
@@ -252,6 +255,7 @@ class InterpretabilityIndex:
 
         Returns:
             dict ready for InterpretabilityIndex.compute()
+
         """
         mapping = {
             "effective_rank_online": "effective_rank",

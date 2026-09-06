@@ -165,21 +165,30 @@ class TestCMCSecondMaskGeneration:
     def test_mask_shape(self):
         """Generated mask has correct shape."""
         mask = CrossMaskConsistency.generate_second_mask(
-            seq_len=32, batch_size=4, mask_ratio=0.35, device=torch.device("cpu")
+            seq_len=32,
+            batch_size=4,
+            mask_ratio=0.35,
+            device=torch.device("cpu"),
         )
         assert mask.shape == (4, 32)
 
     def test_mask_binary(self):
         """Generated mask is binary (0 or 1)."""
         mask = CrossMaskConsistency.generate_second_mask(
-            seq_len=32, batch_size=4, mask_ratio=0.35, device=torch.device("cpu")
+            seq_len=32,
+            batch_size=4,
+            mask_ratio=0.35,
+            device=torch.device("cpu"),
         )
         assert (mask >= 0).all() and (mask <= 1).all()
 
     def test_mask_ratio_approximate(self):
         """Generated mask has approximately the target ratio."""
         mask = CrossMaskConsistency.generate_second_mask(
-            seq_len=128, batch_size=8, mask_ratio=0.35, device=torch.device("cpu")
+            seq_len=128,
+            batch_size=8,
+            mask_ratio=0.35,
+            device=torch.device("cpu"),
         )
         actual_ratio = mask.float().mean().item()
         assert 0.15 < actual_ratio < 0.55, f"Mask ratio should be ~0.35, got {actual_ratio:.3f}"

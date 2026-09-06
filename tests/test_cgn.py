@@ -108,7 +108,9 @@ class TestCGNCore:
     def test_cgn_min_gate_prevents_zeroing(self):
         """Gate values should be >= min_gate."""
         cgn = ContextualGatingNetwork(
-            embed_dim=self.embed_dim, n_groups=self.n_groups, min_gate=0.01
+            embed_dim=self.embed_dim,
+            n_groups=self.n_groups,
+            min_gate=0.01,
         )
         z = torch.randn(self.batch_size, self.seq_len, self.embed_dim)
         mask = torch.zeros(self.batch_size, self.seq_len, dtype=torch.long)
@@ -319,7 +321,10 @@ class TestCGNIntegration:
         mask[:, 4:8] = 1
 
         loss, loss_dict, _diag_dict = model.compute_loss_with_targets(
-            masked_ids, original_ids, mask, current_step=100
+            masked_ids,
+            original_ids,
+            mask,
+            current_step=100,
         )
         assert loss.item() >= 0
         assert not math.isnan(loss.item())
@@ -351,7 +356,10 @@ class TestCGNIntegration:
         mask[:, 4:8] = 1
 
         _loss, loss_dict, _diag_dict = model.compute_loss_with_targets(
-            masked_ids, original_ids, mask, current_step=100
+            masked_ids,
+            original_ids,
+            mask,
+            current_step=100,
         )
         assert "loss_predictive_rank" in loss_dict
 
@@ -382,7 +390,10 @@ class TestCGNIntegration:
         mask[:, 4:8] = 1
 
         loss, _, _ = model.compute_loss_with_targets(
-            masked_ids, original_ids, mask, current_step=100
+            masked_ids,
+            original_ids,
+            mask,
+            current_step=100,
         )
         loss.backward()
 

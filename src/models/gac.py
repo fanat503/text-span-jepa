@@ -96,6 +96,7 @@
 
 
 import torch
+from typing import Any
 import torch.nn.functional as F
 from torch import nn
 
@@ -115,6 +116,7 @@ class GradientAllocatedCapacity(nn.Module):
             are considered "starved" and receive exploration bonus.
         ema_beta: EMA decay for running gradient norm statistics.
         warmup_steps: steps before GAC activates (let gradients stabilize).
+
     """
 
     def __init__(
@@ -142,7 +144,7 @@ class GradientAllocatedCapacity(nn.Module):
         z_pred: torch.Tensor,
         grad_norms: torch.Tensor,
         step: int = 0,
-    ) -> tuple[torch.Tensor, dict[str, any]]:
+    ) -> tuple[torch.Tensor, dict[str, Any]]:
         """Compute GAC exploration loss.
 
         Args:
@@ -153,6 +155,7 @@ class GradientAllocatedCapacity(nn.Module):
         Returns:
             loss: scalar tensor (≥ 0).
             info: dict with diagnostics.
+
         """
         D = z_pred.size(-1)
         z_flat = z_pred.reshape(-1, D)

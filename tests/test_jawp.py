@@ -211,7 +211,12 @@ class TestJAWPCourantFischer:
 
         D, k, N = 32, 4, 64
         jawp = JAWPModule(
-            embed_dim=D, k_start=k, k_end=k, curriculum_steps=0, init="random", alpha=0.0
+            embed_dim=D,
+            k_start=k,
+            k_end=k,
+            curriculum_steps=0,
+            init="random",
+            alpha=0.0,
         )
         z_pred = torch.randn(N, D)
         z_target = torch.randn(N, D)
@@ -238,7 +243,12 @@ class TestJAWPCourantFischer:
         Q_optimal = eigenvectors[:, :k]
         optimal_risk = torch.trace(Q_optimal.T @ Sigma_res @ Q_optimal).item()
         jawp = JAWPModule(
-            embed_dim=D, k_start=k, k_end=k, curriculum_steps=0, init="random", alpha=0.0
+            embed_dim=D,
+            k_start=k,
+            k_end=k,
+            curriculum_steps=0,
+            init="random",
+            alpha=0.0,
         )
         optimizer = torch.optim.SGD([jawp.workspace_Q], lr=0.02)
         for _ in range(1000):
@@ -265,7 +275,12 @@ class TestJAWPCourantFischer:
         Q_pca = V_pca[:, -k:]
         pca_risk = torch.trace(Q_pca.T @ Sigma_res @ Q_pca).item()
         jawp = JAWPModule(
-            embed_dim=D, k_start=k, k_end=k, curriculum_steps=0, init="random", alpha=0.0
+            embed_dim=D,
+            k_start=k,
+            k_end=k,
+            curriculum_steps=0,
+            init="random",
+            alpha=0.0,
         )
         optimizer = torch.optim.SGD([jawp.workspace_Q], lr=0.02)
         for _ in range(1000):
@@ -289,7 +304,12 @@ class TestJAWPCourantFischer:
         _eigenvalues, eigenvectors = torch.linalg.eigh(Sigma_res)
         Q_optimal = eigenvectors[:, :k]
         jawp = JAWPModule(
-            embed_dim=D, k_start=k, k_end=k, curriculum_steps=0, init="random", alpha=0.0
+            embed_dim=D,
+            k_start=k,
+            k_end=k,
+            curriculum_steps=0,
+            init="random",
+            alpha=0.0,
         )
         optimizer = torch.optim.SGD([jawp.workspace_Q], lr=0.02)
         for _ in range(1000):
@@ -312,7 +332,12 @@ class TestJAWPNovelty:
         from src.models.jawp import JAWPModule
 
         jawp = JAWPModule(
-            embed_dim=32, k_start=2, k_end=2, curriculum_steps=0, init="random", alpha=0.1
+            embed_dim=32,
+            k_start=2,
+            k_end=2,
+            curriculum_steps=0,
+            init="random",
+            alpha=0.1,
         )
         optimizer = torch.optim.Adam(jawp.parameters(), lr=0.02)
         for _ in range(300):
@@ -385,7 +410,11 @@ class TestJAWPAPI:
 
         D, k_start, k_end = 64, 2, 7
         jawp = JAWPModule(
-            embed_dim=D, k_start=k_start, k_end=k_end, curriculum_steps=0, init="identity"
+            embed_dim=D,
+            k_start=k_start,
+            k_end=k_end,
+            curriculum_steps=0,
+            init="identity",
         )
         assert jawp.workspace_Q.shape == (D, k_end)
         B, T = 4, 16
@@ -472,7 +501,11 @@ class TestJAWPWithJEPA:
         mask = torch.zeros(2, 32, dtype=torch.long)
         mask[:, 8:16] = 1
         total_loss, _loss_dict, _diag_dict = model.compute_loss_with_targets(
-            masked, original, mask, current_step=100, total_steps=1000
+            masked,
+            original,
+            mask,
+            current_step=100,
+            total_steps=1000,
         )
         assert math.isfinite(total_loss.item())
         assert total_loss.item() > 0
@@ -496,7 +529,9 @@ class TestWorkspaceInformationPreservation:
         z_pred = torch.randn(16, 64)
         z_target = torch.randn(16, 64)
         wip_score, _wip_info = jawp.workspace_information_preservation(
-            z_pred, z_target, features=features
+            z_pred,
+            z_target,
+            features=features,
         )
         assert wip_score > 0.99, f"WIP should be ~1.0 for workspace features, got {wip_score}"
 
@@ -513,7 +548,9 @@ class TestWorkspaceInformationPreservation:
             z_pred = torch.randn(16, 64)
             z_target = torch.randn(16, 64)
             wip_score, _wip_info = jawp.workspace_information_preservation(
-                z_pred, z_target, features=features
+                z_pred,
+                z_target,
+                features=features,
             )
             assert wip_score < 0.01, f"WIP should be ~0.0 for orthogonal features, got {wip_score}"
 

@@ -40,6 +40,7 @@ class RepresentationRobustness:
         Args:
             model: model with .encoder attribute
             device: compute device
+
         """
         self.model = model
         self.device = device
@@ -55,7 +56,11 @@ class RepresentationRobustness:
 
     @torch.no_grad()
     def perturbation_curve(
-        self, input_ids, perturbation_fn, intensities=(0.1, 0.2, 0.3, 0.5, 0.7), n_trials=3
+        self,
+        input_ids,
+        perturbation_fn,
+        intensities=(0.1, 0.2, 0.3, 0.5, 0.7),
+        n_trials=3,
     ):
         """Compute robustness curve for one perturbation type.
 
@@ -67,6 +72,7 @@ class RepresentationRobustness:
 
         Returns:
             dict with per-intensity CKA and metric degradation
+
         """
         from src.interp.representation_geometry import RepresentationGeometry
         from src.models.collapse import CollapseDiagnostics
@@ -95,7 +101,7 @@ class RepresentationRobustness:
                 # Geometry degradation
                 pert_geom = RepresentationGeometry.compute_all(perturbed_reps)
                 eff_dim_drops.append(
-                    clean_geom["effective_dimension"] - pert_geom["effective_dimension"]
+                    clean_geom["effective_dimension"] - pert_geom["effective_dimension"],
                 )
                 anisotropy_changes.append(pert_geom["anisotropy"] - clean_geom["anisotropy"])
 
@@ -126,7 +132,8 @@ class RepresentationRobustness:
             "perturbation_curve": results,
             "robustness_score": robustness_score,  # Higher = more robust
             "cka_at_max_intensity": results.get(max(intensities) if intensities else 0, {}).get(
-                "cka_mean", 0
+                "cka_mean",
+                0,
             ),
         }
 
@@ -243,11 +250,17 @@ class RobustnessBattery:
 
         Returns:
             dict with per-perturbation comparison
+
         """
         results = {}
         for name, perturb_fn in RobustnessBattery.PERTURBATIONS.items():
             result = RepresentationRobustness.compare(
-                jepa_model, baseline_model, input_ids, perturb_fn, intensities, device
+                jepa_model,
+                baseline_model,
+                input_ids,
+                perturb_fn,
+                intensities,
+                device,
             )
             results[name] = {
                 "jepa_score": result["jepa_robustness_score"],

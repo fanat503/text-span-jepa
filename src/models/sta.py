@@ -146,6 +146,7 @@ class SpectralTransportAlignment(nn.Module):
         warmup_steps: steps before STA activates (default 500).
         update_interval: steps between full eigenvalue computation (default 10).
         eps: numerical stability constant.
+
     """
 
     def __init__(
@@ -184,6 +185,7 @@ class SpectralTransportAlignment(nn.Module):
 
         Args:
             z: (..., D) representations.
+
         """
         D = z.size(-1)
         flat = z.reshape(-1, D).float()
@@ -214,6 +216,7 @@ class SpectralTransportAlignment(nn.Module):
 
         Args:
             z: (..., D) representations.
+
         """
         D = z.size(-1)
         flat = z.reshape(-1, D).float()
@@ -244,6 +247,7 @@ class SpectralTransportAlignment(nn.Module):
         Returns:
             loss: scalar tensor (≥ 0).
             info: dict with diagnostics.
+
         """
         self.step_count.fill_(step)
         z.size(-1)
@@ -336,6 +340,7 @@ class SpectralTransportAlignment(nn.Module):
         Returns:
             Upper bound on Grassmann distance between consecutive
             workspace subspaces.
+
         """
         if w1 is None:
             w1 = self.running_w1.item()
@@ -369,6 +374,7 @@ class SpectralTransportAlignment(nn.Module):
 
         Returns:
             Upper bound on downstream prediction variance.
+
         """
         w1 = self.running_w1.item()
         sorted_eigs = self.current_eigenvalues.sort(descending=True)[0]

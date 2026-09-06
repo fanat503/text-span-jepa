@@ -43,6 +43,7 @@ class SIGReg(nn.Module):
         n_integration_points: number of integration points for
             characteristic function evaluation (L in paper).
         sigma: target standard deviation. Default 1.0.
+
     """
 
     def __init__(self, embed_dim=768, n_sketches=64, n_integration_points=17, sigma=1.0):
@@ -53,7 +54,8 @@ class SIGReg(nn.Module):
         self.sigma = sigma
 
         self.register_buffer(
-            "sketch_directions", self._generate_sketch_directions(embed_dim, n_sketches)
+            "sketch_directions",
+            self._generate_sketch_directions(embed_dim, n_sketches),
         )
 
         t_max = 3.0 / max(sigma, 1e-6)
@@ -138,7 +140,8 @@ class WeakSIGReg(nn.Module):
         self.n_sketches = n_sketches
         self.sigma = sigma
         self.register_buffer(
-            "sketch_directions", SIGReg._generate_sketch_directions(embed_dim, n_sketches)
+            "sketch_directions",
+            SIGReg._generate_sketch_directions(embed_dim, n_sketches),
         )
 
     def forward(self, embeddings):
@@ -198,7 +201,8 @@ class VISReg(nn.Module):
         loss_invariance = torch.tensor(0.0, device=embeddings_online.device)
         if embeddings_target is not None:
             loss_invariance = F.mse_loss(
-                embeddings_online.mean(dim=(0, 1)), embeddings_target.detach().mean(dim=(0, 1))
+                embeddings_online.mean(dim=(0, 1)),
+                embeddings_target.detach().mean(dim=(0, 1)),
             )
 
         total_loss = (

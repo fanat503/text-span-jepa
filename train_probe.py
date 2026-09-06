@@ -69,11 +69,14 @@ def probe_geometry(representations):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Train probes on frozen Text-Span JEPA representations"
+        description="Train probes on frozen Text-Span JEPA representations",
     )
     parser.add_argument("--checkpoint", type=str, required=True, help="Path to model checkpoint")
     parser.add_argument(
-        "--config", type=str, default=None, help="Path to config YAML (overrides checkpoint config)"
+        "--config",
+        type=str,
+        default=None,
+        help="Path to config YAML (overrides checkpoint config)",
     )
     parser.add_argument(
         "--probe",
@@ -84,7 +87,10 @@ def main():
     )
     parser.add_argument("--device", type=str, default="auto")
     parser.add_argument(
-        "--max-batches", type=int, default=100, help="Max batches for representation extraction"
+        "--max-batches",
+        type=int,
+        default=100,
+        help="Max batches for representation extraction",
     )
     parser.add_argument("--data-dir", type=str, default="data/wikitext-103")
     args = parser.parse_args()
@@ -98,7 +104,7 @@ def main():
     if args.config:
         import yaml
 
-        with open(args.config, "r") as f:
+        with open(args.config) as f:
             cfg = yaml.safe_load(f)
         model_cfg = {
             **cfg.get("model", {}),

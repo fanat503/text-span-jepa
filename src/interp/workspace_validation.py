@@ -45,6 +45,7 @@ class TopKSAE(nn.Module):
         embed_dim: input dimension (D).
         n_features: SAE latent dimension (typically 16x-64x D).
         k: number of active features per token.
+
     """
 
     def __init__(self, embed_dim: int, n_features: int = 8192, k: int = 32):
@@ -67,6 +68,7 @@ class TopKSAE(nn.Module):
         Returns:
             features: (N, n_features) sparse feature activations.
             indices: (N, k) indices of top-k features.
+
         """
         pre_acts = x @ self.W_enc + self.b_enc  # (N, n_features)
         topk_vals, topk_indices = torch.topk(pre_acts, self.k, dim=-1)
@@ -84,6 +86,7 @@ class TopKSAE(nn.Module):
 
         Returns:
             dict with loss, x_hat, features, indices, sparsity.
+
         """
         features, indices = self.encode(x)
         x_hat = self.decode(features)
@@ -139,6 +142,7 @@ def identify_workspace_features(
     Returns:
         workspace_indices: 1-D tensor of feature indices.
         info: dict with diagnostics.
+
     """
     sae.eval()
     with torch.no_grad():
@@ -206,6 +210,7 @@ def compute_workspace_similarity(
 
     Returns:
         dict with similarity metrics.
+
     """
     _D, k = Q.shape
 
@@ -274,6 +279,7 @@ def bootstrap_ci(
 
     Returns:
         (mean, ci_lower, ci_upper).
+
     """
     n = values.numel()
     if n < 2:
@@ -337,6 +343,7 @@ def validate_workspace_claim(
 
     Returns:
         dict with all validation results.
+
     """
     D, k = Q.shape
     N = representations.shape[0]
@@ -346,7 +353,7 @@ def validate_workspace_claim(
         sae = TopKSAE(embed_dim=D, n_features=n_sae_features, k=sae_k)
         logger.warning(
             "SAE not trained — using random decoder. "
-            "Provide a pre-trained SAE for valid results."
+            "Provide a pre-trained SAE for valid results.",
         )
 
     # Identify workspace features

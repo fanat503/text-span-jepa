@@ -44,6 +44,7 @@ class RepresentationGeometry:
 
         Returns:
             float: effective dimension
+
         """
         try:
             if representations.dim() == 3:
@@ -82,6 +83,7 @@ class RepresentationGeometry:
 
         Returns:
             float: compression ratio in [0, 1]
+
         """
         try:
             if representations.dim() == 3:
@@ -118,6 +120,7 @@ class RepresentationGeometry:
 
         Returns:
             float: anisotropy in [0, 1]
+
         """
         try:
             if representations.dim() == 3:
@@ -154,6 +157,7 @@ class RepresentationGeometry:
 
         Returns:
             float: power-law exponent alpha
+
         """
         try:
             if representations.dim() == 3:
@@ -195,6 +199,7 @@ class RepresentationGeometry:
 
         Returns:
             dict with all metrics
+
         """
         return {
             "effective_dimension": RepresentationGeometry.effective_dimension(representations),
@@ -218,6 +223,7 @@ class RepresentationGeometry:
 
         Returns:
             dict with per-metric comparison
+
         """
         jepa_geom = RepresentationGeometry.compute_all(jepa_reps)
         baseline_geom = RepresentationGeometry.compute_all(baseline_reps)
@@ -290,6 +296,7 @@ class GeometryDegradationTest:
 
         Returns:
             dict with per-noise-level geometry and accuracy metrics
+
         """
         results = {}
         clean_geom = RepresentationGeometry.compute_all(representations)

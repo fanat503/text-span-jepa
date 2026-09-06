@@ -205,7 +205,11 @@ class TestRDCCheckpoint:
         from src.models.rdc import RepresentationDriftCompensation
 
         rdc2 = RepresentationDriftCompensation(
-            embed_dim=64, eta=0.1, ema_beta=0.99, warmup_steps=0, k_workspace=16
+            embed_dim=64,
+            eta=0.1,
+            ema_beta=0.99,
+            warmup_steps=0,
+            k_workspace=16,
         )
         rdc2.load_checkpoint(ckpt)
         assert torch.allclose(rdc_module.z_previous, rdc2.z_previous, atol=1e-6)

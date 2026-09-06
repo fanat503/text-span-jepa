@@ -18,6 +18,7 @@ from src.models.jepa import TextSpanJEPA, TextSpanJEPAConfig
 from src.datasets.kaggle import TextDataset
 from src.train import load_checkpoint, main, save_checkpoint
 from src.utils.seed import seed_everything
+from src.utils.torchio import safe_torch_load
 
 VOCAB = 64
 SEQ = 16
@@ -118,10 +119,9 @@ def _config(folder, epochs, load_checkpoint=False):
 
 
 def _global_step(folder):
-    ckpt = torch.load(
+    ckpt = safe_torch_load(
         os.path.join(str(folder), "checkpoint-latest.pth.tar"),
         map_location="cpu",
-        weights_only=False,
     )
     return ckpt["global_step"]
 
@@ -202,5 +202,6 @@ class TestCheckpointRoundTrip:
 
         assert int(model.cgn.total_steps.item()) == 5000
         assert torch.equal(
-            model.cgn.gate_logits_visible.detach(), vis_before
+            model.cgn.gate_logits_visible.detach(),
+            vis_before,
         ), "gate logits must survive the checkpoint round trip"

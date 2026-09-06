@@ -35,6 +35,7 @@ class DCIMetrics:
 
         Returns:
             dict with 'disentanglement', 'completeness', 'informativeness'
+
         """
         try:
             _N, D = representations.shape
@@ -79,7 +80,7 @@ class DCIMetrics:
                     q = Q[:, j]
                     q = q[q > 1e-10]
                     compl_per_factor[j] = 1.0 + (q * torch.log(q + 1e-10)).sum() / math.log(
-                        D + 1e-10
+                        D + 1e-10,
                     )
                 else:
                     compl_per_factor[j] = 0.0
@@ -124,6 +125,7 @@ class SAPScore:
 
         Returns:
             float: SAP score
+
         """
         try:
             _N, D = representations.shape
@@ -135,7 +137,7 @@ class SAPScore:
             for i in range(D):
                 for j in range(K):
                     score_matrix[i, j] = abs(
-                        _pearson_correlation(representations[:, i], factors[:, j])
+                        _pearson_correlation(representations[:, i], factors[:, j]),
                     )
 
             # For each factor, take top-2 most predictive dimensions
@@ -199,6 +201,7 @@ class MIGScore:
 
         Returns:
             float: MIG score
+
         """
         try:
             _N, D = representations.shape
@@ -255,6 +258,7 @@ class ModularityScore:
 
         Returns:
             float: modularity score in [0, 1]
+
         """
         try:
             _N, D = representations.shape
@@ -297,6 +301,7 @@ def compute_all_disentanglement_metrics(representations, factors):
 
     Returns:
         dict with all metrics
+
     """
     results = {}
     results.update(DCIMetrics.compute(representations, factors))

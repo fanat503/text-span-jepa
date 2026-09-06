@@ -70,6 +70,7 @@ def radar_chart(
         title: chart title
         labels: optional {metric_name: display_label}
         output_path: if provided, save SVG to this path
+
     """
     names = [n for n in metrics if n in baseline_metrics]
     n = len(names)
@@ -173,6 +174,7 @@ def layer_heatmap(
     Args:
         layer_data: {metric_name: [values per layer]}
         output_path: save SVG here
+
     """
     metrics = list(layer_data.keys())
     n_metrics = len(metrics)
@@ -256,6 +258,7 @@ def bar_chart_with_errors(
         baseline_means: baseline mean values
         baseline_cis: [(lower, upper)] confidence intervals
         output_path: save SVG
+
     """
     n = len(metric_names)
     if n == 0:
@@ -299,13 +302,28 @@ def bar_chart_with_errors(
         j_lo = y_pos(jepa_cis[i][0])
         j_hi = y_pos(jepa_cis[i][1])
         svg += _svg_line(
-            gx + bar_width // 2, j_lo, gx + bar_width // 2, j_hi, color="#2a5db0", width=2
+            gx + bar_width // 2,
+            j_lo,
+            gx + bar_width // 2,
+            j_hi,
+            color="#2a5db0",
+            width=2,
         )
         svg += _svg_line(
-            gx + bar_width // 2 - 4, j_lo, gx + bar_width // 2 + 4, j_lo, color="#2a5db0", width=2
+            gx + bar_width // 2 - 4,
+            j_lo,
+            gx + bar_width // 2 + 4,
+            j_lo,
+            color="#2a5db0",
+            width=2,
         )
         svg += _svg_line(
-            gx + bar_width // 2 - 4, j_hi, gx + bar_width // 2 + 4, j_hi, color="#2a5db0", width=2
+            gx + bar_width // 2 - 4,
+            j_hi,
+            gx + bar_width // 2 + 4,
+            j_hi,
+            color="#2a5db0",
+            width=2,
         )
 
         # Baseline bar
@@ -547,7 +565,11 @@ def ablation_comparison_chart(
         svg += _svg_rect(margin_left, y, bar_w, bar_height, fill=color, opacity=0.7)
         svg += _svg_text(margin_left - 5, y + bar_height // 2 + 4, name, size=9, anchor="end")
         svg += _svg_text(
-            margin_left + bar_w + 5, y + bar_height // 2 + 4, f"{val:.3f}", size=8, anchor="start"
+            margin_left + bar_w + 5,
+            y + bar_height // 2 + 4,
+            f"{val:.3f}",
+            size=8,
+            anchor="start",
         )
 
     if full_model_value is not None:

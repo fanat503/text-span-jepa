@@ -158,6 +158,7 @@ class JAWPModule(nn.Module):
         curriculum_steps: optimizer steps for full curriculum expansion
         alpha: predictor focus weight (default 0.1). Q is detached.
         init: 'identity' | 'random' | 'pca'
+
     """
 
     def __init__(
@@ -318,6 +319,7 @@ class JAWPModule(nn.Module):
         Returns:
             loss: scalar tensor (differentiable w.r.t. z_pred AND Q)
             info: dict with loss components and diagnostics
+
         """
         D = z_pred.size(-1)
         k = self.current_k(step)
@@ -371,7 +373,8 @@ class JAWPModule(nn.Module):
             if pred_norm > 1e-10 and target_norm > 1e-10:
                 ws_cosine = (
                     F.cosine_similarity(
-                        pred_ws_d.flatten().unsqueeze(0), target_ws_d.flatten().unsqueeze(0)
+                        pred_ws_d.flatten().unsqueeze(0),
+                        target_ws_d.flatten().unsqueeze(0),
                     )
                     .clamp(-1, 1)
                     .item()
@@ -415,7 +418,7 @@ class JAWPModule(nn.Module):
         """Subspace similarity between learned Q and PCA of target."""
         try:
             N, D = target_flat.shape
-            if N <= 1 or D < k or k < 1:
+            if N <= 1 or k > D or k < 1:
                 return 0.0
 
             centered = target_flat - target_flat.mean(dim=0)
@@ -494,6 +497,7 @@ class JAWPModule(nn.Module):
         Returns:
             k_star: detected workspace dimension (int)
             gap_info: dict with spectral gap diagnostics
+
         """
         D = z_pred.size(-1)
         z_pred_flat = z_pred.reshape(-1, D).float()
@@ -622,6 +626,7 @@ class JAWPModule(nn.Module):
                 1.0 means workspace captures all exogenous information.
                 0.0 means workspace is orthogonal to exogenous features.
             wip_info: dict with detailed diagnostics
+
         """
         D = z_pred.size(-1)
         k = int(self.active_k.item())
@@ -692,6 +697,7 @@ class JAWPModule(nn.Module):
             bg_complexity: float. Higher = better split.
                 Ratio of background residual to workspace residual.
             bg_info: dict with diagnostics
+
         """
         D = z_pred.size(-1)
         k = int(self.active_k.item())
@@ -818,6 +824,7 @@ class JAWPModule(nn.Module):
         Returns:
             gauge_norm: float, the ||gauge component|| that was removed.
                 Large values indicate significant oscillation was prevented.
+
         """
         Q = self.workspace_Q.data
         k_active = int(self.active_k.item())
@@ -882,6 +889,7 @@ class JAWPModule(nn.Module):
         Returns:
             angles: list of floats, principal angles in radians.
             cosine_similarities: list of floats, cos(θ_i).
+
         """
         if step is not None:
             k = self.current_k(step)
@@ -920,6 +928,7 @@ class JAWPModule(nn.Module):
 
         Returns:
             distance: float >= 0. Zero iff subspaces are identical.
+
         """
         angles, _ = self.principal_angles(other_Q, step)
         return math.sqrt(sum(math.sin(a) ** 2 for a in angles))
@@ -1016,6 +1025,7 @@ class JAWPModule(nn.Module):
                 rank_utilization: float in [0, 1] (effective_rank / k)
                 min_singular: float (smallest singular value)
                 condition_number: float (largest / smallest)
+
         """
         D = z_pred.size(-1)
         k = int(self.active_k.item())
@@ -1087,6 +1097,7 @@ class JAWPModule(nn.Module):
 
         Returns:
             loss: scalar tensor (differentiable w.r.t. Q)
+
         """
         D = z_pred.size(-1)
         k = int(self.active_k.item())  # active WIDTH; current_k() treats it as a step (R18 bugfix)

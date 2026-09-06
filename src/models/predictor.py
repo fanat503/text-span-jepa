@@ -76,12 +76,13 @@ class TextSpanJEPApredictor(nn.Module):
             {
                 f"offset_{d}": nn.Parameter(torch.zeros(1, 1, predictor_embed_dim))
                 for d in future_offsets
-            }
+            },
         )
 
         # Learned positional embedding for predictor (I-JEPA: learned, not frozen)
         self.predictor_pos_embed = nn.Parameter(
-            torch.zeros(1, max_seq_len, predictor_embed_dim), requires_grad=True
+            torch.zeros(1, max_seq_len, predictor_embed_dim),
+            requires_grad=True,
         )
 
         # Mask token at positions to be predicted (I-JEPA pattern)
@@ -95,7 +96,7 @@ class TextSpanJEPApredictor(nn.Module):
             [
                 PredictorBlock(dim=predictor_embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio)
                 for _ in range(depth)
-            ]
+            ],
         )
         self.predictor_norm = nn.LayerNorm(predictor_embed_dim)
 
@@ -164,6 +165,7 @@ class TextSpanJEPApredictor(nn.Module):
             gathered: (B, max_num_masked, D) padded with zeros
             num_masked_per_sample: (B,)
             valid_mask: (B, max_num_masked) bool, True for real masked positions
+
         """
         B, _T, D = h.shape
         num_masked_per_sample = mask_positions.sum(dim=1)
@@ -216,7 +218,7 @@ class TextSpanJEPApredictor(nn.Module):
         future_predictions = {}
 
         for d in self.future_offsets:
-            if T <= d:
+            if d >= T:
                 continue
             h_curr = h_online[:, : T - d, :]
             x = self.predictor_embed(h_curr)
@@ -237,7 +239,9 @@ class TextSpanJEPApredictor(nn.Module):
         """Combined forward: span + future prediction."""
         span_preds, num_masked, valid_mask = self.forward_span_prediction(h_online, mask_positions)
         future_losses, future_preds = self.forward_future_prediction(
-            h_online, token_embeds, target_h
+            h_online,
+            token_embeds,
+            target_h,
         )
         return span_preds, num_masked, valid_mask, future_losses, future_preds
 

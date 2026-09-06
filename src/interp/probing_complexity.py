@@ -62,6 +62,7 @@ class ProbingComplexityCurve:
             patience: early stopping patience
             min_accuracy: minimum accuracy threshold for "extractable"
             device: compute device
+
         """
         self.embed_dim = embed_dim
         self.num_classes = num_classes
@@ -101,6 +102,7 @@ class ProbingComplexityCurve:
 
         Returns:
             best_accuracy on validation set
+
         """
         N = representations.size(0)
         if N < 10:
@@ -172,6 +174,7 @@ class ProbingComplexityCurve:
 
         Returns:
             dict with per-depth accuracy and minimum extracting depth
+
         """
         num_classes = self.num_classes or labels.max().item() + 1
         num_classes = max(int(num_classes), 2)
@@ -214,6 +217,7 @@ class ProbingComplexityCurve:
 
         Returns:
             dict with complexity gap and per-depth comparison
+
         """
         jepa_result = self.evaluate(jepa_reps, labels, f"{task_name}_jepa")
         baseline_result = self.evaluate(baseline_reps, labels, f"{task_name}_baseline")
@@ -255,6 +259,7 @@ class ProbingComplexityCurve:
 
         Returns:
             dict with per-task results and aggregate summary
+
         """
         results = {}
         complexity_gaps = []
@@ -309,6 +314,7 @@ class LinguisticProbeTasks:
 
         Returns:
             dict ready for ProbingComplexityCurve.evaluate()
+
         """
         labels = torch.tensor(pos_tags_list, dtype=torch.long)
         return {
@@ -329,6 +335,7 @@ class LinguisticProbeTasks:
 
         Returns:
             dict ready for evaluate()
+
         """
         depths = (
             torch.tensor(depth_values, dtype=torch.float32)
@@ -357,6 +364,7 @@ class LinguisticProbeTasks:
 
         Returns:
             dict ready for evaluate()
+
         """
         lengths = torch.tensor(token_lengths, dtype=torch.float32)
         percentiles = torch.linspace(0, 100, n_bins + 1)[1:-1]
@@ -379,6 +387,7 @@ class LinguisticProbeTasks:
 
         Returns:
             dict ready for evaluate()
+
         """
         labels = torch.tensor(entity_labels, dtype=torch.long)
         return {
@@ -398,6 +407,7 @@ class LinguisticProbeTasks:
 
         Returns:
             dict ready for evaluate()
+
         """
         labels = torch.tensor(sentiment_labels, dtype=torch.long)
         return {

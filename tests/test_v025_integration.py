@@ -376,7 +376,10 @@ class TestV025Integration:
         mask[:, 3:6] = 1
 
         total_loss, loss_dict, diag_dict = model.compute_loss_with_targets(
-            ids, ids, mask, current_step=0
+            ids,
+            ids,
+            mask,
+            current_step=0,
         )
 
         assert torch.isfinite(total_loss)
@@ -582,7 +585,16 @@ class TestV025Integration:
         try:
             scaler = torch.amp.GradScaler("cpu", enabled=False)
             save_checkpoint(
-                path, model, opt, scaler, 0, 0, 0, 0, extra_state={}, model_name="text_span_jepa"
+                path,
+                model,
+                opt,
+                scaler,
+                0,
+                0,
+                0,
+                0,
+                extra_state={},
+                model_name="text_span_jepa",
             )
 
             # Reset Q
@@ -593,7 +605,9 @@ class TestV025Integration:
 
             Q_after = model.jawp.workspace_Q.data
             assert torch.allclose(
-                Q_before, Q_after, atol=1e-6
+                Q_before,
+                Q_after,
+                atol=1e-6,
             ), "JAWP Q not preserved through save/load"
         finally:
             os.unlink(path)

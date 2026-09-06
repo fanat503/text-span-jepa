@@ -94,7 +94,10 @@ class Data2VecTextBaseline(nn.Module):
         if self.num_updates >= self.ema_anneal_end_step:
             return self.ema_end_decay
         return get_annealed_rate(
-            self.ema_decay, self.ema_end_decay, self.num_updates, self.ema_anneal_end_step
+            self.ema_decay,
+            self.ema_end_decay,
+            self.num_updates,
+            self.ema_anneal_end_step,
         )
 
     @torch.no_grad()
@@ -118,7 +121,7 @@ class Data2VecTextBaseline(nn.Module):
                 warnings.warn(
                     f"data2vec target depth truncated: encoder exposes "
                     f"{len(intermediates)} layers, average_top_k_layers="
-                    f"{self.average_top_k_layers}"
+                    f"{self.average_top_k_layers}",
                 )
             if k == 0:
                 h_target, _ = self.target_encoder(original_input_ids)
@@ -146,7 +149,10 @@ class Data2VecTextBaseline(nn.Module):
             loss_per_token = F.mse_loss(x.float(), y.float(), reduction="none").sum(dim=-1)
         else:
             loss_per_token = F.smooth_l1_loss(
-                x.float(), y.float(), reduction="none", beta=self.loss_beta
+                x.float(),
+                y.float(),
+                reduction="none",
+                beta=self.loss_beta,
             ).sum(dim=-1)
 
         loss_total = loss_per_token.sum()

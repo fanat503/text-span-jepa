@@ -20,3 +20,24 @@ from .spc import SpectralPredictiveCoding
 from .sta import SpectralTransportAlignment
 from .wsd import WorkspaceSyncDrift
 from .wsr import WorkspaceSharpnessRegularization
+
+__all__ = [
+    "CollapseDiagnostics",
+    "ContextualGatingNetwork",
+    "CovarianceRegularization",
+    "CrossMaskConsistency",
+    "GradientAllocatedCapacity",
+    "PredictionUncertaintyCalibration",
+    "RepresentationDriftCompensation",
+    "SpectralPredictiveCoding",
+    "SpectralTransportAlignment",
+    "TargetCentering",
+    "TiedTokenDecoder",
+    "TextSpanJEPA",
+    "TextSpanJEPAConfig",
+    "TextSpanJEPLEncoder",
+    "TextSpanJEPApredictor",
+    "VarianceRegularization",
+    "WorkspaceSharpnessRegularization",
+    "WorkspaceSyncDrift",
+]

@@ -284,10 +284,10 @@ class TestSPCTheorem:
         high variance × predictability bands."""
         # Set up running statistics manually
         spc_module.running_residual_vars.copy_(
-            torch.tensor([1.0, 1.0, 1.0, 1.0, 10.0, 10.0, 10.0, 10.0])
+            torch.tensor([1.0, 1.0, 1.0, 1.0, 10.0, 10.0, 10.0, 10.0]),
         )
         spc_module.running_predictability.copy_(
-            torch.tensor([0.9, 0.9, 0.9, 0.9, 0.1, 0.1, 0.1, 0.1])
+            torch.tensor([0.9, 0.9, 0.9, 0.9, 0.1, 0.1, 0.1, 0.1]),
         )
 
         w_before = spc_module.get_band_weights().clone()
@@ -421,16 +421,20 @@ class TestSPCIntegration:
         assert abs(loss1.item() - loss2.item()) < 1e-4
 
     def test_spc_bfloat16(self):
-        """SPC works with bfloat16 (Kaggle T4 compatibility)."""
-        if not torch.cuda.is_available():
-            pytest.skip("No GPU available for bfloat16 test")
+        """SPC works with bfloat16 (CPU bf16 mirrors the CUDA-only autocast path in train.py)."""
         from src.models.spc import SpectralPredictiveCoding
 
-        spc = SpectralPredictiveCoding(embed_dim=64, n_bands=8).cuda().bfloat16()
-        z_pred = torch.randn(2, 64, device="cuda", dtype=torch.bfloat16)
-        z_target = torch.randn(2, 64, device="cuda", dtype=torch.bfloat16)
+        spc = SpectralPredictiveCoding(embed_dim=64, n_bands=8).bfloat16()
+        z_pred = torch.randn(2, 64, dtype=torch.bfloat16)
+        z_target = torch.randn(2, 64, dtype=torch.bfloat16)
         loss, _info = spc(z_pred, z_target)
         assert loss.item() >= 0
+        assert not torch.isnan(loss)
+
+        spc_fp32 = SpectralPredictiveCoding(embed_dim=64, n_bands=8)
+        with torch.amp.autocast("cpu", dtype=torch.bfloat16):
+            loss_ac, _info_ac = spc_fp32(z_pred.float(), z_target.float())
+        assert loss_ac.item() >= 0
 
 
 # ═══════════════════════════════════════════════════════════════════════════

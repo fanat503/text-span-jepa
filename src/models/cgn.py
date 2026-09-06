@@ -146,6 +146,7 @@ class ContextualGatingNetwork(nn.Module):
         anneal_steps: optimizer steps for full temperature annealing.
             Default 10000.
         min_gate: minimum gate value to prevent zeroing. Default 0.01.
+
     """
 
     def __init__(
@@ -210,6 +211,7 @@ class ContextualGatingNetwork(nn.Module):
 
         Returns:
             probs: (n_groups, 2) gate probabilities
+
         """
         if self.training and tau > 0:
             # Gumbel-Softmax: differentiable approximation to categorical
@@ -233,6 +235,7 @@ class ContextualGatingNetwork(nn.Module):
         Returns:
             z_gated: (B, T, D) gated representations.
             gate_info: dict with gating statistics.
+
         """
         _B, _T, _D = z.shape
         tau = self.current_tau(step)
@@ -345,6 +348,7 @@ class ContextualGatingNetwork(nn.Module):
 
         Returns:
             dict with routing efficiency metrics.
+
         """
         _B, _T, _D = z.shape
         mask_bool = mask_positions.bool()
