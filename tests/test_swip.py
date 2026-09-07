@@ -405,7 +405,7 @@ class TestSWIPConfig:
         import yaml
 
         for path in sorted(glob.glob("config/**/*.yaml", recursive=True)):
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 cfg = yaml.safe_load(f)
             if "model" not in cfg:
                 continue

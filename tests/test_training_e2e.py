@@ -158,6 +158,66 @@ class TestEndToEndTrainingLoop:
         assert gs_after == 3 * ipe, "resume must continue, not restart, the step counter"
         assert (tmp_path / "checkpoint-ep3.pth.tar").exists()
 
+    def test_cmc_second_pass_sees_second_mask(self, tmp_path, _patch_dataset, monkeypatch):
+        """B3: the CMC second forward must receive the input masked with m2.
+
+        Old behaviour: the second pass received the m1-masked input, so the
+        encoder never saw a differently-masked sequence and cross-mask
+        consistency was never actually exercised.
+        """
+        import src.train as train_mod
+
+        real_compute_loss = train_mod.compute_loss
+        calls = []
+
+        def spy(model, masked, original, mask, **kwargs):
+            calls.append(
+                (
+                    masked.detach().cpu().clone(),
+                    original.detach().cpu().clone(),
+                    mask.detach().cpu().clone(),
+                ),
+            )
+            return real_compute_loss(model, masked, original, mask, **kwargs)
+
+        monkeypatch.setattr(train_mod, "compute_loss", spy)
+
+        cfg = _config(tmp_path, epochs=1)
+        main(cfg)  # _config already enables use_cmc with cmc_interval=1, lambda_cmc>0
+
+        assert len(calls) >= 4, "CMC-enabled run must produce (primary, secondary) call pairs"
+
+        mask_token = None
+        found_pair = False
+        for (m1, o1, k1), (m2, o2, k2) in zip(calls, calls[1:]):
+            # A (primary, secondary) pair: same batch/original, DIFFERENT mask
+            # (m1 vs m2 by design — that is the whole point of CMC).
+            if not (torch.equal(o1, o2) and not torch.equal(k1, k2)):
+                continue  # not a (primary, secondary) pair for the same batch
+            found_pair = True
+            assert not torch.equal(m1, m2), "second pass received the m1-masked input (B3)"
+            # m2 must be the original masked exactly at k2 positions, with a
+            # single constant token at those positions (the mask token).
+            if mask_token is None:
+                flat = m2[k2]
+                assert flat.numel() > 0
+                mask_token = flat.reshape(-1)[0]
+            assert torch.equal(
+                m2[k2], torch.full_like(m2[k2], mask_token)
+            ), "second pass input must be masked with the mask token at m2 positions"
+            assert torch.equal(m2[~k2], o2[~k2]), "non-m2 positions must keep original tokens"
+            break
+
+        assert found_pair, "no (primary, secondary) CMC pair captured"
+
+    def test_unknown_dataset_fails_loudly(self, tmp_path):
+        """B12: a config naming a corpus without a loader must fail loudly
+        instead of silently training WikiText-103."""
+        cfg = _config(tmp_path, epochs=1)
+        cfg["data"]["dataset"] = "tinystories"
+        with pytest.raises(ValueError, match="no loader"):
+            main(cfg)
+
 
 class TestCheckpointRoundTrip:
     def test_cgn_state_survives_round_trip(self, tmp_path):

@@ -111,7 +111,7 @@ class TestWorkspaceQuality:
 class TestDefaultsYaml:
     @pytest.fixture(autouse=True)
     def load_defaults(self):
-        with open("defaults.yaml") as f:
+        with open("defaults.yaml", encoding="utf-8") as f:
             self.cfg = yaml.safe_load(f)
 
     def test_jawp_fields(self):
@@ -168,7 +168,7 @@ class TestAblationConfigs:
     def test_ablation_config_loads(self, name):
         path = f"config/ablations/{name}.yaml"
         assert os.path.exists(path), f"Missing ablation config: {path}"
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
         assert "model" in cfg
         assert "meta" in cfg
@@ -184,7 +184,7 @@ class TestAblationConfigs:
     def test_scaling_config_loads(self, name):
         path = f"config/scaling/{name}.yaml"
         assert os.path.exists(path), f"Missing scaling config: {path}"
-        with open(path) as f:
+        with open(path, encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
         assert "model" in cfg
         m = cfg["model"]
