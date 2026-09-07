@@ -509,10 +509,13 @@ def compute_loss(
     mask_positions,
     current_step=0,
     total_steps=1,
+    want_diag=True,
 ):
     """Compute loss for any model type — unified interface.
 
     Always returns (total_loss, loss_dict, diag_dict) for consistency.
+    want_diag=False skips the SVD/CKA diagnostics pack (95-99% of step
+    wall-time) for call sites that discard it.
     """
     if hasattr(model, "compute_loss_with_targets"):
         # JEPA model — returns (loss, loss_dict, diag_dict)
@@ -522,6 +525,7 @@ def compute_loss(
             mask_positions,
             current_step=current_step,
             total_steps=total_steps,
+            want_diag=want_diag,
         )
     elif hasattr(model, "forward") and hasattr(model, "regression_head"):
         # data2vec — returns (loss, info_dict)
@@ -670,9 +674,21 @@ def _build_data_pipeline(args, seed):
     """
     data_cfg = args.get("data", {})
     seq_len = data_cfg.get("max_seq_len", 512)
+    dataset_name = data_cfg.get("dataset", "wikitext103")
 
     logger.info("Loading dataset...")
     from src.datasets.kaggle import get_mask_token_id, load_wikitext103, make_dataloader
+
+    # B12: the dataset key used to be silently ignored — a `dataset:
+    # tinystories` config trained WikiText-103. Fail loudly until a real
+    # loader for the named corpus exists (follow-up batch).
+    supported_datasets = {"wikitext103"}
+    if dataset_name not in supported_datasets:
+        raise ValueError(
+            f"data.dataset={dataset_name!r} has no loader in this repo "
+            f"(supported: {sorted(supported_datasets)}); without this check "
+            "a config claiming another corpus silently trains WikiText-103"
+        )
 
     dataset, tokenizer = load_wikitext103(
         tokenizer_name=data_cfg.get("tokenizer", "gpt2"),
@@ -832,7 +848,7 @@ def _warn_unknown_config_keys(args):
         defaults_path = os.path.join(base, "defaults.yaml")
         if not os.path.exists(defaults_path):
             defaults_path = os.path.join(base, "..", "defaults.yaml")
-        with open(defaults_path) as f:
+        with open(defaults_path, encoding="utf-8") as f:
             known = yaml.safe_load(f)
     except Exception:
         return
@@ -965,7 +981,7 @@ def main(args):
 
     # Dump config
     dump_path = os.path.join(log_dir, "params-text-span-jepa.yaml")
-    with open(dump_path, "w") as f:
+    with open(dump_path, "w", encoding="utf-8") as f:
         yaml.dump(args, f)
 
     # CSV loss logger — I-JEPA pattern
@@ -1050,6 +1066,9 @@ def main(args):
                     mask_positions,
                     current_step=global_step,
                     total_steps=total_steps,
+                    # Diagnostics only on log steps: the SVD/CKA pack is the
+                    # dominant step cost and is otherwise discarded (B19).
+                    want_diag=(itr % log_freq == 0),
                 )
                 # Snapshot the PRIMARY pass slot tensor for GAC before a CMC
                 # second forward re-stashes it (restored below the branch).
@@ -1069,28 +1088,41 @@ def main(args):
                     and getattr(model.config, "lambda_cmc", 0.0) > 0
                 ):
                     with torch.no_grad():
-                        # Generate second mask for same input
+                        # Generate second mask for same input. bool() is the
+                        # mask contract everywhere downstream (the collator
+                        # produces bool masks); generate_second_mask returns
+                        # long, and indexing an input with a long (B, T)
+                        # tensor selects ROWS, not positions.
                         second_mask = model.cmc.generate_second_mask(
                             seq_len=mask_positions.size(1),
                             batch_size=mask_positions.size(0),
                             mask_ratio=mask_positions.float().mean().item(),
                             device=mask_positions.device,
-                        )
+                        ).bool()
                         overlap = model.cmc.compute_overlap_mask(mask_positions, second_mask)
-                    # Second forward pass (detached — only provides gradient
-                    # to z_pred_secondary, not to encoder weights)
+                    # Second forward pass under mask m2. The INPUT must be the
+                    # original masked with m2 — passing the m1-masked input
+                    # here (the old behaviour) meant the encoder never saw a
+                    # differently-masked sequence, so cross-mask consistency
+                    # was never actually exercised (B3). The graph stays live:
+                    # the CMC term backpropagates into encoder+predictor
+                    # through z_pred_secondary (stop-grad applies to the
+                    # primary pass only).
                     with torch.amp.autocast(
                         autocast_device,
                         enabled=use_bfloat16,
                         dtype=torch.bfloat16 if use_bfloat16 else torch.float32,
                     ):
+                        second_masked_input = original_input_ids.clone()
+                        second_masked_input[second_mask] = mask_token_id
                         _, _loss_dict_2, _ = compute_loss(
                             model,
-                            masked_input_ids,
+                            second_masked_input,
                             original_input_ids,
                             second_mask,
                             current_step=global_step,
                             total_steps=total_steps,
+                            want_diag=False,
                         )
                     # Wire the consistency term: bridge compact slot predictions
                     # from both passes into full-sequence space and add
@@ -1436,6 +1468,7 @@ def _validate(
                 mask,
                 current_step=current_step,
                 total_steps=total_steps,
+                want_diag=False,
             )
             val_losses.append(total_loss.item())
     model.train()
@@ -1466,7 +1499,7 @@ if __name__ == "__main__":
     # come from defaults.yaml. Without this merge, ablation configs
     # are broken (missing embed_dim, encoder_depth, etc.).
     # I-JEPA / C-JEPA pattern: base config + experiment overrides.
-    with open(args.fname) as f:
+    with open(args.fname, encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
     if not args.no_defaults:
@@ -1477,7 +1510,7 @@ if __name__ == "__main__":
             # Try repo root
             defaults_path = os.path.join(script_dir, "..", "defaults.yaml")
         if os.path.exists(defaults_path):
-            with open(defaults_path) as f:
+            with open(defaults_path, encoding="utf-8") as f:
                 defaults = yaml.safe_load(f)
             config = _deep_merge(defaults, config)
 

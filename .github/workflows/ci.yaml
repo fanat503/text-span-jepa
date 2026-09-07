@@ -6,13 +6,17 @@ on:
   pull_request:
     branches: ['*']
 
+# Least-privilege token: CI only reads code and reports statuses.
+permissions:
+  contents: read
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.head_ref || github.sha }}
   cancel-in-progress: true
 
 jobs:
   test:
-    name: pytest
+    name: pytest (ubuntu)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,11 +24,32 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
-      - name: Install dependencies
+          cache: pip
+      # CPU torch FIRST: `pip install -e .` would otherwise pull the
+      # multi-GB CUDA-bundled wheel from PyPI and get it replaced anyway.
+      - name: Install dependencies (CPU torch first)
         run: |
-          pip install -e ".[dev,eval]"
           pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev,eval]"
       - run: python -m pytest tests/ -v --tb=short
+
+  test-windows:
+    # The suite is Windows-clean (checkpoint tests use tmp_path); this job
+    # keeps the NamedTemporaryFile/file-lock class of bugs visible.
+    name: pytest (windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies (CPU torch first)
+        run: |
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install -e ".[dev,eval]"
+      - run: python -m pytest tests/ -q --tb=short
 
   lint:
     name: ruff + black
@@ -35,8 +60,23 @@ jobs:
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+          cache: pip
       - run: pip install ruff black==25.1.0
       - run: ruff check .
       - shell: bash
         run: |
           python -m black --check . || (echo -e "---\nTo fix, run:\n\tpython -m black ."; exit 1)
+
+  audit:
+    name: pip-audit (dependency vulnerabilities)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Setup python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: pip install pip-audit
+      - name: Audit declared dependencies
+        run: python -m pip_audit --requirement requirements.txt --progress-spinner off

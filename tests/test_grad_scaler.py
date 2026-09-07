@@ -65,8 +65,10 @@ def test_validate_forwards_current_step(monkeypatch):
 
     captured = {}
 
-    def fake_compute_loss(model, masked, original, mask, current_step=0, total_steps=1):
-        captured.update(step=current_step, total=total_steps)
+    def fake_compute_loss(
+        model, masked, original, mask, current_step=0, total_steps=1, want_diag=True
+    ):
+        captured.update(step=current_step, total=total_steps, want_diag=want_diag)
         return torch.tensor(0.5), {}, {}
 
     monkeypatch.setattr("src.train.compute_loss", fake_compute_loss)
@@ -86,4 +88,4 @@ def test_validate_forwards_current_step(monkeypatch):
         current_step=7,
         total_steps=100,
     )
-    assert captured == {"step": 7, "total": 100}
+    assert captured == {"step": 7, "total": 100, "want_diag": False}

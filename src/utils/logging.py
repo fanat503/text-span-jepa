@@ -39,7 +39,7 @@ class CSVLogger:
     def __init__(self, fname, *argv):
         self.fname = fname
         self.types = []
-        with open(self.fname, "+a") as f:
+        with open(self.fname, "a+", encoding="utf-8") as f:
             for i, v in enumerate(argv, 1):
                 self.types.append(v[0])
                 if i < len(argv):
@@ -48,7 +48,7 @@ class CSVLogger:
                     print(v[1], end="\n", file=f)
 
     def log(self, *argv):
-        with open(self.fname, "+a") as f:
+        with open(self.fname, "a+", encoding="utf-8") as f:
             for i, tv in enumerate(zip(self.types, argv), 1):
                 end = "," if i < len(argv) else "\n"
                 print(tv[0] % tv[1], end=end, file=f)

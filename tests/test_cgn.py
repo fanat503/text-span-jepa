@@ -458,7 +458,7 @@ class TestV029YamlConfigs:
         import yaml
 
         for path in sorted(glob.glob("config/**/*.yaml", recursive=True)):
-            with open(path) as f:
+            with open(path, encoding="utf-8") as f:
                 cfg = yaml.safe_load(f)
             if "model" not in cfg:
                 continue
@@ -471,7 +471,7 @@ class TestV029YamlConfigs:
     def test_defaults_yaml_has_new_fields(self):
         import yaml
 
-        with open("defaults.yaml") as f:
+        with open("defaults.yaml", encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
         m = cfg["model"]
         assert "lambda_predictive_rank" in m

@@ -91,7 +91,12 @@ class TargetCentering(nn.Module):
         self.center = self.momentum * self.center + (1 - self.momentum) * batch_center
 
     def forward(self, target_representations):
-        self.update_center(target_representations)
+        # Eval-safety (B9): update the running center only during training.
+        # Validation batches used to pollute the center, and the epoch
+        # checkpoint (saved right after validation) then carried that
+        # polluted state. Subtraction itself stays active in eval.
+        if self.training:
+            self.update_center(target_representations)
         return target_representations - self.center
 
 
@@ -133,9 +138,13 @@ class CollapseDiagnostics(nn.Module):
       online_pair_cosine
     """
 
-    def __init__(self, collapse_threshold=1e-2):
+    def __init__(self, collapse_threshold=1e-2, diag_max_rows=4096):
         super().__init__()
         self.collapse_threshold = collapse_threshold
+        # Row cap for the O(N²)/O(N·D²) metrics (B19): at bs=128/T=512 the
+        # N×N CKA matrices alone reached 17 GB and OOM-thrashed inside the
+        # swallow-all handlers, silently zeroing the metrics.
+        self.diag_max_rows = diag_max_rows
 
     @torch.no_grad()
     def compute(self, online_h, target_h, prev_target_h=None):
@@ -151,6 +160,21 @@ class CollapseDiagnostics(nn.Module):
 
         """
         metrics = {}
+        # Deterministic even-spaced row subsample bounds every downstream
+        # SVD/eigh/CKA cost while keeping metrics reproducible (no RNG).
+        n_rows = online_h.size(0) * online_h.size(1)
+        if n_rows > self.diag_max_rows:
+            idx = torch.linspace(0, n_rows - 1, self.diag_max_rows, device=online_h.device).long()
+            online_h = online_h.reshape(n_rows, -1)[idx].reshape(
+                1, self.diag_max_rows, online_h.size(-1)
+            )
+            target_h = target_h.reshape(n_rows, -1)[idx].reshape(
+                1, self.diag_max_rows, target_h.size(-1)
+            )
+            if prev_target_h is not None:
+                prev_target_h = prev_target_h.reshape(n_rows, -1)[idx].reshape(
+                    1, self.diag_max_rows, prev_target_h.size(-1)
+                )
         # Guard: std() on single-element tensors produces NaN (df=0)
         # Check tensor size before computing std to avoid PyTorch warnings
         if online_h.numel() > 1:

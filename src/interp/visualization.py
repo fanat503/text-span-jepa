@@ -157,7 +157,7 @@ def radar_chart(
 
     if output_path:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(svg)
     return svg
 
@@ -232,7 +232,7 @@ def layer_heatmap(
 
     if output_path:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(svg)
     return svg
 
@@ -356,7 +356,7 @@ def bar_chart_with_errors(
 
     if output_path:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(svg)
     return svg
 
@@ -446,7 +446,7 @@ def probing_complexity_curve(
 
     if output_path:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(svg)
     return svg
 
@@ -516,7 +516,7 @@ def convergence_plot(
 
     if output_path:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(svg)
     return svg
 
@@ -581,7 +581,7 @@ def ablation_comparison_chart(
     svg += _svg_footer()
     if output_path:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(svg)
     return svg
 
@@ -662,7 +662,7 @@ def scaling_law_plot(
     svg += _svg_footer()
     if output_path:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(svg)
     return svg
 
@@ -747,7 +747,7 @@ def robustness_curve(
     svg += _svg_footer()
     if output_path:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(svg)
     return svg
 
@@ -808,6 +808,6 @@ def information_plane(
     svg += _svg_footer()
     if output_path:
         Path(output_path).parent.mkdir(parents=True, exist_ok=True)
-        with open(output_path, "w") as f:
+        with open(output_path, "w", encoding="utf-8") as f:
             f.write(svg)
     return svg

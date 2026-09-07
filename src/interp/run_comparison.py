@@ -302,7 +302,7 @@ def run_full_comparison(
     results["summary"] = summary
 
     # Save results
-    with open(output_dir / "comparison_results.json", "w") as f:
+    with open(output_dir / "comparison_results.json", "w", encoding="utf-8") as f:
         json.dump(results, f, indent=2, default=str)
 
     # Generate human-readable summary
@@ -371,7 +371,7 @@ def generate_text_summary(results, output_dir):
     lines.append(f"  Models learn different:  {s.get('models_represent_different_things', '?')}")
 
     text = "\n".join(lines)
-    with open(output_dir / "summary.txt", "w") as f:
+    with open(output_dir / "summary.txt", "w", encoding="utf-8") as f:
         f.write(text)
     print(text)
 

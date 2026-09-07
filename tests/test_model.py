@@ -2064,7 +2064,7 @@ class TestV012Bugfixes:
         """defaults.yaml should have grad_accum_steps."""
         import yaml
 
-        with open("defaults.yaml") as f:
+        with open("defaults.yaml", encoding="utf-8") as f:
             cfg = yaml.safe_load(f)
         assert "grad_accum_steps" in cfg.get(
             "optimization",
