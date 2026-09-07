@@ -848,7 +848,7 @@ def _warn_unknown_config_keys(args):
         defaults_path = os.path.join(base, "defaults.yaml")
         if not os.path.exists(defaults_path):
             defaults_path = os.path.join(base, "..", "defaults.yaml")
-        with open(defaults_path) as f:
+        with open(defaults_path, encoding="utf-8") as f:
             known = yaml.safe_load(f)
     except Exception:
         return
@@ -981,7 +981,7 @@ def main(args):
 
     # Dump config
     dump_path = os.path.join(log_dir, "params-text-span-jepa.yaml")
-    with open(dump_path, "w") as f:
+    with open(dump_path, "w", encoding="utf-8") as f:
         yaml.dump(args, f)
 
     # CSV loss logger — I-JEPA pattern
@@ -1499,7 +1499,7 @@ if __name__ == "__main__":
     # come from defaults.yaml. Without this merge, ablation configs
     # are broken (missing embed_dim, encoder_depth, etc.).
     # I-JEPA / C-JEPA pattern: base config + experiment overrides.
-    with open(args.fname) as f:
+    with open(args.fname, encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
     if not args.no_defaults:
@@ -1510,7 +1510,7 @@ if __name__ == "__main__":
             # Try repo root
             defaults_path = os.path.join(script_dir, "..", "defaults.yaml")
         if os.path.exists(defaults_path):
-            with open(defaults_path) as f:
+            with open(defaults_path, encoding="utf-8") as f:
                 defaults = yaml.safe_load(f)
             config = _deep_merge(defaults, config)
 
