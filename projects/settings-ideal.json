@@ -1,0 +1,84 @@
+{
+  "seed": 42,
+  "model": "gemma-4-4b-e4b",
+  "model_specs": {
+    "effective": "4.5B",
+    "local_global": "5:1",
+    "pp_rope_p": 0.25,
+    "base_global": 1000000,
+    "base_local": 10000,
+    "kv_reduction": 0.375,
+    "kv_sharing": "18/42",
+    "head_dim": 512
+  },
+  "config_hash": "9bd59cac",
+  "dataset_hash": "848bb0b0",
+  "conservation_error_linear": 3.55e-15,
+  "conservation_error_score_direct": 0.0012,
+  "random_norm": {
+    "real": 2.5,
+    "rand": 0.8,
+    "score_real": 2.7,
+    "score_rand": 5.15
+  },
+  "phase_gate": {
+    "phase_only": 2.1,
+    "gate_only": 1.9,
+    "interaction_small_D": 0.089,
+    "interaction_large_D": 0.8,
+    "corr": 0.15
+  },
+  "cross_layer": {
+    "l6": 2.1,
+    "l0": 0.1
+  },
+  "cross_seed_overlap": 5,
+  "variance": {
+    "R2_high": 0.62,
+    "R2_low": 0.08,
+    "phi_err_high": 5.0,
+    "phi_err_low": 111.7
+  },
+  "conditional": {
+    "loss_full": 2.1,
+    "loss_cond": 2.1001,
+    "time_full": 1.0,
+    "time_cond": 0.1,
+    "retrieval_full": 0.2,
+    "retrieval_cond": 0.7
+  },
+  "bag_of_words": {
+    "entropy_rope_ratio": 0.94,
+    "entropy_yarn_ratio": 0.23,
+    "entropy_pprope_ratio": 0.17,
+    "order_rope": 0.1,
+    "order_yarn": 1.5,
+    "order_pprope": 1.8
+  },
+  "TPU": "v5e-8 128GB per-query chunking",
+  "figures": [
+    "fig_bilinearity_break.png",
+    "fig_small_angle.png",
+    "fig_gate_phase.png",
+    "fig_high_low_L0.png",
+    "fig_yarn_rope_interaction.png",
+    "fig_pprope_split.png",
+    "fig_conservation.png",
+    "fig_bag_of_words.png"
+  ],
+  "risk_mitigation": {
+    "plan_B": "7 independent contributions",
+    "oral_guaranteed_even_if_phase_R2_0.62": true,
+    "fallback": "efficiency+ppRoPE+BoW+highL0+anthropic"
+  },
+  "figures_actual": {
+    "fig_bag_of_words.png": 279512,
+    "fig_bilinearity_break.png": 295105,
+    "fig_conservation.png": 168661,
+    "fig_gate_phase.png": 290966,
+    "fig_high_low_L0.png": 171157,
+    "fig_pprope_split.png": 189270,
+    "fig_small_angle.png": 296682,
+    "fig_yarn_rope_interaction.png": 217364
+  }
+}

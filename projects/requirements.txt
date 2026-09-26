@@ -1,0 +1,11 @@
+torch==2.14.0
+transformer-lens==2.14.0
+nnsight==0.4.5
+numpy==1.26.4
+tqdm==4.66.1
+einops==0.8.0
+datasets==2.19.0
+transformers>=5.8.0  # Gemma4 pp-RoPE rope_parameters requires 5.8.0+, fallback gemma-2-2b proxy
+accelerate==0.33.0
+scikit-learn==1.5.1
+matplotlib==3.8.4

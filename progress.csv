@@ -1,0 +1,14 @@
+неделя,этап,тема_systems,тема_interpretability,главный_artifact,проверка,статус,score,retention_d1,retention_d7,retention_d21,retention_d60,заметки
+0,адаптация,"KV cache; batching; paging; parallelism","causal claims; probes; circuits","Карта baseline и foundational remediation","Micro-checkpoints",в_работе,,,,,,"Intro systems sequence paused after advanced recalibration. Ученик self-reports induction heads, lens methods including jLens, circuits and grokking. Current track: projects/frontier-01-nonlinear-qk-attribution.md — exact nonlinear/content-conditioned QK attribution, causal validation and paired base/HLA model diff. First gate: derivation + falsification design; scaffold only after review."
+1,основа,"FLOPs; memory; prefill vs decode","hooks; activation cache; residual stream","Instrumentable small Transformer","Недельный тест 01",не_начато,,,,,,
+2,основа,"serving workload; TTFT; TBT; throughput","logit lens; direct attribution","Генератор traces и metrics module","Недельный тест 02",не_начато,,,,,,
+3,inference,"static/dynamic/continuous batching","induction-head signatures","Discrete-event scheduler simulator","Недельный тест 03",не_начато,,,,,,
+4,inference,"Orca; admission; fairness; preemption","induction replication","Continuous batching mini-loop","Module exam A",не_начато,,,,,,
+5,memory,"paging; allocator; COW; refcounts","activation patching","KV block allocator с property tests","Недельный тест 05",не_начато,,,,,,
+6,memory,"PagedAttention; block tables; kernel indirection","path patching; negative controls","Toy PagedAttention и fragmentation benchmark","Недельный тест 06",не_начато,,,,,,
+7,чтение_code,"vLLM scheduler-to-kernel trace","IOI replication","Карта code и causal replication report","Недельный тест 07",не_начато,,,,,,
+8,inference,"chunked prefill; Sarathi-Serve; SLO","IOI stress tests","Token-budget scheduler и MiniServe v1","Module exam B",не_начато,,,,,,
+9,caching,"RadixAttention; prefix cache; eviction","toy superposition","Radix cache и replication superposition","Недельный тест 09",не_начато,,,,,,
+10,distributed,"collectives; DP/TP/PP/EP; 1F1B","SAE objective and basics","Pipeline simulator и tiny SAE","Недельный тест 10",не_начато,,,,,,
+11,distributed,"ZeroBubble; DualPipe; MoE all-to-all","SAE evaluation","DualPipe simulator и SAE evaluation notebook","Недельный тест 11",не_начато,,,,,,
+12,квалификационный,"serving integration and benchmark","causal replication with controls","MiniServe и research report на 4–6 страниц","Квалификационный project 1",не_начато,,,,,,
