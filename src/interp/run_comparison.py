@@ -26,22 +26,52 @@ from src.utils.torchio import safe_torch_load
 from src.utils.cka_metrics import linear_cka, rbf_cka
 
 
+def _full_model_state(ckpt, ckpt_path):
+    """Return the whole-module state_dict held by a checkpoint.
+
+    `src.train.save_checkpoint` writes `state["model"] = model.state_dict()` and
+    stores nothing per-submodule. That single shape is the only one accepted
+    here. The pre-`state_dict` format this function used to read named a
+    hand-picked list of tensors, so restoring it with `strict=False` left every
+    unnamed tensor at its initial value — on the toy fixture 26 of them, 14 of
+    them trainable parameters inside the optimizer. That partial restore is
+    exactly the resume divergence the current format removes, so a checkpoint
+    without `"model"` is refused by name instead of being half-read.
+    """
+    from src.train import CheckpointLoadError
+
+    if not isinstance(ckpt, dict) or "model" not in ckpt:
+        held = sorted(ckpt)[:8] if isinstance(ckpt, dict) else type(ckpt).__name__
+        raise CheckpointLoadError(
+            f"Checkpoint {ckpt_path} is not in the full-state_dict format written by "
+            f"src.train.save_checkpoint: expected a top-level 'model' key holding "
+            f"model.state_dict(), found {held}... . Refusing to load -- a partial "
+            f"restore would silently leave unlisted tensors at their initial values.",
+        )
+    return ckpt["model"]
+
+
 def load_model(ckpt_path, model_type="jepa", device="cpu"):
-    """Load model from checkpoint."""
+    """Load model from checkpoint.
+
+    `ckpt_path` must be a checkpoint written by `src.train.save_checkpoint`.
+    Every branch restores the same complete module with `strict=True`, so a
+    shape or architecture mismatch is loud rather than a partial restore.
+    """
+    if model_type not in ("jepa", "mlm", "data2vec"):
+        raise ValueError(f"Unknown model type: {model_type}")
+
+    ckpt = safe_torch_load(ckpt_path, map_location=device)
+    state = _full_model_state(ckpt, ckpt_path)
+
     if model_type == "jepa":
         from src.models.jepa import TextSpanJEPA, TextSpanJEPAConfig
 
-        ckpt = safe_torch_load(ckpt_path, map_location=device)
         config = TextSpanJEPAConfig()
         model = TextSpanJEPA(config)
-        model.encoder.load_state_dict(ckpt.get("encoder", {}))
-        model.target_encoder.load_state_dict(ckpt.get("target_encoder", {}))
-        model.predictor.load_state_dict(ckpt.get("predictor", {}))
-        model.decoder.load_state_dict(ckpt.get("decoder", {}))
     elif model_type == "mlm":
         from baselines.mlm_baseline import MLMBaseline
 
-        ckpt = safe_torch_load(ckpt_path, map_location=device)
         model = MLMBaseline(
             vocab_size=50304,
             max_seq_len=512,
@@ -49,11 +79,9 @@ def load_model(ckpt_path, model_type="jepa", device="cpu"):
             depth=12,
             num_heads=12,
         )
-        model.load_state_dict(ckpt.get("model", {}))
-    elif model_type == "data2vec":
+    else:  # data2vec
         from baselines.data2vec_baseline import Data2VecTextBaseline
 
-        ckpt = safe_torch_load(ckpt_path, map_location=device)
         model = Data2VecTextBaseline(
             vocab_size=50304,
             max_seq_len=512,
@@ -61,11 +89,12 @@ def load_model(ckpt_path, model_type="jepa", device="cpu"):
             depth=12,
             num_heads=12,
         )
-        model.encoder.load_state_dict(ckpt.get("encoder", {}))
-        model.target_encoder.load_state_dict(ckpt.get("target_encoder", {}))
-    else:
-        raise ValueError(f"Unknown model type: {model_type}")
 
+    # One call, one shape: encoder + target_encoder + predictor + decoder (+ the
+    # mechanism buffers and, for data2vec, the regression head) all arrive in
+    # `state`. The old per-module `.get()` reads missed every mechanism tensor
+    # and the data2vec regression head entirely.
+    model.load_state_dict(state, strict=True)
     model.to(device)
     model.eval()
     return model
