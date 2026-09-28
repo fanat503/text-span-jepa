@@ -829,11 +829,23 @@ def _build_optimization(args, model, model_name, model_cfg, device, ipe):
         final_wd=opt_cfg.get("final_weight_decay", 0.4),
         T_max=total_steps,
     )
-    # EMA schedule — only for JEPA models
+    # EMA schedule — only for JEPA models.
+    #
+    # Both fallbacks MUST equal the values defaults.yaml declares and the ones
+    # TextSpanJEPAConfig / EMATauSchedule already default to. A key missing on a
+    # `--no_defaults` run has to land on the same schedule as the merged run, or
+    # the two paths silently train different models.
+    #
+    # tau_end was `1.0`, which is not a placeholder. EMATauSchedule.step()
+    # returns exactly tau_end, so at tau == 1.0 update_target_encoder becomes
+    # mul_(1.0).add_(q, alpha=0.0) — a no-op. The target encoder never moves, and
+    # since the target IS the regression target, the run regresses onto a fixed
+    # random init. Guarded by tests/test_config_system.py::
+    # TestNoDeadKeys::test_trainer_ema_fallback_is_not_the_frozen_value.
     if model_name == "text_span_jepa":
         ema_scheduler = EMATauSchedule(
             tau_start=model_cfg.get("ema_tau_start", 0.996),
-            tau_end=model_cfg.get("ema_tau_end", 1.0),
+            tau_end=model_cfg.get("ema_tau_end", 0.9999),
             total_steps=total_steps,
         )
     else:
