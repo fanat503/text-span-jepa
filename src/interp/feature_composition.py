@@ -251,25 +251,70 @@ class FeatureInterferenceScore:
     If features are truly independent (disentangled), activating
     feature A should NOT affect feature B's activations.
 
-    Interference = |mean(z_B | activate A) - mean(z_B | baseline)|
+    Interference = |mean(z_B | activate A) - mean(z_B | control)|
     Low interference = features are independent = more interpretable
+
+    The control set is the exact complement of the treatment set: the samples
+    that are NOT among feature A's top-activating rows. Using the full dataset
+    as the baseline instead would put the treatment inside its own control,
+    which (a) drives the score to exactly zero whenever ``n_top >= N`` and
+    (b) otherwise attenuates it by ``n_top/N``, so the number would not be
+    comparable across datasets or across models scored with different ``N``.
 
     JEPA hypothesis: JEPA features have LOWER interference than MLM.
     """
 
     @staticmethod
+    def treated_control_split(act_vals, n_top):
+        """Split one feature's activations into disjoint treatment/control indices.
+
+        Treatment is the ``n_top`` most-activating samples, capped at ``N // 2``
+        so the control -- its exact complement -- is never empty. Without the
+        cap, ``n_top >= N`` makes the treatment the whole dataset and there is
+        no sample left to act as a control.
+
+        Args:
+            act_vals: (N,) activations of a single feature
+            n_top: requested number of top-activating treatment samples
+
+        Returns:
+            (treated_idx, control_idx): 1-D int64 index tensors, disjoint and
+            together covering all N rows.
+
+        """
+        N = act_vals.numel()
+        n_treated = min(int(n_top), N // 2)
+        if n_treated <= 0:
+            return (
+                torch.zeros(0, dtype=torch.long, device=act_vals.device),
+                torch.arange(N, device=act_vals.device),
+            )
+        treated_idx = act_vals.topk(n_treated).indices
+        control_mask = torch.ones(N, dtype=torch.bool, device=act_vals.device)
+        control_mask[treated_idx] = False
+        control_idx = control_mask.nonzero(as_tuple=True)[0]
+        return treated_idx, control_idx
+
+    @staticmethod
     @torch.no_grad()
-    def compute(sae, representations, n_features=50, n_top=100):
+    def compute(sae, representations, n_features=50, n_top=100, seed=0, return_indices=False):
         """Compute feature interference score.
 
         Args:
             sae: trained SparseAutoencoder
             representations: (N, D)
             n_features: number of features to test
-            n_top: number of top-activating samples per feature
+            n_top: number of top-activating samples per feature (the treatment
+                set; capped at N // 2 so the control set stays non-empty)
+            seed: seed for the feature subsample, drawn from a private
+                ``torch.Generator`` so the global RNG is never touched
+            return_indices: if True, also return the ``feature_idx`` subsample
+                and the per-feature ``treated_idx`` / ``control_idx`` lists that
+                were actually used, so the split can be audited
 
         Returns:
-            dict with interference metrics
+            dict with interference metrics, including ``n_treated`` and
+            ``n_control`` so the size of the split is visible to the reader
 
         """
         try:
@@ -277,45 +322,70 @@ class FeatureInterferenceScore:
             N, M = z.shape  # M = latent dim
 
             n_test = min(n_features, M)
-            feature_idx = torch.randperm(M)[:n_test]
+            # Private generator: nothing in src/interp/ may consume the
+            # process-global RNG, which is shared with the caller.
+            gen = torch.Generator().manual_seed(seed)
+            feature_idx = torch.randperm(M, generator=gen).to(z.device)[:n_test]
 
             interference_scores = []
+            splits = []
 
-            for fi in feature_idx:
-                # Find top-activating samples for feature fi
+            for fi in feature_idx.tolist():
+                # Find top-activating samples for feature fi, and the disjoint
+                # remainder that acts as the control for this feature.
                 act_vals = z[:, fi]
-                _, top_idx = act_vals.topk(min(n_top, N))
+                treated_idx, control_idx = FeatureInterferenceScore.treated_control_split(
+                    act_vals, n_top
+                )
+                if treated_idx.numel() == 0 or control_idx.numel() == 0:
+                    continue
 
                 # How much do other features change when fi is active?
-                z_active = z[top_idx]
-                z_baseline = z  # Full dataset
+                z_active = z[treated_idx]
+                z_control = z[control_idx]  # excludes every treated sample
 
-                # Mean activation of other features when fi is active vs baseline
+                # Mean activation of other features when fi is active vs control
                 other_idx = [j for j in range(M) if j != fi]
                 if not other_idx:
                     continue
                 other_idx_t = torch.tensor(other_idx)
 
                 active_other_mean = z_active[:, other_idx_t].mean(dim=0)
-                baseline_other_mean = z_baseline[:, other_idx_t].mean(dim=0)
+                control_other_mean = z_control[:, other_idx_t].mean(dim=0)
 
                 # Interference: how much other features shift
-                interference = (active_other_mean - baseline_other_mean).abs().mean().item()
+                interference = (active_other_mean - control_other_mean).abs().mean().item()
                 interference_scores.append(interference)
+                splits.append((treated_idx, control_idx))
 
             if not interference_scores:
-                return {"mean_interference": 0.0, "max_interference": 0.0}
+                return {
+                    "mean_interference": 0.0,
+                    "max_interference": 0.0,
+                    "n_features_tested": 0,
+                    "n_treated": 0,
+                    "n_control": 0,
+                }
 
-            return {
+            result = {
                 "mean_interference": sum(interference_scores) / len(interference_scores),
                 "max_interference": max(interference_scores),
                 "min_interference": min(interference_scores),
                 "n_features_tested": len(interference_scores),
+                "n_treated": int(splits[0][0].numel()),
+                "n_control": int(splits[0][1].numel()),
             }
+            if return_indices:
+                result["feature_idx"] = feature_idx.tolist()
+                result["treated_idx"] = [t.tolist() for t, _ in splits]
+                result["control_idx"] = [c.tolist() for _, c in splits]
+            return result
         except Exception:
             return {
                 "mean_interference": float("inf"),
                 "max_interference": float("inf"),
                 "min_interference": 0.0,
                 "n_features_tested": 0,
+                "n_treated": 0,
+                "n_control": 0,
             }
