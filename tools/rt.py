@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Bounded test runner.
 
 Every agent in this repo runs tests through this script. It exists because

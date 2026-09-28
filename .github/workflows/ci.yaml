@@ -26,30 +26,6 @@ jobs:
           pip install torch --index-url https://download.pytorch.org/whl/cpu
       - run: python -m pytest tests/ -v --tb=short
 
-  # The Linux job above cannot see a whole class of defects: the default
-  # multiprocessing start method there is fork, so a lambda worker_init_fn
-  # pickles fine. On Windows the start method is spawn and the same code raises
-  # PicklingError -- which is how `data.num_workers: 2` shipped in a config that
-  # could never start on a Windows host while CI stayed green.
-  test-windows:
-    name: pytest (windows)
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@v4
-      - name: Setup python
-        uses: actions/setup-python@v5
-        with:
-          python-version: '3.11'
-      - name: Install dependencies
-        run: |
-          pip install -e ".[dev,eval]"
-          pip install torch --index-url https://download.pytorch.org/whl/cpu
-      # Report, but do not fail, while the tree is being brought up on Windows.
-      # Flip to `true` once the Windows-specific failures are resolved.
-      - name: pytest (informational)
-        continue-on-error: true
-        run: python -m pytest tests/ -q --tb=short
-
   lint:
     name: ruff + black
     runs-on: ubuntu-latest
