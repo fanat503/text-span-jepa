@@ -17,6 +17,47 @@
 import math
 from pathlib import Path
 
+from src.interp.interpretability_index import METRIC_DEFINITIONS
+
+# Metrics that are NOT part of the Interpretability Index (they come straight
+# out of CollapseDiagnostics) but still have a known direction. Kept separate
+# and explicit on purpose: this list used to be a second, silently diverging
+# copy of METRIC_DEFINITIONS that omitted total_correlation, intrinsic_dim,
+# intrinsic_dim_score and probing_complexity, so a chart could invert a metric
+# the index scored the other way. Direction for every indexed metric now comes
+# from METRIC_DEFINITIONS via metric_direction() below.
+NON_INDEX_LOWER_IS_BETTER = frozenset(
+    {
+        "coherence",
+        "condition_number",
+        "interference_ratio",
+        "cv",
+    }
+)
+
+
+def metric_direction(name):
+    """Direction of a metric: ``"higher"`` or ``"lower"`` is better.
+
+    Exact key lookup, no substring guessing. The previous
+    ``any(k in name for k in lower_is_better)`` inverted any metric whose name
+    merely *contained* a lower-is-better token, so ``cv_effective_dim`` was
+    inverted by the ``"cv"`` entry and a chart could disagree with the index.
+
+    Args:
+        name: metric name.
+
+    Returns:
+        "higher" or "lower". Unknown metrics default to "higher".
+
+    """
+    defn = METRIC_DEFINITIONS.get(name)
+    if defn is not None:
+        return defn["direction"]
+    if name in NON_INDEX_LOWER_IS_BETTER:
+        return "lower"
+    return "higher"
+
 
 def _svg_header(width=800, height=600):
     return f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">\n'
@@ -77,20 +118,9 @@ def radar_chart(
     if n < 3:
         return None
 
-    # Normalize to [0, 1] — higher = better
-    # For metrics where lower is better, invert
-    lower_is_better = {
-        "anisotropy",
-        "collapsed_dim_ratio",
-        "mean_pairwise_cosine",
-        "coherence",
-        "condition_number",
-        "total_compression",
-        "mean_psi",
-        "interference_ratio",
-        "cv",
-    }
-
+    # Normalize to [0, 1] — higher = better.
+    # Direction comes from the single source of truth in
+    # interpretability_index.METRIC_DEFINITIONS, not from a local copy.
     all_vals = []
     for name in names:
         all_vals.extend([metrics[name], baseline_metrics[name]])
@@ -99,7 +129,7 @@ def radar_chart(
 
     def norm(name, val):
         v = abs(val) / max_val
-        if name in lower_is_better or any(k in name for k in lower_is_better):
+        if metric_direction(name) == "lower":
             v = 1.0 - v
         return max(0, min(1, v))
 

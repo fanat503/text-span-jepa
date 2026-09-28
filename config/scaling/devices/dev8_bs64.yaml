@@ -1,0 +1,41 @@
+# Fixed model size, 8 devices: micro-batch 64, global effective batch 512.
+#
+# `config/scaling/` holds two families and they answer different questions:
+#
+#   config/scaling/*.yaml     CAPACITY ladder. Model size varies; the effective
+#                             batch, the schedule and the mechanism set are
+#                             held fixed. Answers "what does width/depth buy".
+#   config/scaling/devices/*.yaml THROUGHPUT ladder. Model size is pinned to the
+#                             defaults.yaml reference shape; the per-device
+#                             micro-batch is the sweep axis. Answers "what does
+#                             a wider machine buy".
+#
+# `optimization.grad_accum_steps` is pinned to 1 across the family, so the
+# global effective batch stays at 512 sequences (262,144 tokens) and therefore
+# the number of optimizer steps per epoch stays identical. Only the number of
+# devices the micro-batch is split across changes, so a run measures scaling
+# efficiency and nothing else.
+#
+# Device count is a LAUNCHER argument, not a config key: the TPU/DDP side of
+# this repo is not built yet and this file deliberately does not invent a flag
+# for it. Invoke with whatever your launcher takes, e.g.
+#   torchrun --nproc_per_node=8 -m src.train --fname config/scaling/devices/dev8_bs64.yaml
+# `data.batch_size` is the PER-DEVICE micro-batch: 8 x 64 = 512. At this rung
+# the per-device micro-batch is 64, which is the reference `data.batch_size`, so
+# this file restates nothing for the batch and changes only the accumulation —
+# an honest no-op would have left the global batch at 64 x 8.
+#
+# Guard: TestFixedSizeDistributedFamily
+
+_meta:
+  config: devices_dev8_bs64
+  devices: 8
+  per_device_micro_batch: 64
+  global_effective_batch: 512
+  note: "model size fixed at the defaults.yaml reference shape; only the per-device micro-batch varies across this family"
+
+optimization:
+  grad_accum_steps: 1
+
+logging:
+  folder: output/scaling/devices/dev8-bs64/

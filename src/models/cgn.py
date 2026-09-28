@@ -126,8 +126,10 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from ._state_guard import TrainingStateGuard
 
-class ContextualGatingNetwork(nn.Module):
+
+class ContextualGatingNetwork(TrainingStateGuard):
     """Contextual Gating Network — position-aware information routing.
 
     Learns different gating patterns for masked vs. visible positions,
@@ -202,6 +204,20 @@ class ContextualGatingNetwork(nn.Module):
         )
         return max(tau, self.min_gate)  # tau > 0 for Gumbel-Softmax
 
+    def _gumbel_softmax_probs(self, logits, tau):
+        """Stochastic (Gumbel-Softmax) gate probabilities.
+
+        TRAINING ONLY. This is the single RNG consumer in CGN: the
+        ``torch.rand_like`` draw must not happen under ``eval()``,
+        otherwise a validation pass would consume the global torch RNG
+        and eval-mode gate values would depend on global RNG position
+        (TrainingStateGuard).
+        """
+        # Gumbel-Softmax: differentiable approximation to categorical
+        gumbel_noise = -torch.log(-torch.log(torch.rand_like(logits) + 1e-20) + 1e-20)
+        perturbed = (logits + gumbel_noise) / max(tau, 1e-6)
+        return F.softmax(perturbed, dim=-1)
+
     def _compute_gate_probs(self, logits, tau):
         """Compute Gumbel-Softmax gate probabilities.
 
@@ -214,15 +230,9 @@ class ContextualGatingNetwork(nn.Module):
 
         """
         if self.training and tau > 0:
-            # Gumbel-Softmax: differentiable approximation to categorical
-            gumbel_noise = -torch.log(-torch.log(torch.rand_like(logits) + 1e-20) + 1e-20)
-            perturbed = (logits + gumbel_noise) / max(tau, 1e-6)
-            probs = F.softmax(perturbed, dim=-1)
-        else:
-            # Hard gating at inference
-            probs = F.softmax(logits / max(tau, 1e-6), dim=-1)
-
-        return probs
+            return self._mutate_state(self._gumbel_softmax_probs, logits, tau)
+        # Hard gating at inference
+        return F.softmax(logits / max(tau, 1e-6), dim=-1)
 
     def forward(self, z, mask_positions, step=None):
         """Apply contextual gating to representations.
@@ -243,8 +253,8 @@ class ContextualGatingNetwork(nn.Module):
         # Update step counter
         # Advance the anneal counter ONLY during training: validation-time
         # forwards used to regress tau back toward tau_start (audit R18).
-        if step is not None and self.training:
-            self.total_steps.fill_(step)
+        if step is not None:
+            self._mutate_state(self.total_steps.fill_, step)
 
         # Compute gate probabilities for visible and masked positions
         probs_visible = self._compute_gate_probs(self.gate_logits_visible, tau)

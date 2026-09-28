@@ -126,10 +126,11 @@
 import math
 
 import torch
-from torch import nn
+
+from ._state_guard import TrainingStateGuard
 
 
-class WorkspaceSyncDrift(nn.Module):
+class WorkspaceSyncDrift(TrainingStateGuard):
     """Workspace-Target Synchronization Drift.
 
     Monitors the Grassmann distance between the JAWP workspace Q
@@ -232,12 +233,13 @@ class WorkspaceSyncDrift(nn.Module):
         # Periodic resync — AT MOST ONCE PER STEP: with CMC the drift is
         # evaluated twice per iteration, and a second in-place resync would
         # invalidate tensors saved by the first pass's autograd graph
-        # (audit R18).
+        # (audit R18). Guarded: under eval() a validation pass must not
+        # refresh the target workspace (TrainingStateGuard).
         if h_target is not None and step % self.sync_interval == 0 and prev_step != step:
-            self.update_target_cov(h_target)
-            self.resync_target_workspace()
+            self._mutate_state(self.update_target_cov, h_target)
+            self._mutate_state(self.resync_target_workspace)
 
-        self.step_count.fill_(step)
+        self._mutate_state(self.step_count.fill_, step)
 
         Q_jawp = Q_workspace[:, :k]  # (D, k)
         Q_tgt = self.target_Q[:, :k]  # (D, k)
@@ -256,7 +258,9 @@ class WorkspaceSyncDrift(nn.Module):
         drift_loss = (2.0 * k - 2.0 * cross_frob_sq_diff).clamp(min=0.0)
 
         # Running average
-        self.running_drift.mul_(0.99).add_(0.01 * drift.item())
+        self._mutate_state(
+            lambda: self.running_drift.mul_(0.99).add_(0.01 * drift.item()),
+        )
 
         # Diagnostics
         with torch.no_grad():

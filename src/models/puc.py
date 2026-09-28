@@ -35,10 +35,11 @@ from typing import Any
 
 import torch
 import torch.nn.functional as F
-from torch import nn
+
+from ._state_guard import TrainingStateGuard
 
 
-class PredictionUncertaintyCalibration(nn.Module):
+class PredictionUncertaintyCalibration(TrainingStateGuard):
     """Prediction Uncertainty Calibration via minimum entropy regularization.
 
     Prevents predictor overconfidence by maintaining non-degenerate
@@ -107,7 +108,18 @@ class PredictionUncertaintyCalibration(nn.Module):
             self._orthogonalize_projections()
 
     def _orthogonalize_projections(self):
-        """Gram-Schmidt orthogonalization of projection vectors."""
+        """Gram-Schmidt orthogonalization of projection vectors.
+
+        .. warning::
+           A degenerate row is re-seeded with
+           ``torch.randn_like`` (line below), i.e. it consumes the global
+           torch RNG.  The branch is only reachable from a row whose norm
+           collapsed below 1e-8, but when it *is* reachable it makes the
+           run depend on global RNG position.  The training loop never
+           seeds between steps, so the practical risk is low; it is
+           pinned by ``tests/test_training_state_guards.py`` that eval()
+           cannot reach it.
+        """
         V = self.proj_vectors.data  # (n_comp, D)
         for i in range(self.n_components):
             for j in range(i):
@@ -118,6 +130,61 @@ class PredictionUncertaintyCalibration(nn.Module):
             else:
                 V[i] = torch.randn_like(V[i])
                 V[i] /= V[i].norm()
+
+    def _update_oja_state(self, z_flat: torch.Tensor, step: int) -> None:
+        """Advance the Oja power iteration for this batch (training only).
+
+        Cadence note: the Gram-Schmidt re-orthogonalization is keyed off
+        ``step % 100 == 0``, NOT off an internal counter, so it is
+        coupled to the resume point — a checkpoint restored at step 137
+        re-orthogonalizes at the next 200-boundary rather than 137 steps
+        later.  Pinned by ``tests/test_training_state_guards.py``.
+        """
+        N = z_flat.size(0)
+
+        # Update running mean
+        batch_mean = z_flat.mean(dim=0)
+        self.running_mean.mul_(self.ema_beta).add_((1 - self.ema_beta) * batch_mean)
+
+        # Center the data
+        z_centered = z_flat - self.running_mean  # (N, D)
+
+        # Project onto current projection vectors
+        projections = z_centered @ self.proj_vectors.T  # (N, n_comp)
+
+        # Estimate eigenvalues as variance of projections
+        batch_eigenvalues = projections.var(dim=0)  # (n_comp,)
+
+        # Update running eigenvalues
+        self.running_eigenvalues.mul_(self.ema_beta).add_(
+            (1 - self.ema_beta) * batch_eigenvalues,
+        )
+
+        # Oja's rule: update projection vectors toward eigenvectors
+        # dV_i/dt = (I - VV^T) * Cov * V_i  (approximated with batch)
+        for i in range(self.n_components):
+            # Gradient: Cov @ v_i ≈ (1/N) * Z^T @ (Z @ v_i)
+            proj_i = projections[:, i]  # (N,)
+            cov_v = (z_centered.T @ proj_i) / N  # (D,)
+
+            # Subtract projections onto other vectors (Gram-Schmidt)
+            for j in range(self.n_components):
+                if j != i:
+                    cov_v -= torch.dot(cov_v, self.proj_vectors[j]) * self.proj_vectors[j]
+
+            # Oja update with small learning rate
+            oja_lr = 1e-3
+            self.proj_vectors[i].add_(oja_lr * cov_v)
+
+        # Re-orthogonalize periodically
+        if step % 100 == 0:
+            self._orthogonalize_projections()
+
+    def _update_running_diagnostics(self, estimated_entropy: float, overconfidence: float) -> None:
+        """EMA the reported entropy / overconfidence."""
+        self.running_entropy.mul_(0.99).add_(0.01 * estimated_entropy)
+        self.running_overconfidence.mul_(0.99).add_(0.01 * overconfidence)
+        self.total_steps.add_(1)
 
     def forward(
         self,
@@ -148,44 +215,12 @@ class PredictionUncertaintyCalibration(nn.Module):
             return zero, {"puc_loss": 0.0, "puc_warmup": True, "puc_warmup_factor": warmup_factor}
 
         # --- Online covariance eigenvalue estimation via Oja's rule ---
+        # Training only: the Oja state is a running estimate, not a cache
+        # of this batch, so under eval() the loss is computed from the
+        # frozen training estimate rather than from validation data
+        # (TrainingStateGuard).
         with torch.no_grad():
-            # Update running mean
-            batch_mean = z_flat.mean(dim=0)
-            self.running_mean.mul_(self.ema_beta).add_((1 - self.ema_beta) * batch_mean)
-
-            # Center the data
-            z_centered = z_flat - self.running_mean  # (N, D)
-
-            # Project onto current projection vectors
-            projections = z_centered @ self.proj_vectors.T  # (N, n_comp)
-
-            # Estimate eigenvalues as variance of projections
-            batch_eigenvalues = projections.var(dim=0)  # (n_comp,)
-
-            # Update running eigenvalues
-            self.running_eigenvalues.mul_(self.ema_beta).add_(
-                (1 - self.ema_beta) * batch_eigenvalues,
-            )
-
-            # Oja's rule: update projection vectors toward eigenvectors
-            # dV_i/dt = (I - VV^T) * Cov * V_i  (approximated with batch)
-            for i in range(self.n_components):
-                # Gradient: Cov @ v_i ≈ (1/N) * Z^T @ (Z @ v_i)
-                proj_i = projections[:, i]  # (N,)
-                cov_v = (z_centered.T @ proj_i) / N  # (D,)
-
-                # Subtract projections onto other vectors (Gram-Schmidt)
-                for j in range(self.n_components):
-                    if j != i:
-                        cov_v -= torch.dot(cov_v, self.proj_vectors[j]) * self.proj_vectors[j]
-
-                # Oja update with small learning rate
-                oja_lr = 1e-3
-                self.proj_vectors[i].add_(oja_lr * cov_v)
-
-            # Re-orthogonalize periodically
-            if step % 100 == 0:
-                self._orthogonalize_projections()
+            self._mutate_state(self._update_oja_state, z_flat, step)
 
         # --- Compute entropy from eigenvalues ---
         if self.use_differentiable_entropy:
@@ -241,14 +276,19 @@ class PredictionUncertaintyCalibration(nn.Module):
             final_loss = torch.tensor(0.0, device=z_pred.device)
 
         # --- Diagnostics ---
+        # The instantaneous overconfidence is a pure function of this
+        # batch and is always reported; only the persistent EMAs are
+        # training-only (TrainingStateGuard).
+        overconfidence = max(
+            0.0,
+            (self.target_entropy - estimated_entropy) / (self.target_entropy + 1e-8),
+        )
         with torch.no_grad():
-            self.running_entropy.mul_(0.99).add_(0.01 * estimated_entropy)
-            overconfidence = max(
-                0.0,
-                (self.target_entropy - estimated_entropy) / (self.target_entropy + 1e-8),
+            self._mutate_state(
+                self._update_running_diagnostics,
+                estimated_entropy,
+                overconfidence,
             )
-            self.running_overconfidence.mul_(0.99).add_(0.01 * overconfidence)
-            self.total_steps.add_(1)
 
         info = {
             "puc_loss": final_loss.item() if torch.is_tensor(final_loss) else final_loss,

@@ -10,8 +10,11 @@
 #   - checkpoint saving/loading pattern (I-JEPA train.py save_checkpoint)
 #   - AverageMeter, CSVLogger (I-JEPA src/utils/logging.py)
 
+import functools
+import importlib.util
 import logging
 import os
+import random
 import sys
 import time
 
@@ -78,6 +81,121 @@ def _normalize_model_name(raw_name):
 # ═══════════════════════════════════════════════════════════════════
 
 
+class CheckpointLoadError(RuntimeError):
+    """Raised when a checkpoint cannot be loaded into the given model.
+
+    Deliberately fatal. The previous implementation wrapped the whole load in
+    `except Exception` and returned `(0, 0, 0, 0, None)`, which turned a corrupt
+    or wrong-architecture checkpoint into "train from step 0" — and the run then
+    overwrote the good `checkpoint-latest.pth.tar` with a step-0 model. A
+    checkpoint the loader cannot understand is a stop-the-line event.
+    """
+
+
+def _capture_rng_state():
+    """Snapshot every random stream that training consumes.
+
+    Without this, a resume is a different experiment: mask sampling
+    (`src/masks/span.py` draws from `np.random`), DropPath, the CGN Gumbel,
+    CMC's second mask and the data-shuffle stream all restart from scratch.
+    Measured on the toy fixture before the fix: the first post-resume loss was
+    29.6% away from the uninterrupted run.
+
+    The numpy state is stored as plain Python ints rather than its native
+    5-tuple, because the native form contains an `ndarray` whose
+    `numpy._core.multiarray._reconstruct` GLOBAL is *not* in torch's
+    `weights_only` allowlist — storing it raw makes the whole checkpoint
+    unloadable under the strict loader.
+    """
+    name, keys, pos, has_gauss, cached = np.random.get_state()
+    state = {
+        "python_random": random.getstate(),
+        "numpy": (name, [int(k) for k in keys], int(pos), int(has_gauss), float(cached)),
+        "torch": torch.get_rng_state(),
+    }
+    if torch.cuda.is_available():
+        state["cuda"] = torch.cuda.get_rng_state_all()
+    return state
+
+
+def _restore_rng_state(state):
+    """Inverse of `_capture_rng_state`.
+
+    A missing key is a no-op rather than an error: a checkpoint written before
+    this fix simply has no `rng_state` entry and is still readable.
+    """
+    if not state:
+        return
+    if "python_random" in state:
+        random.setstate(state["python_random"])
+    if "numpy" in state:
+        name, keys, pos, has_gauss, cached = state["numpy"]
+        np.random.set_state(
+            (name, np.array(keys, dtype=np.uint32), int(pos), int(has_gauss), float(cached)),
+        )
+    if "torch" in state:
+        torch.set_rng_state(state["torch"])
+    if "cuda" in state and torch.cuda.is_available():
+        torch.cuda.set_rng_state_all(state["cuda"])
+
+
+def _scheduler_state(scheduler):
+    """Portable snapshot of a schedule's position.
+
+    The three schedules in `src/utils/schedulers.py` predate `state_dict()` —
+    they are plain classes holding a `_step` counter — so this falls back to the
+    instance attributes that are not the optimizer reference. A
+    `torch.optim.lr_scheduler` object takes the `state_dict()` branch.
+    """
+    if scheduler is None:
+        return None
+    if hasattr(scheduler, "state_dict"):
+        return scheduler.state_dict()
+    return {k: v for k, v in vars(scheduler).items() if k != "optimizer"}
+
+
+def _load_scheduler_state(scheduler, state):
+    """Inverse of `_scheduler_state`. Returns True when the state was applied."""
+    if scheduler is None or not state:
+        return False
+    if hasattr(scheduler, "load_state_dict") and hasattr(scheduler, "state_dict"):
+        scheduler.load_state_dict(state)
+        return True
+    applied = False
+    for key, value in state.items():
+        if hasattr(scheduler, key):
+            setattr(scheduler, key, value)
+            applied = True
+    return applied
+
+
+def _mechanism_extras(model):
+    """Collect `checkpoint_dict()` payloads from mechanisms that provide one.
+
+    `src/models/rdc.py` and `src/models/puc.py` already implement complete
+    `checkpoint_dict()` / `load_checkpoint()` pairs covering buffers that the
+    hand-rolled key list in this file never mentioned
+    (`rdc.running_ortho_drift_norm`, `rdc.running_workspace_drift_norm`,
+    `puc.running_entropy`, `puc.running_overconfidence`). All of them are also
+    registered buffers, so `model.state_dict()` already carries them; storing
+    the helper output as well means a future field added to a mechanism helper
+    is checkpointed without touching this file.
+    """
+    extras = {}
+    for name in ("rdc", "puc"):
+        mech = getattr(model, name, None)
+        if mech is not None and hasattr(mech, "checkpoint_dict"):
+            extras[name] = mech.checkpoint_dict()
+    return extras
+
+
+def _restore_mechanism_extras(model, extras):
+    for name, payload in (extras or {}).items():
+        mech = getattr(model, name, None)
+        if mech is not None and hasattr(mech, "load_checkpoint"):
+            mech.load_checkpoint(payload)
+
+
 def save_checkpoint(
     path,
     model,
@@ -89,311 +207,203 @@ def save_checkpoint(
     mask_step=0,
     extra_state=None,
     model_name="text_span_jepa",
+    schedulers=None,
 ):
     """Save complete training state for resumption — all model types.
 
     Handles JEPA (encoder + predictor + target_encoder + decoder),
     MLM (encoder + mlm_head), and data2vec (encoder + target_encoder + regression_head).
+
+    Fidelity contract — a resume must be indistinguishable from an uninterrupted
+    run, so the payload carries:
+
+    * `model.state_dict()`: the *whole* module, not a hand-enumerated list of
+      48 keys. The enumeration silently dropped 26 tensors on the toy fixture
+      (14 of them trainable parameters) because nobody remembered to update it
+      when a mechanism grew a tensor.
+    * `optimizer.state_dict()`: already includes `param_groups`, so the live LR
+      and weight decay survive.
+    * `rng_state`: python `random`, numpy and torch streams (plus CUDA).
+    * `schedulers`: LR / weight-decay / EMA-tau positions, so a resume need not
+      replay `global_step` scheduler calls — which was only exact when `epochs`
+      was unchanged, and is O(global_step) wasted work besides.
+    * `mechanism_extras`: `rdc.checkpoint_dict()` / `puc.checkpoint_dict()`.
     """
     model_name = _normalize_model_name(model_name)
     state = {
         "model_name": model_name,
+        "model": model.state_dict(),
         "opt": optimizer.state_dict(),
         "epoch": epoch,
         "global_step": global_step,
         "ema_step": ema_step,
         "mask_step": mask_step,
+        "rng_state": _capture_rng_state(),
     }
     if scaler is not None:
         state["scaler"] = scaler.state_dict()
 
     if model_name == "text_span_jepa":
-        state["encoder"] = model.encoder.state_dict()
-        state["predictor"] = model.predictor.state_dict()
-        state["target_encoder"] = model.target_encoder.state_dict()
-        state["decoder"] = model.decoder.state_dict()
-        if hasattr(model, "target_centering"):
-            state["target_centering_center"] = model.target_centering.center.clone()
-        # JAWP workspace Q — must be saved for resumption
-        if model_name == "text_span_jepa" and hasattr(model, "jawp") and model.jawp is not None:
-            state["jawp_workspace_Q"] = model.jawp.workspace_Q.data.clone()
-            state["jawp_active_k"] = model.jawp.active_k.clone()
-        # CGN gate logits — must be saved for resumption
-        if model_name == "text_span_jepa" and hasattr(model, "cgn") and model.cgn is not None:
-            state["cgn_gate_logits_visible"] = model.cgn.gate_logits_visible.data.clone()
-            state["cgn_total_steps"] = model.cgn.total_steps.clone()
-        # PCR projection Q — must be saved for resumption
-        if model_name == "text_span_jepa" and hasattr(model, "pcr") and model.pcr is not None:
-            state["pcr_workspace_Q"] = model.pcr.workspace_Q.data.clone()
-            state["pcr_level_gates"] = [g.data.clone() for g in model.pcr.level_gates]
-        # SPC frequency basis and band weights — must be saved for resumption
-        if model_name == "text_span_jepa" and hasattr(model, "spc") and model.spc is not None:
-            state["spc_freq_basis"] = model.spc.freq_basis.data.clone()
-            state["spc_log_band_weights"] = model.spc.log_band_weights.data.clone()
-            state["spc_running_residual_vars"] = model.spc.running_residual_vars.clone()
-            state["spc_running_predictability"] = model.spc.running_predictability.clone()
-        # WSD running statistics — must be saved for resumption
-        if model_name == "text_span_jepa" and hasattr(model, "wsd") and model.wsd is not None:
-            state["wsd_running_drift"] = model.wsd.running_drift.clone()
-            state["wsd_is_initialized"] = model.wsd.is_initialized.clone()
-            state["wsd_step_count"] = model.wsd.step_count.clone()
-        # CMC running statistics — must be saved for resumption
-        if model_name == "text_span_jepa" and hasattr(model, "cmc") and model.cmc is not None:
-            state["cmc_running_consistency"] = model.cmc.running_consistency.clone()
-            state["cmc_running_overlap_ratio"] = model.cmc.running_overlap_ratio.clone()
-            state["cmc_total_cmc_steps"] = model.cmc.total_cmc_steps.clone()
-        # GAC running statistics — must be saved for resumption
-        if model_name == "text_span_jepa" and hasattr(model, "gac") and model.gac is not None:
-            state["gac_running_grad_norms"] = model.gac.running_grad_norms.clone()
-            state["gac_running_starved_fraction"] = model.gac.running_starved_fraction.clone()
-            state["gac_total_gac_steps"] = model.gac.total_gac_steps.clone()
-        # STA running statistics — must be saved for resumption
-        if model_name == "text_span_jepa" and hasattr(model, "sta") and model.sta is not None:
-            state["sta_running_w1"] = model.sta.running_w1.clone()
-            state["sta_running_spectral_gap"] = model.sta.running_spectral_gap.clone()
-            state["sta_is_initialized"] = model.sta.is_initialized.clone()
-            state["sta_step_count"] = model.sta.step_count.clone()
-        # PUC running statistics — must be saved for resumption
-        if model_name == "text_span_jepa" and hasattr(model, "puc") and model.puc is not None:
-            state["puc_running_mean"] = model.puc.running_mean.clone()
-            state["puc_running_eigenvalues"] = model.puc.running_eigenvalues.clone()
-            state["puc_proj_vectors"] = model.puc.proj_vectors.clone()
-            state["puc_total_steps"] = model.puc.total_steps.clone()
-        # RDC running statistics — must be saved for resumption
-        if model_name == "text_span_jepa" and hasattr(model, "rdc") and model.rdc is not None:
-            state["rdc_z_previous"] = model.rdc.z_previous.clone()
-            state["rdc_workspace_Q"] = model.rdc.workspace_Q.clone()
-            state["rdc_running_drift_norm"] = model.rdc.running_drift_norm.clone()
-            state["rdc_running_drift_ratio"] = model.rdc.running_drift_ratio.clone()
-            state["rdc_total_steps"] = model.rdc.total_steps.clone()
-        # WSR running statistics — must be saved for resumption
-        if model_name == "text_span_jepa" and hasattr(model, "wsr") and model.wsr is not None:
-            state["wsr_running_sharpness"] = model.wsr.running_sharpness.clone()
-            state["wsr_running_spectral_sharpness"] = model.wsr.running_spectral_sharpness.clone()
-            state["wsr_running_directional_sharpness"] = (
-                model.wsr.running_directional_sharpness.clone()
-            )
-            state["wsr_running_grad_norm"] = model.wsr.running_grad_norm.clone()
-            state["wsr_total_steps"] = model.wsr.total_steps.clone()
-    elif model_name == "mlm":
-        state["encoder"] = model.encoder.state_dict()
-        state["mlm_head"] = model.mlm_head.state_dict()
-    elif model_name == "data2vec":
-        state["encoder"] = model.encoder.state_dict()
-        state["target_encoder"] = model.target_encoder.state_dict()
-        state["regression_head"] = model.regression_head.state_dict()
-        if hasattr(model, "num_updates"):
-            state["num_updates"] = model.num_updates
+        state["mechanism_extras"] = _mechanism_extras(model)
+    elif model_name == "data2vec" and hasattr(model, "num_updates"):
+        state["num_updates"] = model.num_updates
+
+    if schedulers:
+        saved = {name: _scheduler_state(s) for name, s in schedulers.items()}
+        state["schedulers"] = {k: v for k, v in saved.items() if v is not None}
 
     if extra_state is not None:
         state["extra"] = extra_state
     torch.save(state, path)
 
 
-def load_checkpoint(path, model, optimizer, scaler, model_name="text_span_jepa"):
+def _load_legacy_jepa_state(model, checkpoint):
+    """Restore a pre-`state_dict` checkpoint (the old 48-key hand-rolled format).
+
+    Kept so a checkpoint written by an earlier commit of this repo can still be
+    read. It is lossy by construction — every tensor it never named is gone,
+    including `sta.ref_cov`, `wsd.target_cov` and `puc.running_entropy` — which
+    is exactly why new writes use `model.state_dict()`.
+    """
+    model.encoder.load_state_dict(checkpoint["encoder"])
+    model.predictor.load_state_dict(checkpoint["predictor"])
+    model.target_encoder.load_state_dict(checkpoint["target_encoder"])
+    model.decoder.load_state_dict(checkpoint["decoder"])
+    if "target_centering_center" in checkpoint and hasattr(model, "target_centering"):
+        model.target_centering.center.copy_(checkpoint["target_centering_center"])
+
+    # (checkpoint key, dotted attribute path, needs .data indirection)
+    tensor_paths = [
+        ("jawp_workspace_Q", "jawp.workspace_Q", True),
+        ("jawp_active_k", "jawp.active_k", False),
+        ("cgn_gate_logits_visible", "cgn.gate_logits_visible", True),
+        ("cgn_total_steps", "cgn.total_steps", False),
+        ("pcr_workspace_Q", "pcr.workspace_Q", True),
+        ("spc_freq_basis", "spc.freq_basis", True),
+        ("spc_log_band_weights", "spc.log_band_weights", True),
+        ("spc_running_residual_vars", "spc.running_residual_vars", False),
+        ("spc_running_predictability", "spc.running_predictability", False),
+        ("wsd_running_drift", "wsd.running_drift", False),
+        ("wsd_is_initialized", "wsd.is_initialized", False),
+        ("wsd_step_count", "wsd.step_count", False),
+        ("cmc_running_consistency", "cmc.running_consistency", False),
+        ("cmc_running_overlap_ratio", "cmc.running_overlap_ratio", False),
+        ("cmc_total_cmc_steps", "cmc.total_cmc_steps", False),
+        ("gac_running_grad_norms", "gac.running_grad_norms", False),
+        ("gac_running_starved_fraction", "gac.running_starved_fraction", False),
+        ("gac_total_gac_steps", "gac.total_gac_steps", False),
+        ("sta_running_w1", "sta.running_w1", False),
+        ("sta_running_spectral_gap", "sta.running_spectral_gap", False),
+        ("sta_is_initialized", "sta.is_initialized", False),
+        ("sta_step_count", "sta.step_count", False),
+        ("puc_running_mean", "puc.running_mean", False),
+        ("puc_running_eigenvalues", "puc.running_eigenvalues", False),
+        ("puc_proj_vectors", "puc.proj_vectors", False),
+        ("puc_total_steps", "puc.total_steps", False),
+        ("rdc_z_previous", "rdc.z_previous", False),
+        ("rdc_workspace_Q", "rdc.workspace_Q", False),
+        ("rdc_running_drift_norm", "rdc.running_drift_norm", False),
+        ("rdc_running_drift_ratio", "rdc.running_drift_ratio", False),
+        ("rdc_total_steps", "rdc.total_steps", False),
+        ("wsr_running_sharpness", "wsr.running_sharpness", False),
+        ("wsr_running_spectral_sharpness", "wsr.running_spectral_sharpness", False),
+        (
+            "wsr_running_directional_sharpness",
+            "wsr.running_directional_sharpness",
+            False,
+        ),
+        ("wsr_running_grad_norm", "wsr.running_grad_norm", False),
+        ("wsr_total_steps", "wsr.total_steps", False),
+    ]
+    for key, path, is_param in tensor_paths:
+        if key not in checkpoint:
+            continue
+        target = model
+        parts = path.split(".")
+        for part in parts[:-1]:
+            target = getattr(target, part, None)
+            if target is None:
+                break
+        if target is None:
+            continue
+        leaf = getattr(target, parts[-1], None)
+        if leaf is None:
+            continue
+        (leaf.data if is_param else leaf).copy_(checkpoint[key])
+
+    if "pcr_level_gates" in checkpoint and getattr(model, "pcr", None) is not None:
+        for i, gate in enumerate(checkpoint["pcr_level_gates"]):
+            if i < len(model.pcr.level_gates):
+                model.pcr.level_gates[i].data.copy_(gate)
+
+
+def load_checkpoint(
+    path,
+    model,
+    optimizer,
+    scaler,
+    model_name="text_span_jepa",
+    schedulers=None,
+    report=None,
+):
     """Load checkpoint — I-JEPA helper.py load_checkpoint pattern.
 
     Handles all model types. Returns (epoch, global_step, ema_step, mask_step, extra_state)
+
+    Raises `CheckpointLoadError` (or the underlying `FileNotFoundError`) instead
+    of returning zeros. Silently "recovering" from a failed load is what let a
+    corrupt checkpoint destroy the previous good one.
     """
     model_name = _normalize_model_name(model_name)
     try:
         checkpoint = safe_torch_load(path, map_location=torch.device("cpu"))
+    except FileNotFoundError:
+        raise  # the caller's resume path names the file it expected
+    except Exception as e:
+        # Includes UnsafeCheckpointError: a file the strict loader refuses is a
+        # stop-the-line event, not a reason to retrain from step 0.
+        raise CheckpointLoadError(f"Could not read checkpoint {path}: {e}") from e
 
-        epoch = checkpoint.get("epoch", 0)
-        global_step = checkpoint.get("global_step", 0)
-        ema_step = checkpoint.get("ema_step", 0)
-        mask_step = checkpoint.get("mask_step", 0)
+    if not isinstance(checkpoint, dict):
+        raise CheckpointLoadError(
+            f"Checkpoint {path} holds a {type(checkpoint).__name__}, not a " f"training-state dict",
+        )
 
-        # Determine model type from checkpoint if available
-        ckpt_model_name = checkpoint.get("model_name", model_name)
-        ckpt_model_name = _normalize_model_name(ckpt_model_name)
+    missing = [k for k in ("epoch", "global_step", "opt") if k not in checkpoint]
+    if missing:
+        raise CheckpointLoadError(
+            f"Checkpoint {path} is missing required keys {missing}; "
+            f"it holds {sorted(checkpoint)[:8]}...",
+        )
 
-        if ckpt_model_name == "text_span_jepa":
-            model.encoder.load_state_dict(checkpoint["encoder"])
-            model.predictor.load_state_dict(checkpoint["predictor"])
-            model.target_encoder.load_state_dict(checkpoint["target_encoder"])
-            model.decoder.load_state_dict(checkpoint["decoder"])
-            if "target_centering_center" in checkpoint and hasattr(model, "target_centering"):
-                model.target_centering.center.copy_(checkpoint["target_centering_center"])
-            # JAWP workspace Q restoration
-            if (
-                "jawp_workspace_Q" in checkpoint
-                and hasattr(model, "jawp")
-                and model.jawp is not None
-            ):
-                model.jawp.workspace_Q.data.copy_(checkpoint["jawp_workspace_Q"])
-            if "jawp_active_k" in checkpoint and hasattr(model, "jawp") and model.jawp is not None:
-                model.jawp.active_k.copy_(checkpoint["jawp_active_k"])
-            # CGN gate logits restoration
-            if (
-                "cgn_gate_logits_visible" in checkpoint
-                and hasattr(model, "cgn")
-                and model.cgn is not None
-            ):
-                model.cgn.gate_logits_visible.data.copy_(checkpoint["cgn_gate_logits_visible"])
-            if "cgn_total_steps" in checkpoint and hasattr(model, "cgn") and model.cgn is not None:
-                model.cgn.total_steps.copy_(checkpoint["cgn_total_steps"])
-            # PCR projection Q restoration
-            if "pcr_workspace_Q" in checkpoint and hasattr(model, "pcr") and model.pcr is not None:
-                model.pcr.workspace_Q.data.copy_(checkpoint["pcr_workspace_Q"])
-            if "pcr_level_gates" in checkpoint and hasattr(model, "pcr") and model.pcr is not None:
-                for i, g in enumerate(checkpoint["pcr_level_gates"]):
-                    if i < len(model.pcr.level_gates):
-                        model.pcr.level_gates[i].data.copy_(g)
-            # SPC frequency basis and band weights restoration
-            if "spc_freq_basis" in checkpoint and hasattr(model, "spc") and model.spc is not None:
-                model.spc.freq_basis.data.copy_(checkpoint["spc_freq_basis"])
-            if (
-                "spc_log_band_weights" in checkpoint
-                and hasattr(model, "spc")
-                and model.spc is not None
-            ):
-                model.spc.log_band_weights.data.copy_(checkpoint["spc_log_band_weights"])
-            if (
-                "spc_running_residual_vars" in checkpoint
-                and hasattr(model, "spc")
-                and model.spc is not None
-            ):
-                model.spc.running_residual_vars.copy_(checkpoint["spc_running_residual_vars"])
-            if (
-                "spc_running_predictability" in checkpoint
-                and hasattr(model, "spc")
-                and model.spc is not None
-            ):
-                model.spc.running_predictability.copy_(checkpoint["spc_running_predictability"])
-            # WSD running statistics restoration
-            if (
-                "wsd_running_drift" in checkpoint
-                and hasattr(model, "wsd")
-                and model.wsd is not None
-            ):
-                model.wsd.running_drift.copy_(checkpoint["wsd_running_drift"])
-            if (
-                "wsd_is_initialized" in checkpoint
-                and hasattr(model, "wsd")
-                and model.wsd is not None
-            ):
-                model.wsd.is_initialized.copy_(checkpoint["wsd_is_initialized"])
-            if "wsd_step_count" in checkpoint and hasattr(model, "wsd") and model.wsd is not None:
-                model.wsd.step_count.copy_(checkpoint["wsd_step_count"])
-            # CMC running statistics restoration
-            if (
-                "cmc_running_consistency" in checkpoint
-                and hasattr(model, "cmc")
-                and model.cmc is not None
-            ):
-                model.cmc.running_consistency.copy_(checkpoint["cmc_running_consistency"])
-            if (
-                "cmc_running_overlap_ratio" in checkpoint
-                and hasattr(model, "cmc")
-                and model.cmc is not None
-            ):
-                model.cmc.running_overlap_ratio.copy_(checkpoint["cmc_running_overlap_ratio"])
-            if (
-                "cmc_total_cmc_steps" in checkpoint
-                and hasattr(model, "cmc")
-                and model.cmc is not None
-            ):
-                model.cmc.total_cmc_steps.copy_(checkpoint["cmc_total_cmc_steps"])
-            # GAC running statistics restoration
-            if (
-                "gac_running_grad_norms" in checkpoint
-                and hasattr(model, "gac")
-                and model.gac is not None
-            ):
-                model.gac.running_grad_norms.copy_(checkpoint["gac_running_grad_norms"])
-            if (
-                "gac_running_starved_fraction" in checkpoint
-                and hasattr(model, "gac")
-                and model.gac is not None
-            ):
-                model.gac.running_starved_fraction.copy_(checkpoint["gac_running_starved_fraction"])
-            if (
-                "gac_total_gac_steps" in checkpoint
-                and hasattr(model, "gac")
-                and model.gac is not None
-            ):
-                model.gac.total_gac_steps.copy_(checkpoint["gac_total_gac_steps"])
-            # STA running statistics restoration
-            if "sta_running_w1" in checkpoint and hasattr(model, "sta") and model.sta is not None:
-                model.sta.running_w1.copy_(checkpoint["sta_running_w1"])
-            if (
-                "sta_running_spectral_gap" in checkpoint
-                and hasattr(model, "sta")
-                and model.sta is not None
-            ):
-                model.sta.running_spectral_gap.copy_(checkpoint["sta_running_spectral_gap"])
-            if (
-                "sta_is_initialized" in checkpoint
-                and hasattr(model, "sta")
-                and model.sta is not None
-            ):
-                model.sta.is_initialized.copy_(checkpoint["sta_is_initialized"])
-            if "sta_step_count" in checkpoint and hasattr(model, "sta") and model.sta is not None:
-                model.sta.step_count.copy_(checkpoint["sta_step_count"])
-            # PUC running statistics restoration
-            if "puc_running_mean" in checkpoint and hasattr(model, "puc") and model.puc is not None:
-                model.puc.running_mean.copy_(checkpoint["puc_running_mean"])
-            if (
-                "puc_running_eigenvalues" in checkpoint
-                and hasattr(model, "puc")
-                and model.puc is not None
-            ):
-                model.puc.running_eigenvalues.copy_(checkpoint["puc_running_eigenvalues"])
-            if "puc_proj_vectors" in checkpoint and hasattr(model, "puc") and model.puc is not None:
-                model.puc.proj_vectors.copy_(checkpoint["puc_proj_vectors"])
-            if "puc_total_steps" in checkpoint and hasattr(model, "puc") and model.puc is not None:
-                model.puc.total_steps.copy_(checkpoint["puc_total_steps"])
-            # RDC running statistics restoration
-            if "rdc_z_previous" in checkpoint and hasattr(model, "rdc") and model.rdc is not None:
-                model.rdc.z_previous.copy_(checkpoint["rdc_z_previous"])
-            if "rdc_workspace_Q" in checkpoint and hasattr(model, "rdc") and model.rdc is not None:
-                model.rdc.workspace_Q.copy_(checkpoint["rdc_workspace_Q"])
-            if (
-                "rdc_running_drift_norm" in checkpoint
-                and hasattr(model, "rdc")
-                and model.rdc is not None
-            ):
-                model.rdc.running_drift_norm.copy_(checkpoint["rdc_running_drift_norm"])
-            if (
-                "rdc_running_drift_ratio" in checkpoint
-                and hasattr(model, "rdc")
-                and model.rdc is not None
-            ):
-                model.rdc.running_drift_ratio.copy_(checkpoint["rdc_running_drift_ratio"])
-            if "rdc_total_steps" in checkpoint and hasattr(model, "rdc") and model.rdc is not None:
-                model.rdc.total_steps.copy_(checkpoint["rdc_total_steps"])
-            # WSR restoration
-            if (
-                "wsr_running_sharpness" in checkpoint
-                and hasattr(model, "wsr")
-                and model.wsr is not None
-            ):
-                model.wsr.running_sharpness.copy_(checkpoint["wsr_running_sharpness"])
-            if (
-                "wsr_running_spectral_sharpness" in checkpoint
-                and hasattr(model, "wsr")
-                and model.wsr is not None
-            ):
-                model.wsr.running_spectral_sharpness.copy_(
-                    checkpoint["wsr_running_spectral_sharpness"],
-                )
-            if (
-                "wsr_running_directional_sharpness" in checkpoint
-                and hasattr(model, "wsr")
-                and model.wsr is not None
-            ):
-                model.wsr.running_directional_sharpness.copy_(
-                    checkpoint["wsr_running_directional_sharpness"],
-                )
-            if (
-                "wsr_running_grad_norm" in checkpoint
-                and hasattr(model, "wsr")
-                and model.wsr is not None
-            ):
-                model.wsr.running_grad_norm.copy_(checkpoint["wsr_running_grad_norm"])
-            if "wsr_total_steps" in checkpoint and hasattr(model, "wsr") and model.wsr is not None:
-                model.wsr.total_steps.copy_(checkpoint["wsr_total_steps"])
+    epoch = checkpoint["epoch"]
+    global_step = checkpoint["global_step"]
+    ema_step = checkpoint.get("ema_step", 0)
+    mask_step = checkpoint.get("mask_step", 0)
+
+    ckpt_model_name = _normalize_model_name(checkpoint.get("model_name", model_name))
+    if ckpt_model_name != model_name:
+        raise CheckpointLoadError(
+            f"Checkpoint {path} holds a {ckpt_model_name!r} model but the config "
+            f"asks for {model_name!r}. Refusing to load: training from step 0 would "
+            f"overwrite the existing run.",
+        )
+
+    try:
+        if "model" in checkpoint:
+            # Canonical path: the complete module state_dict, strict so that a
+            # shape or architecture mismatch is loud rather than partial.
+            model.load_state_dict(checkpoint["model"], strict=True)
+            if ckpt_model_name == "text_span_jepa":
+                _restore_mechanism_extras(model, checkpoint.get("mechanism_extras"))
+        elif ckpt_model_name == "text_span_jepa":
+            logger.warning(
+                f"Checkpoint {path} predates full-state_dict writes; restoring the "
+                f"legacy 48-key format. Tensors it never named (sta.ref_cov, "
+                f"wsd.target_cov, puc.running_entropy, ...) are lost — do not resume "
+                f"an old run for real.",
+            )
+            _load_legacy_jepa_state(model, checkpoint)
         elif ckpt_model_name == "mlm":
             model.encoder.load_state_dict(checkpoint["encoder"])
             model.mlm_head.load_state_dict(checkpoint["mlm_head"])
@@ -409,16 +419,35 @@ def load_checkpoint(path, model, optimizer, scaler, model_name="text_span_jepa")
         if scaler is not None and checkpoint.get("scaler") is not None:
             scaler.load_state_dict(checkpoint["scaler"])
 
-        extra_state = checkpoint.get("extra", None)
-        logger.info(
-            f"Loaded checkpoint: epoch={epoch}, step={global_step}, "
-            f"ema_step={ema_step}, mask_step={mask_step}",
-        )
-        return epoch, global_step, ema_step, mask_step, extra_state
+        if schedulers:
+            saved_schedulers = checkpoint.get("schedulers")
+            applied = False
+            for name, scheduler in schedulers.items():
+                applied |= _load_scheduler_state(scheduler, (saved_schedulers or {}).get(name))
+            if report is not None:
+                report["schedulers_restored"] = applied
+            if not applied:
+                logger.warning(
+                    "Checkpoint has no scheduler state; schedule positions must be "
+                    "replayed, which is only exact if `epochs` is unchanged.",
+                )
 
+        # Last, deliberately: the RNG streams are what make the *next* step
+        # identical, so nothing after this point may consume randomness.
+        _restore_rng_state(checkpoint.get("rng_state"))
+    except CheckpointLoadError:
+        raise
     except Exception as e:
-        logger.warning(f"Could not load checkpoint: {e}")
-        return 0, 0, 0, 0, None
+        raise CheckpointLoadError(
+            f"Could not restore {model_name} from checkpoint {path}: " f"{type(e).__name__}: {e}",
+        ) from e
+
+    extra_state = checkpoint.get("extra", None)
+    logger.info(
+        f"Loaded checkpoint: epoch={epoch}, step={global_step}, "
+        f"ema_step={ema_step}, mask_step={mask_step}",
+    )
+    return epoch, global_step, ema_step, mask_step, extra_state
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -663,13 +692,49 @@ def _get_all_trainable_params(model):
 # ═══════════════════════════════════════════════════════════════════
 
 
+def _dataloader_worker_init(worker_id, base_seed=42):
+    """Picklable DataLoader `worker_init_fn`.
+
+    Must live at module scope. The previous
+    `lambda wid: worker_init_fn(wid, seed)` is a closure, and the host start
+    method here is `spawn`, which pickles `worker_init_fn` to send it to the
+    worker: `PicklingError: Can't pickle local object`. With the shipped
+    `data.num_workers: 2`, `python -m src.train` therefore could not start its
+    own dataloader workers on Windows. The suite never caught it because
+    `tests/test_training_e2e.py` sets `num_workers: 0`.
+
+    Also seeds `torch`, which `src.utils.seed.worker_init_fn` does not: every
+    worker inherits the parent's torch RNG seed, so worker 0 and worker 1 draw
+    the *same* random stream. That matters as soon as any tensor-side
+    randomness (DropPath, Gumbel) happens inside a worker.
+
+    Note `persistent_workers=True` in `make_dataloader` means this runs once
+    per worker *lifetime*, not once per epoch.
+    """
+    worker_seed = int(base_seed) + int(worker_id)
+    worker_init_fn(worker_id, base_seed)
+    torch.manual_seed(worker_seed)
+
+
+def _worker_init_for(base_seed):
+    """Bind the seed once; the returned partial is picklable, a lambda is not."""
+    return functools.partial(_dataloader_worker_init, base_seed=int(base_seed))
+
+
 def _build_data_pipeline(args, seed):
     """Load dataset(s) and construct train/validation loaders.
 
     Returns: (dataloader, val_dataloader, tokenizer, mask_token_id, seq_len).
+
+    A missing validation set is a hard error unless
+    `data.allow_missing_validation: true` is set explicitly. It used to be
+    swallowed into a `logger.warning` with `val_dataloader = None`, which meant
+    two machines with the same seed produced *different models* — one of them
+    silently, and the difference was only visible in `best_val_loss`.
     """
     data_cfg = args.get("data", {})
     seq_len = data_cfg.get("max_seq_len", 512)
+    allow_missing_validation = bool(data_cfg.get("allow_missing_validation", False))
 
     logger.info("Loading dataset...")
     from src.datasets.kaggle import get_mask_token_id, load_wikitext103, make_dataloader
@@ -681,6 +746,7 @@ def _build_data_pipeline(args, seed):
         data_dir=data_cfg.get("root_path", "/kaggle/input/wikitext-103"),
     )
     mask_token_id = get_mask_token_id(tokenizer)
+    init_fn = _worker_init_for(seed)
 
     # Validation set
     try:
@@ -695,11 +761,23 @@ def _build_data_pipeline(args, seed):
             batch_size=data_cfg.get("batch_size", 64),
             num_workers=data_cfg.get("num_workers", 2),
             shuffle=False,
-            worker_init_fn=lambda wid: worker_init_fn(wid, seed),
+            worker_init_fn=init_fn,
         )
     except Exception as e:
-        logger.warning(
-            f"Validation unavailable ({type(e).__name__}: {e}) — training without validation",
+        if not allow_missing_validation:
+            raise RuntimeError(
+                f"Could not build the validation set ({type(e).__name__}: {e}). "
+                f"Training without validation changes the result — a different "
+                f"number of validation passes means a different model from the "
+                f"same seed — so it is refused. Fix the data path, or set "
+                f"data.allow_missing_validation: true in the config to accept it "
+                f"deliberately.",
+            ) from e
+        logger.error(
+            f"Validation unavailable ({type(e).__name__}: {e}) and "
+            f"data.allow_missing_validation is true — training WITHOUT validation. "
+            f"best.pt will not be written and these results are not comparable to "
+            f"runs that do validate.",
         )
         val_dataloader = None
 
@@ -707,7 +785,7 @@ def _build_data_pipeline(args, seed):
         dataset,
         batch_size=data_cfg.get("batch_size", 64),
         num_workers=data_cfg.get("num_workers", 2),
-        worker_init_fn=lambda wid: worker_init_fn(wid, seed),
+        worker_init_fn=init_fn,
     )
     return dataloader, val_dataloader, tokenizer, mask_token_id, seq_len
 
@@ -787,9 +865,14 @@ def _restore_training_state(
     ema_scheduler,
     mask_collator,
 ):
-    """Resume-from-checkpoint: replay schedulers/curriculum to the saved step.
+    """Resume-from-checkpoint: restore model, optimizer, schedulers and streams.
 
     Returns: (start_epoch, global_step, ema_step, mask_step, best_val_loss).
+
+    `meta.load_checkpoint: true` with a missing file is a `FileNotFoundError`.
+    The old code had no `else` for that case, so it fell through to
+    `global_step = 0`, trained a fresh model and overwrote the good
+    `checkpoint-latest.pth.tar` with a step-0 checkpoint.
     """
     start_epoch = 0
     global_step = 0
@@ -800,28 +883,56 @@ def _restore_training_state(
     r_file = args.get("meta", {}).get("read_checkpoint", None)
     load_model = args.get("meta", {}).get("load_checkpoint", False)
 
-    if load_model:
-        load_path = os.path.join(log_dir, r_file) if r_file else latest_path
-        if os.path.exists(load_path):
-            start_epoch, global_step, ema_step, mask_step, extra = load_checkpoint(
-                load_path,
-                model,
-                optimizer,
-                scaler,
-                model_name=model_name,
-            )
-            if extra and "best_val_loss" in extra:
-                best_val_loss = extra["best_val_loss"]
-            # Advance schedulers to correct step
-            for _ in range(global_step):
-                scheduler.step()
-                wd_scheduler.step()
-                if ema_scheduler is not None:
-                    ema_scheduler.step()
-            # Advance mask curriculum
-            for _ in range(mask_step):
-                mask_collator.step()
-            logger.info(f"Resumed: epoch={start_epoch}, step={global_step}")
+    if not load_model:
+        return start_epoch, global_step, ema_step, mask_step, best_val_loss
+
+    load_path = os.path.join(log_dir, r_file) if r_file else latest_path
+    if not os.path.exists(load_path):
+        raise FileNotFoundError(
+            f"meta.load_checkpoint is true but {load_path!r} does not exist. "
+            f"Refusing to start from step 0: this run would overwrite "
+            f"{latest_path!r} and destroy the previous one. Set "
+            f"meta.load_checkpoint: false to start a fresh run in a different "
+            f"logging.folder, or point meta.read_checkpoint at the file you mean.",
+        )
+
+    report = {}
+    start_epoch, global_step, ema_step, mask_step, extra = load_checkpoint(
+        load_path,
+        model,
+        optimizer,
+        scaler,
+        model_name=model_name,
+        schedulers={
+            "scheduler": scheduler,
+            "wd_scheduler": wd_scheduler,
+            "ema_scheduler": ema_scheduler,
+        },
+        report=report,
+    )
+    if extra and "best_val_loss" in extra:
+        best_val_loss = extra["best_val_loss"]
+
+    if not report.get("schedulers_restored", False):
+        # Legacy checkpoint: replay. Exact only when `epochs` is unchanged on
+        # resume, because `T_max` is re-derived from `epochs * ipe`.
+        logger.warning(
+            f"{load_path} carries no scheduler state; replaying {global_step} "
+            f"steps. The schedule you get back matches the original run only if "
+            f"optimization.epochs is unchanged.",
+        )
+        for _ in range(global_step):
+            scheduler.step()
+            wd_scheduler.step()
+            if ema_scheduler is not None:
+                ema_scheduler.step()
+
+    # Mask curriculum: `SpanMaskCollator.step()` only increments `_step`, so set
+    # the position directly instead of replaying O(mask_step) calls.
+    if mask_step and hasattr(mask_collator, "_step"):
+        mask_collator._step = int(mask_step)
+
+    logger.info(f"Resumed: epoch={start_epoch}, step={global_step}")
     return start_epoch, global_step, ema_step, mask_step, best_val_loss
 
 
@@ -850,6 +961,10 @@ def _warn_unknown_config_keys(args):
     # Keys invisible to a textual defaults.yaml diff:
     #   - consumed dynamically by baselines via model_cfg.get(...)
     #   - CLI-only overrides / descriptive provenance
+    #   - read by src/train.py itself rather than by a model builder
+    #     (`allow_missing_validation` gates a deliberate train-without-validate
+    #      decision; it is a code-level opt-in, not a model hyperparameter, and
+    #      defaults.yaml is owned elsewhere)
     extra_known = {
         "average_top_k_layers",
         "loss_beta",
@@ -859,6 +974,7 @@ def _warn_unknown_config_keys(args):
         "ema_anneal_end_step",
         "head_layers",
         "dataset",
+        "allow_missing_validation",
     }
     metadata_keys = {"_meta", "description"}  # declarative namespaces
     metadata_prefixes = ("_meta.",)  # _meta.* provenance subtrees
@@ -881,6 +997,108 @@ def _warn_unknown_config_keys(args):
     _walk(args)
 
 
+# ═══════════════════════════════════════════════════════════════════
+#  Device resolution — TPU / DDP-GPU / CUDA / CPU
+# ═══════════════════════════════════════════════════════════════════
+
+XLA_INSTALL_COMMAND = "pip install pytorch_xla[tpu]"
+
+
+def xla_missing_error(pjrt_device=None):
+    """Actionable error for `PJRT_DEVICE` set without an importable `pytorch_xla`.
+
+    A function rather than a module constant because the message embeds the
+    offending value, and a constant would freeze `os.environ` at import time.
+    """
+    if pjrt_device is None:
+        pjrt_device = os.environ.get("PJRT_DEVICE", "")
+    return RuntimeError(
+        f"PJRT_DEVICE is set (={pjrt_device!r}) but pytorch_xla is not importable. "
+        f"Install it on the TPU host with `{XLA_INSTALL_COMMAND}`, or unset "
+        f"PJRT_DEVICE to fall back to CUDA/CPU. Refusing to continue: without this "
+        f"check the run dies later with an AttributeError from inside XLA, long "
+        f"after the dataset has been loaded."
+    )
+
+
+def xla_is_available():
+    """True when `pytorch_xla` can be imported AND a PJRT device is configured.
+
+    Importability alone is not enough: a CPU-side box with `pytorch_xla`
+    installed for testing must not be hijacked. Requiring `PJRT_DEVICE` as well
+    keeps the check pure and hardware-free.
+    """
+    if not os.environ.get("PJRT_DEVICE"):
+        return False
+    return importlib.util.find_spec("pytorch_xla") is not None
+
+
+def resolve_device(env=None, xla_available=None, cuda_available=None):
+    """Pick the training device from the environment. Pure: no hardware touched.
+
+    Priority, highest first:
+
+    1. **TPU** — `PJRT_DEVICE` set (or `pytorch_xla` importable *and* a PJRT
+       device configured). Returns `torch.device("xla")`.
+    2. **DDP GPU** — `LOCAL_RANK` present, which `torchrun` sets per process.
+       Returns `cuda:{LOCAL_RANK}`. Without this every rank resolved to
+       `cuda:0` and the ranks fought over one device.
+    3. **CUDA** — `cuda.is_available()`.
+    4. **CPU**.
+
+    Raises `RuntimeError` (never `AttributeError` from deep inside a training
+    step) when `PJRT_DEVICE` is set but `pytorch_xla` is missing.
+
+    Args:
+        env: environment mapping; defaults to `os.environ`. Injectable so the
+            whole branch structure is unit-testable with no GPU.
+        xla_available: callable returning a bool; defaults to `xla_is_available`.
+        cuda_available: callable returning a bool; defaults to
+            `torch.cuda.is_available`.
+
+    Note on step 2: `LOCAL_RANK` is trusted rather than gated on
+    `cuda_available`. Under `torchrun --nproc_per_node=N` on a CPU-only node
+    (gloo backend) the honest device is CPU, so pass
+    `cuda_available=lambda: True` semantics aside — the caller in `src/train.py`
+    is the only production entry point and it logs a warning when CUDA is
+    absent. Fail-fast at tensor allocation, where the error names the real
+    problem, beats guessing here.
+    """
+    env = os.environ if env is None else env
+    if xla_available is None:
+        xla_available = xla_is_available
+    if cuda_available is None:
+        cuda_available = torch.cuda.is_available
+
+    if env.get("PJRT_DEVICE"):
+        if not xla_available():
+            raise xla_missing_error(env.get("PJRT_DEVICE"))
+        return torch.device("xla")
+    if xla_available():
+        return torch.device("xla")
+
+    if env.get("LOCAL_RANK") is not None:
+        try:
+            local_rank = int(env["LOCAL_RANK"])
+        except (TypeError, ValueError) as e:
+            raise RuntimeError(
+                f"LOCAL_RANK={env['LOCAL_RANK']!r} is not an integer. It is set by "
+                f"torchrun; unset it to run single-process."
+            ) from e
+        if not cuda_available():
+            logger.warning(
+                f"LOCAL_RANK={local_rank} is set but CUDA is not available. Every "
+                f"rank will be placed on cuda:{local_rank} and fail at the first "
+                f"tensor allocation. For CPU DDP, unset LOCAL_RANK or set it only "
+                f"together with a working CPU backend.",
+            )
+        return torch.device("cuda", local_rank)
+
+    if cuda_available():
+        return torch.device("cuda", 0)
+    return torch.device("cpu")
+
+
 def main(args):
     # ---- Config ----
     meta_seed = args.get("meta", {}).get("seed")
@@ -891,7 +1109,7 @@ def main(args):
     seed_everything(seed)
     _warn_unknown_config_keys(args)
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = resolve_device()
     logger.info(f"Using device: {device}")
 
     # Normalize model_name once at the start — all downstream functions use it
@@ -985,6 +1203,14 @@ def main(args):
         ("%f", "mask_fraction"),
         ("%f", "decoder_accuracy"),
     )
+
+    # Single name for the schedules so `save_checkpoint` and `_restore_training_state`
+    # cannot disagree about which objects carry schedule state.
+    _schedulers = {
+        "scheduler": scheduler,
+        "wd_scheduler": wd_scheduler,
+        "ema_scheduler": ema_scheduler,
+    }
 
     # ---- Resume from checkpoint ----
     latest_path = os.path.join(log_dir, "checkpoint-latest.pth.tar")
@@ -1316,6 +1542,7 @@ def main(args):
                     mask_step,
                     extra_state={"best_val_loss": best_val_loss},
                     model_name=model_name,
+                    schedulers=_schedulers,
                 )
                 raise RuntimeError(f"Loss is NaN at epoch {epoch+1}, step {global_step}")
 
@@ -1351,6 +1578,7 @@ def main(args):
                     mask_step,
                     extra_state={"best_val_loss": best_val_loss},
                     model_name=model_name,
+                    schedulers=_schedulers,
                 )
                 logger.info(f"  New best model! val_loss={best_val_loss:.4f}")
 
@@ -1366,6 +1594,7 @@ def main(args):
             mask_step,
             extra_state={"best_val_loss": best_val_loss},
             model_name=model_name,
+            schedulers=_schedulers,
         )
         epoch_path = os.path.join(log_dir, f"checkpoint-ep{epoch+1}.pth.tar")
         save_checkpoint(
@@ -1379,6 +1608,7 @@ def main(args):
             mask_step,
             extra_state={"best_val_loss": best_val_loss},
             model_name=model_name,
+            schedulers=_schedulers,
         )
         logger.info(f"Saved checkpoint: {epoch_path}")
 
@@ -1405,6 +1635,44 @@ def main(args):
     logger.info(f"Training complete! Best val loss: {best_val_loss:.4f}")
 
 
+def _snapshot_training_buffers(model):
+    """Clone every registered buffer. Returns None for duck-typed models.
+
+    Buffer *values* are what a mechanism's running statistics and reference
+    subspaces live in, and `no_grad()` does not protect them.
+
+    Only in-place mutation is covered. A module that *replaces* a buffer
+    attribute during validation would leave a new tensor in place; every
+    mechanism in `src/models/` mutates in place, and `_restore_training_buffers`
+    warns about anything it cannot find, so the failure mode is a log line
+    rather than a silent divergence.
+    """
+    named_buffers = getattr(model, "named_buffers", None)
+    if named_buffers is None:
+        return None
+    return {name: buf.detach().clone() for name, buf in named_buffers()}
+
+
+def _restore_training_buffers(model, snapshot):
+    """Inverse of `_snapshot_training_buffers`; warns about anything it cannot place."""
+    if not snapshot:
+        return
+    named_buffers = dict(model.named_buffers())
+    missing = []
+    with torch.no_grad():
+        for name, saved in snapshot.items():
+            buf = named_buffers.get(name)
+            if buf is None or buf.shape != saved.shape:
+                missing.append(name)
+                continue
+            buf.copy_(saved)
+    if missing:
+        logger.warning(
+            f"Could not restore {len(missing)} training buffers after validation: "
+            f"{missing}. They were created or reshaped during the pass.",
+        )
+
+
 def _validate(
     model,
     val_dataloader,
@@ -1415,7 +1683,27 @@ def _validate(
     current_step=0,
     total_steps=1,
 ):
-    """Run validation and return average loss."""
+    """Run validation and return average loss.
+
+    Validation must not touch training state. `torch.no_grad()` blocks
+    *gradient* writes and nothing else: one pass moves reference subspaces and
+    running statistics that the next training step reads as loss inputs. The
+    audit recorded 24 such buffers (`sta.ref_cov`, `wsd.target_cov`,
+    `wsd.target_Q`, the `sta.is_initialized` flag, all of PUC's and RDC's
+    running stats); after the mechanism-level `TrainingStateGuard` work landed
+    in `src/models/*` the same measurement on this repo's current tree reports
+    one remaining offender, `target_centering.center`. Snapshotting at the loop
+    level closes the class of bug rather than each site: it covers the
+    mechanism-free model, the un-guardable buffers, and any mechanism added
+    later.
+
+    The numpy stream that mask sampling draws from is snapshotted too.
+    Validation consumed it, so a run that validated and a run that did not
+    produced different models from the same seed.
+    """
+    buffer_snapshot = _snapshot_training_buffers(model)
+    rng_snapshot = _capture_rng_state()
+    was_training = getattr(model, "training", False)
     model.eval()
     val_losses = []
     with torch.no_grad():
@@ -1438,7 +1726,12 @@ def _validate(
                 total_steps=total_steps,
             )
             val_losses.append(total_loss.item())
-    model.train()
+    _restore_training_buffers(model, buffer_snapshot)
+    _restore_rng_state(rng_snapshot)
+    if hasattr(model, "training"):
+        model.train(was_training)
+    else:
+        model.train()
     # float() cast: np.mean returns np.float64, which is not weights_only-allowlisted
     # and would poison every checkpoint's best_val_loss (forces the legacy-pickle path).
     return float(np.mean(val_losses)) if val_losses else float("inf")

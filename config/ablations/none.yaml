@@ -1,11 +1,33 @@
-# Ablation: NO novel mechanisms — baseline JEPA
-# Only SIGReg for collapse prevention (like LeJEPA)
-# This is the strongest baseline to beat
+# Ablation: plain JEPA baseline — no GWP mechanism at all.
+#
+# The row every leave-one-out row is compared against, and the strongest
+# published baseline to beat: the same architecture, the same schedule, the
+# same effective batch, with all twelve GWP mechanisms removed and SIGReg
+# (LeJEPA, 2025) as the only collapse preventer instead of VICReg.
+#
+# This is the arm that most of the non-ablation configs reproduce explicitly
+# (config/scaling/*.yaml, config/wikitext/textspanjepa_*.yaml): defaults.yaml
+# is the FULL model, so "standard JEPA" is always eleven explicit `false` lines
+# rather than an omission. That direction is deliberate — a config that means
+# to be a baseline says so out loud instead of relying on a default.
+#
+# Guard: TestLeaveOneOut::test_none_baseline_activates_nothing
+
+_meta:
+  ablation: none
+  description: "Plain JEPA: all twelve GWP mechanisms off, SIGReg as the only collapse preventer"
+
 model:
   use_jawp: false
   use_cgn: false
-  lambda_cgn_ortho: 0.0
+  # `lambda_swip` is zeroed next to the flag: any config that names a
+  # mechanism must name its weight (tests/test_swip.py asserts this for
+  # SWIP; no other mechanism has such a test yet). Inert today — with
+  # `use_swip: false` the module is never constructed — and it stops a later
+  # edit that flips the flag back from silently enabling SWIP at 0.01.
+
   use_swip: false
+  lambda_swip: 0.0
   use_pcr: false
   use_spc: false
   use_wsd: false
@@ -14,19 +36,8 @@ model:
   use_sta: false
   use_puc: false
   use_rdc: false
-  lambda_swip: 0.0
-  lambda_spc: 0.0
-  lambda_wsd: 0.0
-  lambda_cmc: 0.0
-  lambda_gac: 0.0
-  lambda_sta: 0.0
-  lambda_puc: 0.0
-  lambda_rdc: 0.0
   use_wsr: false
-  wsr_rho: 0.05
-  wsr_eta: 0.01
-  wsr_ema_beta: 0.999
-  wsr_warmup_steps: 500
-  wsr_mode: gradient
-  lambda_wsr: 0.0
   lambda_sigreg: 0.1
+
+logging:
+  folder: output/ablations/none/

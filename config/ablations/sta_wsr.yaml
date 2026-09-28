@@ -1,63 +1,25 @@
-# Ablation: STA + WSR pairwise interaction
-# Tests the Grassmann Sharpness Decomposition: ρ_Q = ρ_spectral + ρ_directional
-# STA bounds ρ_spectral, WSR bounds ρ_directional
-# Together they provide COMPLETE workspace stability
+# Ablation: STA + WSR, the pair the Grassmann Sharpness Decomposition couples.
+#
+# proofs/wsr.md decomposes the workspace sharpness as
+#   rho_Q = rho_spectral + rho_directional
+# with STA bounding the spectral part and WSR bounding the directional part.
+# Neither single-mechanism row (no_sta.yaml, no_wsr.yaml) can show that the two
+# bounds compose, because each of those is measured against the full model with
+# the *other* term still present.
+#
+# Both members are at 10x the reference grid weight (0.1 vs 0.01) so the
+# interaction is not swamped by the other ten mechanisms, and so the arm is a
+# genuine delta on the full model rather than a restatement of it.
+#
+# Guard: TestDeltaPurity::test_no_unnecessary_restatements
+
+_meta:
+  ablation: sta_wsr
+  description: "STA + WSR at 10x weight — spectral and directional sharpness bounds together"
 
 model:
-  use_jawp: true
-  use_cgn: false
-  lambda_cgn_ortho: 0.0
-  use_swip: false
-  swip_k_workspace: null
-  swip_target_variance: 1.0
-  lambda_swip: 0.0
-  use_pcr: false
-  pcr_n_levels: 3
-  pcr_level_dims: null
-  pcr_warmup_steps: 1000
-  use_spc: false
-  spc_n_bands: 8
-  spc_init: dct
-  lambda_spc: 0.0
-  use_wsd: false
-  wsd_k: null
-  wsd_sync_interval: 100
-  wsd_ema_beta: 0.99
-  lambda_wsd: 0.0
-  use_cmc: false
-  cmc_second_mask_ratio: null
-  cmc_min_overlap_ratio: 0.2
-  cmc_mode: interval
-  cmc_interval: 10
-  lambda_cmc: 0.0
-  use_gac: false
-  gac_gamma: 0.01
-  gac_tau_grad: 0.0001
-  gac_warmup_steps: 1000
-  lambda_gac: 0.0
-  use_sta: true
-  sta_eta: 0.01
-  sta_ema_beta: 0.999
-  sta_warmup_steps: 500
-  sta_update_interval: 10
-  lambda_sta: 0.01
-  use_puc: false
-  puc_eta: 0.01
-  puc_ema_beta: 0.999
-  puc_warmup_steps: 500
-  lambda_puc: 0.0
-  use_rdc: false
-  rdc_eta: 0.01
-  rdc_ema_beta: 0.999
-  rdc_warmup_steps: 500
-  rdc_k_workspace: null
-  lambda_rdc: 0.0
-  use_wsr: true
-  wsr_rho: 0.05
-  wsr_eta: 0.01
-  wsr_ema_beta: 0.999
-  wsr_warmup_steps: 500
-  wsr_mode: gradient
-  lambda_wsr: 0.01
-  lambda_predictive_rank: 0.0
-  lambda_sigreg: 0.0
+  lambda_sta: 0.1
+  lambda_wsr: 0.1
+
+logging:
+  folder: output/ablations/sta_wsr/

@@ -125,10 +125,11 @@
 from __future__ import annotations
 
 import torch
-from torch import nn
+
+from ._state_guard import TrainingStateGuard
 
 
-class SpectralTransportAlignment(nn.Module):
+class SpectralTransportAlignment(TrainingStateGuard):
     """Spectral Transport Alignment — prevents spectral drift from
     destabilizing workspace and band allocation.
 
@@ -180,6 +181,33 @@ class SpectralTransportAlignment(nn.Module):
         self.register_buffer("step_count", torch.tensor(0, dtype=torch.long))
 
     @torch.no_grad()
+    def _current_eigenvalues_of(self, z: torch.Tensor) -> torch.Tensor | None:
+        """Eigenvalues (descending) of the CURRENT batch covariance.
+
+        Pure function of ``z`` — nothing is written.  Returns ``None``
+        when there is not enough data or the eigendecomposition fails, in
+        which case the caller keeps the cached ``current_eigenvalues``
+        buffer (the pre-existing fallback behaviour).
+
+        Args:
+            z: (..., D) representations.
+
+        """
+        D = z.size(-1)
+        flat = z.reshape(-1, D).float()
+        N = flat.size(0)
+        if N <= 1:
+            return None
+
+        centered = flat - flat.mean(dim=0, keepdim=True)
+        cov = (centered.T @ centered) / max(N - 1, 1)
+
+        try:
+            return torch.linalg.eigvalsh(cov).flip(0)
+        except Exception:
+            return None
+
+    @torch.no_grad()
     def _update_reference(self, z: torch.Tensor):
         """Update EMA reference covariance and its eigenvalues.
 
@@ -210,28 +238,10 @@ class SpectralTransportAlignment(nn.Module):
         except Exception:
             pass
 
-    @torch.no_grad()
-    def _compute_current_eigenvalues(self, z: torch.Tensor):
-        """Compute eigenvalues of current covariance.
-
-        Args:
-            z: (..., D) representations.
-
-        """
-        D = z.size(-1)
-        flat = z.reshape(-1, D).float()
-        N = flat.size(0)
-        if N <= 1:
-            return
-
-        centered = flat - flat.mean(dim=0, keepdim=True)
-        cov = (centered.T @ centered) / max(N - 1, 1)
-
-        try:
-            eigs = torch.linalg.eigvalsh(cov)
-            self.current_eigenvalues.copy_(eigs.flip(0))
-        except Exception:
-            pass
+    def _update_running_statistics(self, w1: float, min_gap: float) -> None:
+        """EMA the reported diagnostics (training only)."""
+        self._mutate_state(lambda: self.running_w1.mul_(0.99).add_(0.01 * w1))
+        self._mutate_state(lambda: self.running_spectral_gap.mul_(0.99).add_(0.01 * min_gap))
 
     def forward(
         self,
@@ -249,7 +259,7 @@ class SpectralTransportAlignment(nn.Module):
             info: dict with diagnostics.
 
         """
-        self.step_count.fill_(step)
+        self._mutate_state(self.step_count.fill_, step)
         z.size(-1)
 
         # Warmup
@@ -263,25 +273,34 @@ class SpectralTransportAlignment(nn.Module):
                 "sta_warmup_factor": 0.0,
             }
 
-        # Reference follows the interval cadence; CURRENT recomputes every
+        # Reference follows the interval cadence; CURRENT is recomputed every
         # step. The original code refreshed both from the same tensor at the
         # same moments, forcing W1(current, ref) == 0 identically — the loss
         # could never become non-zero (audit R11).
-        if not self.is_initialized:
-            self._update_reference(z.detach())
-            self._compute_current_eigenvalues(z.detach())
+        #
+        # The current spectrum is a CACHE OF THIS BATCH, not a training
+        # statistic: it is computed into a local so that an eval() pass still
+        # measures the validation batch, and only the cache write is guarded
+        # (TrainingStateGuard). In training the local and the buffer are
+        # bit-identical, so the numbers below are unchanged.
+        eig_cur = self._current_eigenvalues_of(z.detach())
+        if eig_cur is None:
+            eig_cur = self.current_eigenvalues
         else:
-            if step % self.update_interval == 0:
-                self._update_reference(z.detach())
-            self._compute_current_eigenvalues(z.detach())
+            self._mutate_state(self.current_eigenvalues.copy_, eig_cur)
+
+        # ref_cov / ref_eigenvalues are a genuine training-time EMA of the
+        # target spectrum, so they are only advanced while training.
+        if not self.is_initialized or step % self.update_interval == 0:
+            self._mutate_state(self._update_reference, z.detach())
 
         # Compute W1 distance: (1/D) Σ |λ_i^current - λ_i^ref|
         # Both are sorted descending, so the monotone coupling is optimal
-        eig_diff = (self.current_eigenvalues - self.ref_eigenvalues).abs()
+        eig_diff = (eig_cur - self.ref_eigenvalues).abs()
         w1 = eig_diff.mean()
 
         # Spectral gap: min gap between consecutive eigenvalues (stability indicator)
-        sorted_eigs = self.current_eigenvalues.sort(descending=True)[0]
+        sorted_eigs = eig_cur.sort(descending=True)[0]
         if sorted_eigs.size(0) > 1:
             gaps = sorted_eigs[:-1] - sorted_eigs[1:]
             # Only consider gaps between significant eigenvalues
@@ -298,8 +317,7 @@ class SpectralTransportAlignment(nn.Module):
 
         # Running statistics
         with torch.no_grad():
-            self.running_w1.mul_(0.99).add_(0.01 * w1.item())
-            self.running_spectral_gap.mul_(0.99).add_(0.01 * min_gap.item())
+            self._update_running_statistics(w1.item(), min_gap.item())
 
         info = {
             "sta_loss": loss.item(),
@@ -309,11 +327,9 @@ class SpectralTransportAlignment(nn.Module):
             "sta_spectral_gap": min_gap.item(),
             "sta_running_w1": self.running_w1.item(),
             "sta_running_spectral_gap": self.running_spectral_gap.item(),
-            "sta_max_eigenvalue": self.current_eigenvalues[0].item(),
-            "sta_min_eigenvalue": self.current_eigenvalues[-1].item(),
-            "sta_condition_number": (
-                self.current_eigenvalues[0] / (self.current_eigenvalues[-1] + self.eps)
-            ).item(),
+            "sta_max_eigenvalue": eig_cur[0].item(),
+            "sta_min_eigenvalue": eig_cur[-1].item(),
+            "sta_condition_number": (eig_cur[0] / (eig_cur[-1] + self.eps)).item(),
         }
 
         return loss, info

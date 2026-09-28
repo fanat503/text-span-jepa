@@ -1,133 +1,64 @@
+# Capacity rung 2 of 4: small (claimed 100M).
+#
+# The ladder in config/scaling/ is a CAPACITY sweep. Every hyperparameter except
+# width and depth is inherited from defaults.yaml, so the four rungs see the
+# same number of tokens in the same number of optimizer steps at the same
+# learning rate, and the only thing that moves is how many parameters there are.
+# The pre-fix ladder moved effective batch (two tiers of two points), epochs,
+# lr, num_refine_steps, drop_path_rate and the mechanism curricula along with
+# size, which made a two-point-per-group curve unable to separate capacity from
+# anything else.
+#
+# Arm: standard JEPA. This ladder measures how the base architecture scales, so
+# the mechanism set is held fixed at JAWP-only and the GWP study is left to the
+# leave-one-out table in config/ablations/. The eleven `use_*: false` lines are
+# therefore a real delta, not a copy of a default: defaults.yaml is the FULL
+# GWP model, and a config that means to be a baseline says so out loud.
+#
+# Parameter counts, measured in-process with this file exactly as it resolves
+# (GPT-2 vocab 50304, max_seq_len 512, all mechanisms as declared):
+#   total parameters     : 170,706,561
+#   trainable parameters :  88,947,841   <- what the filename claims (~100M)
+#   get_num_params()     :  56,384,641
+# `get_num_params()` excludes the target encoder and both embeddings, so the
+# number the trainer logs at startup under-reports the true total by ~2.5x.
+# That is a `src/models/jepa.py` issue, not a config issue.
+#
+# Guard: TestScalingLadder, TestScalingParamCounts
+
+_meta:
+  config: small_100m
+  arm: standard_jepa
+  note: "width/depth only; the schedule, the effective batch and the mechanism set are inherited from defaults.yaml"
+
 meta:
-  seed: 42
-  use_bfloat16: true
   model_name: text_span_jepa_small
-  load_checkpoint: false
-  dataset: wikitext103
-data:
-  batch_size: 128
-  max_seq_len: 512
-  tokenizer: gpt2
-  num_workers: 4
-  root_path: data/wikitext-103
-  mask_ratio: 0.35
-  span_length_range:
-  - 3
-  - 10
+
 model:
   embed_dim: 640
   encoder_depth: 10
   num_heads: 10
-  mlp_ratio: 4.0
-  qkv_bias: true
-  drop_rate: 0.0
-  attn_drop_rate: 0.0
-  drop_path_rate: 0.1
   predictor_embed_dim: 320
   predictor_depth: 4
-  future_offsets:
-  - 1
-  - 4
-  - 16
-  num_refine_steps: 3
-  refine_step_size: 0.1
-  decoder_bias: false
-  variance_margin: 1.0
-  centering_momentum: 0.9
-  ema_tau_start: 0.996
-  ema_tau_end: 1.0
-  lambda_span: 1.0
-  lambda_future: 0.5
-  lambda_decoder: 0.1
-  lambda_variance: 0.1
-  lambda_covariance: 0.04
-  mask_ratio_start: 0.15
-  mask_ratio_end: 0.35
-  future_warmup_steps: 5000
-  use_jawp: true
-  jawk_k_start: 1
-  jawk_k_end: null
-  jawk_curriculum_steps: 10000
-  jawk_alpha: 0.1
-  jawk_init: identity
-  lambda_sigreg: 0.0
-  ema_schedule: cosine
-  gradient_checkpointing: false
-  jspace_variance_threshold: 0.1
-  jspace_k_workspace: 25
-  lambda_predictive_rank: 0.0
+
   use_cgn: false
-  cgn_n_groups: 8
-  cgn_tau_start: 1.0
-  cgn_tau_end: 0.1
-  cgn_anneal_steps: 10000
-  lambda_cgn_ortho: 0.0
+  # `lambda_swip` is zeroed next to the flag: any config that names a
+  # mechanism must name its weight (tests/test_swip.py asserts this for
+  # SWIP; no other mechanism has such a test yet). Inert today — with
+  # `use_swip: false` the module is never constructed — and it stops a later
+  # edit that flips the flag back from silently enabling SWIP at 0.01.
+
   use_swip: false
-  swip_k_workspace: null
-  swip_target_variance: 1.0
   lambda_swip: 0.0
   use_pcr: false
-  pcr_n_levels: 3
-  pcr_level_dims: null
-  pcr_warmup_steps: 1000
   use_spc: false
-  spc_n_bands: 8
-  spc_init: dct
-  lambda_spc: 0.0
   use_wsd: false
-  wsd_k: null
-  wsd_sync_interval: 100
-  wsd_ema_beta: 0.99
-  lambda_wsd: 0.0
   use_cmc: false
-  cmc_second_mask_ratio: null
-  cmc_min_overlap_ratio: 0.2
-  cmc_mode: interval
-  cmc_interval: 10
-  lambda_cmc: 0.0
   use_gac: false
-  gac_gamma: 0.01
-  gac_tau_grad: 0.0001
-  gac_warmup_steps: 1000
-  lambda_gac: 0.0
   use_sta: false
-  sta_eta: 0.01
-  sta_ema_beta: 0.999
-  sta_warmup_steps: 500
-  sta_update_interval: 10
-  lambda_sta: 0.0
   use_puc: false
-  puc_eta: 0.01
-  puc_ema_beta: 0.999
-  puc_warmup_steps: 500
-  lambda_puc: 0.0
   use_rdc: false
-  rdc_eta: 0.01
-  rdc_ema_beta: 0.999
-  rdc_warmup_steps: 500
-  rdc_k_workspace: null
-  lambda_rdc: 0.0
   use_wsr: false
-  wsr_rho: 0.05
-  wsr_eta: 0.01
-  wsr_ema_beta: 0.999
-  wsr_warmup_steps: 500
-  wsr_mode: gradient
-  lambda_wsr: 0.0
-optimization:
-  ema:
-  - 0.996
-  - 1.0
-  epochs: 30
-  ipe_scale: 1.0
-  lr: 0.001
-  start_lr: 0.0002
-  final_lr: 1.0e-05
-  warmup: 10
-  weight_decay: 0.04
-  final_weight_decay: 0.4
-  grad_accum_steps: 4
+
 logging:
   folder: output/scaling/small-100m/
-  log_freq: 10
-  write_tag: scaling_small_100m
