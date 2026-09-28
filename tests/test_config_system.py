@@ -952,31 +952,23 @@ class TestNoDeadKeys:
             )
 
     def test_trainer_ema_fallback_is_not_the_frozen_value(self):
-        """Reports a `src/train.py` defect this file cannot fix.
+        """`_build_optimization` must not fall back to a frozen target.
 
-        `_build_optimization` does
-            tau_end=model_cfg.get("ema_tau_end", 1.0)
+        `_build_optimization` reads
+            tau_end=model_cfg.get("ema_tau_end", <fallback>)
         so any run with `--no_defaults`, or any config that omits the key, gets
-        a target encoder that never moves. Every shipped config supplies the key
-        (see `test_no_config_restates_the_ema_endpoint` and
-        `test_ema_tau_end_is_below_one`), which is why the tree is safe today --
-        but the literal fallback is a trap for the next config author.
+        whatever the literal is. At `1.0` the run is silently dead:
+        `EMATauSchedule.step()` returns exactly `tau_end`, and `1 - 1.0 == 0`, so
+        `update_target_encoder` performs `mul_(1.0).add_(q, alpha=0.0)` for the
+        whole run and the target encoder never moves.
 
-        Reported as a skip rather than a failure: `src/train.py` is owned by
-        another agent, and a red test in this file would be attributed to the
-        config system. Fixing the literal to 0.9999 makes this skip disappear.
+        Every shipped config supplies the key (see
+        `test_every_config_supplies_the_ema_endpoint_so_the_fallback_is_unreachable`),
+        which is why the tree was safe while the literal stayed broken.
         """
         m = re.search(r'model_cfg\.get\("ema_tau_end",\s*([0-9.]+)\)', _TRAIN_SRC)
         if m is None:
             pytest.skip("src/train.py no longer supplies an ema_tau_end fallback")
-        if float(m.group(1)) >= 1.0:
-            pytest.skip(
-                f"KNOWN src/train.py DEFECT (not a config defect): the ema_tau_end "
-                f"fallback is {m.group(1)}, which freezes the target encoder on any "
-                f"--no_defaults run. Every shipped config supplies the key, so no "
-                f"config here is affected. Fix: src/train.py line ~836, default "
-                f"0.9999."
-            )
         assert float(m.group(1)) < 1.0
 
     def test_every_config_supplies_the_ema_endpoint_so_the_fallback_is_unreachable(self):
