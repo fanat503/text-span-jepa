@@ -130,11 +130,96 @@
 
 from __future__ import annotations
 
+import contextlib
 import math
+from collections.abc import Iterator
 from typing import Any
 
 import torch
 from torch import nn
+
+
+# Salt mixed into the master seed for CMC's default mask stream, so the CMC
+# draws cannot coincide with another consumer's draws from the same seed.
+_MASK_RNG_SALT = 0x5EEDC0DE
+
+# Lazily built, process-private stream for the default (no rng, no seed) path.
+# See `_default_mask_rng`.
+_mask_rng_default: torch.Generator | None = None
+
+
+def _default_mask_rng() -> torch.Generator:
+    """Return CMC's process-private mask stream, building it on first use.
+
+    The stream is seeded from the master seed the caller already supplied:
+    `src/utils/seed.py::seed_everything` calls `torch.manual_seed`, and
+    `torch.initial_seed` reports that seed as a pure query — it reads no
+    randomness and does not move the global stream. Mixing in `_MASK_RNG_SALT`
+    keeps the CMC draws distinct from any other consumer seeded the same way.
+
+    Two consequences worth stating plainly:
+
+    * Consecutive calls draw *different* masks (the stream advances), so
+      `generate_second_mask` still behaves like a random mask generator, while
+      the process-global torch RNG stream is never consumed and never advanced.
+    * The stream's position is module state, not a tensor buffer, so it is not
+      in `state_dict` and `src/train.py`'s `_capture_rng_state` cannot save it.
+      A resumed run therefore re-enters this stream part-way rather than
+      reproducing the uninterrupted sequence. Callers that need that should
+      pass `rng=` and own the checkpointing of that generator themselves.
+
+    """
+    global _mask_rng_default
+    if _mask_rng_default is None:
+        base = (int(torch.initial_seed()) + _MASK_RNG_SALT) % (2**63 - 1)
+        _mask_rng_default = torch.Generator(device="cpu")
+        _mask_rng_default.manual_seed(base)
+    return _mask_rng_default
+
+
+@contextlib.contextmanager
+def _mask_rng(
+    rng: torch.Generator | None,
+    seed: int | None,
+) -> Iterator[torch.Generator | None]:
+    """Yield the generator the CMC span draws must come from.
+
+    Three cases, in priority order:
+
+    1. `rng` given: the caller's own CPU generator is the sole source of
+       randomness. Its state advances; the process-global torch RNG is not
+       touched at all.
+    2. `seed` given (no `rng`): a private generator is built from that seed, so
+       the same seed reproduces the same mask and the global RNG is untouched.
+    3. Neither given: CMC's process-private stream (`_default_mask_rng`), which
+       the process-global torch RNG neither feeds nor is fed by.
+
+    Args:
+        rng: caller-owned CPU generator, or None.
+        seed: base seed for a private generator, or None.
+
+    Yields:
+        The generator to hand to `torch.randint(..., generator=...)`.
+
+    Raises:
+        ValueError: if both `rng` and `seed` are given.
+
+    """
+    if rng is not None and seed is not None:
+        raise ValueError(
+            "pass either rng (a caller-owned generator whose state you advance) "
+            "or seed (a base seed for a private generator), not both: the two "
+            "would silently fight over the same draw."
+        )
+    if rng is not None:
+        yield rng
+        return
+    if seed is not None:
+        private = torch.Generator(device="cpu")
+        private.manual_seed(int(seed))
+        yield private
+        return
+    yield _default_mask_rng()
 
 
 class CrossMaskConsistency(nn.Module):
@@ -222,11 +307,19 @@ class CrossMaskConsistency(nn.Module):
         span_length_range: tuple[int, int] = (3, 10),
         device: torch.device = torch.device("cpu"),
         rng: torch.Generator | None = None,
+        seed: int | None = None,
     ) -> torch.Tensor:
         """Generate a second span-based mask for CMC.
 
         Uses the same span masking strategy as the primary mask
         to ensure realistic overlap patterns.
+
+        The randomness is CPU-side: span length and offset are drawn as Python
+        ints and written into a mask that is already allocated on `device`, so
+        any `rng` passed here must be a CPU generator. The process-global torch
+        RNG *stream* is never consumed and never advanced, on any of the three
+        paths; the default path reads only `torch.initial_seed()`, the master
+        seed value, which is a query and not a draw.
 
         Args:
             seq_len: sequence length T.
@@ -234,28 +327,43 @@ class CrossMaskConsistency(nn.Module):
             mask_ratio: fraction of positions to mask.
             span_length_range: (min, max) span length.
             device: torch device.
-            rng: optional random generator for reproducibility.
+            rng: optional caller-owned CPU generator. When given it is the only
+                randomness source -- its state advances and the process-global
+                torch RNG is neither read nor written. Mutually exclusive with
+                `seed`.
+            seed: optional base seed. When given without `rng`, a private
+                generator seeded with it is used, so two calls with the same
+                seed return the same mask and the global RNG is untouched.
+                Mutually exclusive with `rng`.
 
         Returns:
             mask: (B, T) binary mask. 1 = masked, 0 = visible.
+
+        Raises:
+            ValueError: if both `rng` and `seed` are given.
 
         """
         mask = torch.zeros(batch_size, seq_len, dtype=torch.long, device=device)
         min_span, max_span = span_length_range
         n_mask_target = int(seq_len * mask_ratio)
 
-        for b in range(batch_size):
-            n_masked = 0
-            attempts = 0
-            while n_masked < n_mask_target and attempts < seq_len * 2:
-                span_len = torch.randint(min_span, max_span + 1, (1,), generator=rng).item()
-                start = torch.randint(0, max(seq_len - span_len, 1), (1,), generator=rng).item()
-                end = min(start + span_len, seq_len)
-                # Only mask if this span has unmasked positions
-                if mask[b, start:end].sum() < (end - start):
-                    mask[b, start:end] = 1
-                    n_masked = mask[b].sum().item()
-                attempts += 1
+        with _mask_rng(rng, seed) as draw_rng:
+            for b in range(batch_size):
+                n_masked = 0
+                attempts = 0
+                while n_masked < n_mask_target and attempts < seq_len * 2:
+                    span_len = torch.randint(
+                        min_span, max_span + 1, (1,), generator=draw_rng
+                    ).item()
+                    start = torch.randint(
+                        0, max(seq_len - span_len, 1), (1,), generator=draw_rng
+                    ).item()
+                    end = min(start + span_len, seq_len)
+                    # Only mask if this span has unmasked positions
+                    if mask[b, start:end].sum() < (end - start):
+                        mask[b, start:end] = 1
+                        n_masked = mask[b].sum().item()
+                    attempts += 1
 
         return mask
 
