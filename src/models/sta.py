@@ -126,7 +126,7 @@ from __future__ import annotations
 
 import torch
 
-from .wsd import TrainingStateGuard
+from ._state_guard import TrainingStateGuard
 
 
 class SpectralTransportAlignment(TrainingStateGuard):

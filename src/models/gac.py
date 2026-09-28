@@ -99,7 +99,7 @@ import torch
 from typing import Any
 import torch.nn.functional as F
 
-from .wsd import TrainingStateGuard
+from ._state_guard import TrainingStateGuard
 
 
 class GradientAllocatedCapacity(TrainingStateGuard):

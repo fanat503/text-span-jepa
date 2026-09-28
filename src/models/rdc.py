@@ -69,7 +69,7 @@ from typing import Any
 
 import torch
 
-from .wsd import TrainingStateGuard
+from ._state_guard import TrainingStateGuard
 
 
 class RepresentationDriftCompensation(TrainingStateGuard):

@@ -160,7 +160,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from .wsd import TrainingStateGuard
+from ._state_guard import TrainingStateGuard
 
 
 def _dct_basis(D: int, device="cpu", dtype=torch.float32) -> torch.Tensor:

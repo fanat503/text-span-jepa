@@ -126,7 +126,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
-from .wsd import TrainingStateGuard
+from ._state_guard import TrainingStateGuard
 
 
 class ContextualGatingNetwork(TrainingStateGuard):

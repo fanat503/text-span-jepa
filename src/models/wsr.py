@@ -137,7 +137,7 @@ from typing import Callable
 import torch
 import torch.nn.functional as F
 
-from .wsd import TrainingStateGuard
+from ._state_guard import TrainingStateGuard
 
 
 class WorkspaceSharpnessRegularization(TrainingStateGuard):
