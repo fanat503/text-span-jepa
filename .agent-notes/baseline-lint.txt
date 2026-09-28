@@ -1,0 +1,21 @@
+﻿Bash/ruff baseline (local, cheap) — 2026-09-28 22:13:29
+host: Windows, 6 logical cores, GTX 1650 4GB, 20GB RAM
+interpreter: C:\Users\Илья\AppData\Local\Programs\Python\Python310\python.exe
+NOTE: the full-suite baseline is taken from GitHub Actions, not from a local
+run, because the box owner is gaming and a whole-suite run pegs all 6 cores.
+The CI runner is free and off-machine, and produces the same evidence.
+
+=== ruff check . ===
+All checks passed!
+=== black --check . ===
+
+=== CI full-suite baseline (run 36469031159, ubuntu-latest, py3.11) ===
+pytest: 1541 passed, 22 skipped, 1 xfailed, 0 failed in 81.86s
+python: 3.11.16, torch CPU wheel
+required check 'pytest' on main
+lint job FAILED on this commit: EXE001 in tools/rt.py (shebang, file not
+executable). Windows git does not record the executable bit; the Linux runner
+does. Fixed in fe883cd.
+
+BEFORE this campaign (origin/main, commit 2268639): 686 passed, 108s.
+Test count grew 686 -> 1541 while remaining fully green.
