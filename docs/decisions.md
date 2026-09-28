@@ -283,3 +283,63 @@ Windows and be invisible in CI. Not currently known to exist; not ruled out.
 
 **Reverses if** someone can add a Windows job, or the owner accepts a local
 `--full` gate run on Windows as the compensating control.
+
+---
+
+## D-013 GWP is 12 modules and 16 numbered capabilities; say which
+
+**Problem.** Four files stated four different totals. `mechanisms.py`'s header
+and `GWP.N_MECHANISMS` said 16; `MechanismBundle.ALL_MECHANISMS` had 12
+entries; `proofs/IMPLEMENTATION_STATUS.md` said 13 and carried 12 rows;
+`proofs/README.md` said 13 and carried 11; `README.md` asserted a bare
+"novel mechanisms (16)"; and `tests/test_model.py` had a test *named*
+`test_mechanism_bundle_counts_16` that asserts `active == 12`. A NeurIPS
+reviewer reads the first paragraph.
+
+Measured, not inferred: `ALL_MECHANISMS` = 12 (`mechanisms.py:100`),
+`N_MECHANISMS` = 16 (`mechanisms.py:682`), the header numbers exactly 16
+contiguous items (`mechanisms.py:37-56`), `defaults.yaml` carries 12
+`use_<mech>` keys, `config/ablations/` carries 12 leave-one-out `no_<mech>.yaml`
+files, and `proofs/` carries 13 proof documents.
+
+**Options.** (a) "12 mechanisms" everywhere; (b) "16 mechanisms" everywhere;
+(c) state both, with the mapping, and never use either unqualified.
+
+**Decided.** (c). The convention is: **12 when counting modules, 16 when
+counting numbered capabilities, never either unqualified.** It is written out
+in full, with the 16→12 mapping table, in `proofs/README.md`.
+
+**Why (a) lost.** `GWP.N_MECHANISMS = 16` is pinned by
+`tests/test_model.py::TestGWPFramk::test_gwp_import`. Adopting a bare "12"
+makes that constant a lie and forces a code change this card does not own.
+**Why (b) lost.** It is the current state of the README and it is the one a
+reviewer reads as an overstatement: only 12 things can be constructed, toggled,
+ablated or counted by `active_mechanisms()`.
+
+**What the extra four are.** Not modules. WIP (#2), Spectral Gap (#3),
+Grassmann Optimization (#4) and Predictive Rank (#5) are **methods of
+`JAWPModule`** in `src/models/jawp.py:467/574/808/870/921/1082`. They cannot be
+turned on or off as units: `use_wip` does not exist anywhere in the repo.
+
+**Consequence recorded, not fixed.** Predictive Rank (#5) *is* a trained loss
+term — `jepa.py:810` adds `lambda_predictive_rank * loss_pred_rank`, default
+`0.0`, with an on-arm at `config/ablations/predictive_rank_on.yaml` — yet it
+has no `ALL_MECHANISMS` entry, so `active_mechanisms()`,
+`mechanism_groups()`, `dependency_dag()` and `GWP.summary()` do not see it and
+report `Core: ['jawp']`. All three sites are under `src/**`, which this card
+did not own, so the gap is documented rather than closed.
+
+**What now pins the truth.**
+`tests/test_config_system.py::TestAblationGridComplete::test_all_mechanisms_length_is_stable`
+already asserts `len(ALL_MECHANISMS) == 12` and names this file,
+`GWP.N_MECHANISMS` and the mechanisms.py header in its own failure message;
+`test_gwp_import` asserts `N_MECHANISMS == 16`. So *if the code changes*, one
+of those two tests fails and the message names the four sites to update. That
+is a better guard than any prose count, and it already existed.
+
+**Reverses if** someone adds a mechanism module (then `ALL_MECHANISMS` goes to
+13 and the 16 no longer decomposes 12 + 4 JAWP methods), or promotes one of
+the four JAWP methods to a module (then the gap closes and "16 capabilities,
+12 modules" needs rewording), or gives Predictive Rank an `ALL_MECHANISMS`
+entry and `use_*` flag (then it becomes a 13th module and the visibility gap
+above is moot).

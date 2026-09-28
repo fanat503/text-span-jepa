@@ -2259,8 +2259,14 @@ class TestDeepMergeAndDefaults:
         # After update, param_k should have no grad_fn (no autograd tracking)
         assert param_k.grad_fn is None, "EMA update leaked autograd"
 
-    def test_mechanism_bundle_counts_16(self):
-        """MechanismBundle must expose all 16 mechanisms."""
+    def test_mechanism_bundle_counts_12_modules(self):
+        """MechanismBundle must expose all 12 module mechanisms.
+
+        The count is 12, not the 16 of `GWP.N_MECHANISMS`: the GWP header
+        numbers 16 *capabilities*, of which WIP, Spectral Gap, Grassmann
+        Optimization and Predictive Rank are methods of `JAWPModule` rather
+        than modules. See `proofs/README.md` for the convention.
+        """
         from src.models.mechanisms import MechanismBundle
 
         # With all mechanisms
