@@ -1,28 +1,18 @@
+# Ablation: JAWP workspace with a strong SWIP term.
+#
+# SWIP's information-preservation term is the one that constrains how much of
+# the token information survives the projection into the JAWP workspace, so
+# this arm asks whether the full model's SWIP weight (0.01) is doing any work
+# next to the predictor's own span/future losses. 10x the reference weight.
+#
+# Guard: TestDeltaPurity::test_no_unnecessary_restatements
+
+_meta:
+  ablation: jawp_swip
+  description: "JAWP + SWIP at 10x weight — information preservation across the workspace projection"
+
 model:
-  use_jawp: true
-  use_swip: true
-  lambda_swip: 0.01
-  use_cgn: false
-  lambda_cgn_ortho: 0.0
-  use_pcr: false
-  use_spc: false
-  use_wsd: false
-  use_cmc: false
-  use_gac: false
-  use_sta: false
-  use_puc: false
-  use_rdc: false
-  lambda_spc: 0.0
-  lambda_wsd: 0.0
-  lambda_cmc: 0.0
-  lambda_gac: 0.0
-  lambda_sta: 0.0
-  lambda_puc: 0.0
-  lambda_rdc: 0.0
-  use_wsr: false
-  wsr_rho: 0.05
-  wsr_eta: 0.01
-  wsr_ema_beta: 0.999
-  wsr_warmup_steps: 500
-  wsr_mode: gradient
-  lambda_wsr: 0.0
+  lambda_swip: 0.1
+
+logging:
+  folder: output/ablations/jawp_swip/

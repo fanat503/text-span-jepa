@@ -1,28 +1,24 @@
+# Ablation: CGN + SPC, the routing pair.
+#
+# Both are in MechanismBundle.GROUPS["routing"]: CGN decides *where* information
+# flows and SPC decides *how much* capacity each frequency band gets. They are
+# the two members of the group that have independent loss terms, so their
+# interaction is the routing group's internal claim; the other two group
+# members (SWIP, PCR) have their own arms.
+#
+# Both members are at 10x the reference grid weight (0.1 vs 0.01). CGN's weight
+# is the partition-of-unity orthogonality term `lambda_cgn_ortho`, which is
+# separate from the mechanism's own gate.
+#
+# Guard: TestDeltaPurity::test_no_unnecessary_restatements
+
+_meta:
+  ablation: cgn_spc
+  description: "CGN + SPC at 10x weight — the routing group's two independent loss terms together"
+
 model:
-  use_cgn: true
-  lambda_cgn_ortho: 0.0
-  use_spc: true
-  lambda_spc: 0.01
-  use_jawp: false
-  use_swip: false
-  use_pcr: false
-  use_wsd: false
-  use_cmc: false
-  use_gac: false
-  use_sta: false
-  use_puc: false
-  use_rdc: false
-  lambda_swip: 0.0
-  lambda_wsd: 0.0
-  lambda_cmc: 0.0
-  lambda_gac: 0.0
-  lambda_sta: 0.0
-  lambda_puc: 0.0
-  lambda_rdc: 0.0
-  use_wsr: false
-  wsr_rho: 0.05
-  wsr_eta: 0.01
-  wsr_ema_beta: 0.999
-  wsr_warmup_steps: 500
-  wsr_mode: gradient
-  lambda_wsr: 0.0
+  lambda_cgn_ortho: 0.1
+  lambda_spc: 0.1
+
+logging:
+  folder: output/ablations/cgn_spc/

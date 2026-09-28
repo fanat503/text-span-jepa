@@ -1,65 +1,33 @@
-# Ablation: CGN OFF (Contextual Gating Network disabled)
-# Compare with cgn_on.yaml to measure CGN's effect on information routing
+# Ablation: CGN (Contextual Gating Network) OFF.
+#
+# Row of the leave-one-out table: the full GWP model (defaults.yaml) minus
+# exactly one mechanism. Everything else -- architecture, schedule, effective
+# batch, the other eleven mechanisms -- is inherited, so this file changes
+# nothing but this mechanism and the row cannot drift out of comparability.
+#
+# Pair with cgn_on.yaml, which is the full model. The pair therefore differs
+# by exactly one mechanism.
+#
+# `lambda_cgn_ortho` is zeroed as well as the flag: any config that names a
+# mechanism must name its weight (tests/test_swip.py asserts this for
+# SWIP; the other mechanisms have no such test yet). With the flag off
+# the module is never constructed and the weight is never read, so this
+# is belt-and-braces -- it stops a later edit that flips the flag back
+# from silently switching the mechanism on at the grid weight.
+#
+# Guards, all in tests/test_config_system.py:
+#   TestLeaveOneOut::test_no_arm_is_full_set_minus_exactly_what_its_flag_removes
+#   TestLeaveOneOut::test_off_on_pair_differs_by_exactly_the_downstream_set
+#   TestLeaveOneOut::test_no_arm_never_collapses_to_the_none_baseline
+#   TestLeaveOneOut::test_no_arm_differs_from_the_full_model_only_in_its_keys
+
+_meta:
+  ablation: no_cgn
+  description: "Leave-one-out: CGN (Contextual Gating Network) disabled, the other eleven enabled"
 
 model:
-  use_jawp: true
   use_cgn: false
-  cgn_n_groups: 8
-  cgn_tau_start: 1.0
-  cgn_tau_end: 0.1
-  cgn_anneal_steps: 10000
   lambda_cgn_ortho: 0.0
-  use_swip: false
-  swip_k_workspace: null
-  swip_target_variance: 1.0
-  lambda_swip: 0.0
-  use_pcr: false
-  pcr_n_levels: 3
-  pcr_level_dims: null
-  pcr_warmup_steps: 1000
-  use_spc: false
-  spc_n_bands: 8
-  spc_init: dct
-  lambda_spc: 0.0
-  use_wsd: false
-  wsd_k: null
-  wsd_sync_interval: 100
-  wsd_ema_beta: 0.99
-  lambda_wsd: 0.0
-  use_cmc: false
-  cmc_second_mask_ratio: null
-  cmc_min_overlap_ratio: 0.2
-  cmc_mode: interval
-  cmc_interval: 10
-  lambda_cmc: 0.0
-  use_gac: false
-  gac_gamma: 0.01
-  gac_tau_grad: 0.0001
-  gac_warmup_steps: 1000
-  lambda_gac: 0.0
-  use_sta: false
-  sta_eta: 0.01
-  sta_ema_beta: 0.999
-  sta_warmup_steps: 500
-  sta_update_interval: 10
-  lambda_sta: 0.0
-  use_puc: false
-  puc_eta: 0.01
-  puc_ema_beta: 0.999
-  puc_warmup_steps: 500
-  lambda_puc: 0.0
-  use_rdc: false
-  rdc_eta: 0.01
-  rdc_ema_beta: 0.999
-  rdc_warmup_steps: 500
-  rdc_k_workspace: null
-  lambda_rdc: 0.0
-  use_wsr: false
-  wsr_rho: 0.05
-  wsr_eta: 0.01
-  wsr_ema_beta: 0.999
-  wsr_warmup_steps: 500
-  wsr_mode: gradient
-  lambda_wsr: 0.0
-  lambda_predictive_rank: 0.0
-  lambda_sigreg: 0.0
+
+logging:
+  folder: output/ablations/no_cgn/

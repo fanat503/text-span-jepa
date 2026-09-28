@@ -1,28 +1,22 @@
+# Ablation: PCR from step 0, with no warmup.
+#
+# PCR has no loss weight of its own — it is a cascade of refinement blocks, not
+# a regulariser — so a weight sweep on it is not expressible and the only knob
+# with a defensible alternative value is `pcr_warmup_steps`. The reference
+# delays the cascade by 1000 steps (defaults.yaml); this arm engages it
+# immediately, which is the interesting regime for the Cascade Capacity theorem
+# because the bottleneck is widest exactly when the cascade starts.
+#
+# The per-mechanism arms for PCR are pcr_on.yaml / no_pcr.yaml.
+#
+# Guard: TestDeltaPurity::test_no_unnecessary_restatements
+
+_meta:
+  ablation: jawp_pcr
+  description: "JAWP + PCR with no cascade warmup (pcr_warmup_steps = 0) — cascade active from step 0"
+
 model:
-  use_jawp: true
-  use_pcr: true
-  use_cgn: false
-  lambda_cgn_ortho: 0.0
-  use_swip: false
-  use_spc: false
-  use_wsd: false
-  use_cmc: false
-  use_gac: false
-  use_sta: false
-  use_puc: false
-  use_rdc: false
-  lambda_swip: 0.0
-  lambda_spc: 0.0
-  lambda_wsd: 0.0
-  lambda_cmc: 0.0
-  lambda_gac: 0.0
-  lambda_sta: 0.0
-  lambda_puc: 0.0
-  lambda_rdc: 0.0
-  use_wsr: false
-  wsr_rho: 0.05
-  wsr_eta: 0.01
-  wsr_ema_beta: 0.999
-  wsr_warmup_steps: 500
-  wsr_mode: gradient
-  lambda_wsr: 0.0
+  pcr_warmup_steps: 0
+
+logging:
+  folder: output/ablations/jawp_pcr/
