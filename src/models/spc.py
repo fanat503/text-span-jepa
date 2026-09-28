@@ -160,6 +160,8 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from .wsd import TrainingStateGuard
+
 
 def _dct_basis(D: int, device="cpu", dtype=torch.float32) -> torch.Tensor:
     """Construct DCT-II basis matrix of size (D, D).
@@ -187,7 +189,7 @@ def _dct_basis(D: int, device="cpu", dtype=torch.float32) -> torch.Tensor:
     return basis
 
 
-class SpectralPredictiveCoding(nn.Module):
+class SpectralPredictiveCoding(TrainingStateGuard):
     """Spectral Predictive Coding — frequency-band-aware prediction loss.
 
     Decomposes the prediction residual into frequency bands and learns
@@ -333,6 +335,23 @@ class SpectralPredictiveCoding(nn.Module):
         # Inverse transform: F^T since F is orthonormal
         return z_freq @ self.freq_basis.T
 
+    def _update_running_statistics(self, band_residuals, target_bands, device) -> None:
+        """Advance the per-band residual-variance / predictability EMAs."""
+        self.adapt_step.add_(1)
+        mom = self.adapt_momentum
+        # Update residual variances
+        new_vars = torch.tensor(band_residuals, device=device)
+        self.running_residual_vars.mul_(mom).add_((1 - mom) * new_vars)
+
+        # Estimate predictability: 1 - residual/target_variance
+        target_vars = []
+        for b in range(self.n_bands):
+            tv = target_bands[b].pow(2).mean().item()
+            target_vars.append(max(tv, self.eps))
+        target_var_t = torch.tensor(target_vars, device=device)
+        predictability = (1.0 - new_vars / (target_var_t + self.eps)).clamp(0, 1)
+        self.running_predictability.mul_(mom).add_((1 - mom) * predictability)
+
     def forward(self, z_pred, z_target):
         """Compute spectral predictive coding loss.
 
@@ -370,22 +389,15 @@ class SpectralPredictiveCoding(nn.Module):
 
         # Online weight adaptation: update running statistics
         # This allows the weights to track changing predictability
-        if self.training:
-            with torch.no_grad():
-                self.adapt_step.add_(1)
-                mom = self.adapt_momentum
-                # Update residual variances
-                new_vars = torch.tensor(band_residuals, device=z_pred.device)
-                self.running_residual_vars.mul_(mom).add_((1 - mom) * new_vars)
-
-                # Estimate predictability: 1 - residual/target_variance
-                target_vars = []
-                for b in range(self.n_bands):
-                    tv = target_bands[b].pow(2).mean().item()
-                    target_vars.append(max(tv, self.eps))
-                target_var_t = torch.tensor(target_vars, device=z_pred.device)
-                predictability = (1.0 - new_vars / (target_var_t + self.eps)).clamp(0, 1)
-                self.running_predictability.mul_(mom).add_((1 - mom) * predictability)
+        # Training only (TrainingStateGuard) — a validation pass must not
+        # move the adaptation statistics.
+        with torch.no_grad():
+            self._mutate_state(
+                self._update_running_statistics,
+                band_residuals,
+                target_bands,
+                z_pred.device,
+            )
 
         # Diagnostics
         with torch.no_grad():

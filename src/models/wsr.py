@@ -128,18 +128,19 @@
 #              + R_exogenous_drift + R_sharpness
 #
 #  where R_sharpness = ρ_Q is bounded by WSR.
-
 from __future__ import annotations
 
 import math
+import warnings
 from typing import Callable
 
 import torch
 import torch.nn.functional as F
-from torch import nn
+
+from .wsd import TrainingStateGuard
 
 
-class WorkspaceSharpnessRegularization(nn.Module):
+class WorkspaceSharpnessRegularization(TrainingStateGuard):
     """Workspace Sharpness Regularization — prevents sharp workspace minima.
 
     Penalizes the worst-case loss increase when workspace Q is perturbed
@@ -219,6 +220,18 @@ class WorkspaceSharpnessRegularization(nn.Module):
     def _stiefel_retract(self, Q: torch.Tensor) -> torch.Tensor:
         """Retract onto St(D,k) via QR decomposition.
 
+        .. warning::
+           KNOWN DEFECT (open, not fixed here — it changes what
+           ``mode='sam'`` computes, so it needs a human decision).  The
+           canonical-QR sign fix reads ``diag((Q R)[:k, :])``, but for a
+           (D, k) matrix with D > k that block is NOT triangular, so the
+           signs are effectively arbitrary: the retraction flips
+           individual COLUMNS instead of nudging the subspace by ρ.
+           Measured: for a random orthonormal Q and ρ = 0.05 the
+           retracted Q is ~4.0 away from Q in Frobenius norm instead of
+           ~0.05.  Pinned by ``tests/test_training_state_guards.py::…::
+           test_retraction_preserves_column_orientation`` (xfail).
+
         Args:
             Q: (D, k) approximately orthonormal matrix.
 
@@ -286,6 +299,90 @@ class WorkspaceSharpnessRegularization(nn.Module):
         """
         self._lagged_gradient = grad.detach().clone()
 
+    def _resolve_euclidean_gradient(self, Q: torch.Tensor) -> tuple[torch.Tensor, str]:
+        """Resolve ∇_Q L, and REPORT when it is not available.
+
+        The perturbation direction of SAM is dL/dQ.  ``src/train.py`` calls
+        ``optimizer.zero_grad()`` with the default ``set_to_none=True``
+        immediately after every step, so ``Q.grad`` is None at forward time
+        and the orthonormality proxy was silently substituted for the
+        documented quantity.  On an exactly orthonormal Q that proxy is
+        *identically zero*, so ``wsr_mode: sam`` reduced to L == 0 without
+        ever computing L(Q + Δ) - L(Q).
+
+        Priority:
+          1. ``_lagged_gradient`` — real dL/dQ captured post-backward.
+          2. ``Q.grad`` — only usable if Q is a leaf that still holds a grad.
+          3. otherwise: unavailable.
+
+        Returns:
+            (gradient, source) with source in
+            ``{"lagged", "live", "unavailable"}``.  On ``"unavailable"``
+            the caller must warn and flag ``info``, never present the proxy
+            as the documented loss.
+        """
+        _lagged = getattr(self, "_lagged_gradient", None)
+        if _lagged is not None:
+            return _lagged.detach().to(Q.dtype), "lagged"
+        if Q.is_leaf and Q.grad is not None:
+            return Q.grad.detach().to(Q.dtype), "live"
+        return Q.new_zeros(Q.shape), "unavailable"
+
+    def _report_missing_gradient(self, Q: torch.Tensor) -> None:
+        """Warn ONCE that ∇_Q L is unavailable and the proxy is in use."""
+        if getattr(self, "_warned_missing_gradient", False):
+            return
+        self._warned_missing_gradient = True
+        # Do not touch Q.grad for a non-leaf tensor: torch emits its own
+        # (louder) UserWarning about that, which would bury this message.
+        grad_state = (
+            "n/a (non-leaf)" if not Q.is_leaf else ("set" if Q.grad is not None else "None")
+        )
+        warnings.warn(
+            f"WSR mode={self.mode!r}: no dL/dQ is available (Q.is_leaf="
+            f"{Q.is_leaf}, Q.grad={grad_state}, "
+            "set_lagged_gradient() never called).  The returned sharpness is "
+            "an ORTHONORMALITY PROXY, not the documented L(Q+Δ)-L(Q) — the "
+            "loss is therefore degenerate (exactly 0 for an orthonormal Q). "
+            "Call wsr.set_lagged_gradient(workspace_Q.grad) after "
+            "optimizer.step() and before zero_grad().  Either feed the lagged "
+            "gradient or stop using mode='sam'/'gradient'.",
+            UserWarning,
+            stacklevel=3,
+        )
+
+    def _orthonormality_proxy(self, Q: torch.Tensor) -> torch.Tensor:
+        """Stand-in for dL/dQ when none is available: Q @ (QᵀQ - I).
+
+        Zero for an exactly orthonormal Q, which is why it must never be
+        passed off as the documented sharpness.
+        """
+        _D, k = Q.shape
+        deviation = Q.T @ Q - torch.eye(k, device=Q.device, dtype=Q.dtype)
+        return Q @ deviation
+
+    def _update_running_statistics(
+        self,
+        sharpness: float,
+        spectral_sharpness: float,
+        directional_sharpness: float,
+        grad_norm: float,
+    ) -> None:
+        """EMA the reported sharpness diagnostics and advance the counter.
+
+        Training only (TrainingStateGuard): a validation pass must not
+        move the reported WSR diagnostics.
+        """
+        self.running_sharpness.mul_(self.ema_beta).add_((1 - self.ema_beta) * sharpness)
+        self.running_spectral_sharpness.mul_(self.ema_beta).add_(
+            (1 - self.ema_beta) * spectral_sharpness,
+        )
+        self.running_directional_sharpness.mul_(self.ema_beta).add_(
+            (1 - self.ema_beta) * directional_sharpness,
+        )
+        self.running_grad_norm.mul_(self.ema_beta).add_((1 - self.ema_beta) * grad_norm)
+        self.total_steps.add_(1)
+
     def _gradient_mode(
         self,
         Q: torch.Tensor,
@@ -310,19 +407,11 @@ class WorkspaceSharpnessRegularization(nn.Module):
         """
         _D, k = Q.shape
 
-        # Gradient source priority: (1) one-step-lagged snapshot captured by the
-        # training loop post-backward, (2) live Q.grad if present, (3) proxy from
-        # orthonormality deviation on the very first step.
-        euclidean_grad = None
-        _lagged = getattr(self, "_lagged_gradient", None)
-        if _lagged is not None:
-            euclidean_grad = _lagged.detach().to(Q.dtype)
-        elif Q.is_leaf and Q.grad is not None:
-            euclidean_grad = Q.grad.detach()
-        if euclidean_grad is None:
-            QQT = Q.T @ Q
-            deviation = QQT - torch.eye(k, device=Q.device, dtype=Q.dtype)
-            euclidean_grad = Q @ deviation  # proxy gradient
+        # Gradient source: a real dL/dQ, or an explicitly reported proxy.
+        euclidean_grad, grad_source = self._resolve_euclidean_gradient(Q)
+        if grad_source == "unavailable":
+            self._report_missing_gradient(Q)
+            euclidean_grad = self._orthonormality_proxy(Q)
 
         # Project onto Grassmann tangent space
         grad_grassmann = self._grassmann_gradient(Q, euclidean_grad)
@@ -349,15 +438,13 @@ class WorkspaceSharpnessRegularization(nn.Module):
 
         # Update running statistics
         with torch.no_grad():
-            self.running_sharpness.mul_(self.ema_beta).add_((1 - self.ema_beta) * sharpness.item())
-            self.running_spectral_sharpness.mul_(self.ema_beta).add_(
-                (1 - self.ema_beta) * spectral_sharpness.item(),
+            self._mutate_state(
+                self._update_running_statistics,
+                sharpness.item(),
+                spectral_sharpness.item(),
+                directional_sharpness.item(),
+                grad_norm.item(),
             )
-            self.running_directional_sharpness.mul_(self.ema_beta).add_(
-                (1 - self.ema_beta) * directional_sharpness.item(),
-            )
-            self.running_grad_norm.mul_(self.ema_beta).add_((1 - self.ema_beta) * grad_norm.item())
-            self.total_steps.add_(1)
 
         info = {
             "wsr_loss": loss.item(),
@@ -368,6 +455,11 @@ class WorkspaceSharpnessRegularization(nn.Module):
             "wsr_rho": self.rho,
             "wsr_warmup_factor": warmup_factor,
             "wsr_warmup": warmup_factor < 1.0,
+            # Provenance of ∇_Q L.  A downstream log that records
+            # 'unavailable' knows the value is NOT the documented
+            # sharpness; do not average it in with the others.
+            "wsr_grad_source": grad_source,
+            "wsr_gradient_substituted": grad_source == "unavailable",
         }
 
         return loss, info
@@ -408,13 +500,15 @@ class WorkspaceSharpnessRegularization(nn.Module):
         with torch.no_grad():
             L_current = loss_fn(Q, z_pred, z_target).item() if loss_fn is not None else 0.0
 
-        # Get Euclidean gradient
-        if Q.grad is not None:
-            euclidean_grad = Q.grad.detach()
-        else:
-            QQT = Q.T @ Q
-            deviation = QQT - torch.eye(k, device=Q.device, dtype=Q.dtype)
-            euclidean_grad = Q @ deviation
+        # Get Euclidean gradient.  mode='sam' used to read Q.grad only, but
+        # src/train.py zero_grads with set_to_none=True after every step, so
+        # Q.grad was ALWAYS None here and the orthonormality proxy was
+        # silently substituted — for an orthonormal Q that proxy is exactly
+        # zero, so the documented L(Q+Δ)-L(Q) was never computed.
+        euclidean_grad, grad_source = self._resolve_euclidean_gradient(Q)
+        if grad_source == "unavailable":
+            self._report_missing_gradient(Q)
+            euclidean_grad = self._orthonormality_proxy(Q)
 
         # Project onto Grassmann tangent space
         grad_grassmann = self._grassmann_gradient(Q, euclidean_grad)
@@ -446,15 +540,13 @@ class WorkspaceSharpnessRegularization(nn.Module):
 
         # Update running statistics
         with torch.no_grad():
-            self.running_sharpness.mul_(self.ema_beta).add_((1 - self.ema_beta) * sharpness)
-            self.running_spectral_sharpness.mul_(self.ema_beta).add_(
-                (1 - self.ema_beta) * spectral_sharpness.item(),
+            self._mutate_state(
+                self._update_running_statistics,
+                sharpness,
+                spectral_sharpness.item(),
+                directional_sharpness.item(),
+                grad_norm.item(),
             )
-            self.running_directional_sharpness.mul_(self.ema_beta).add_(
-                (1 - self.ema_beta) * directional_sharpness.item(),
-            )
-            self.running_grad_norm.mul_(self.ema_beta).add_((1 - self.ema_beta) * grad_norm.item())
-            self.total_steps.add_(1)
 
         info = {
             "wsr_loss": loss_tensor.item(),
@@ -467,6 +559,8 @@ class WorkspaceSharpnessRegularization(nn.Module):
             "wsr_warmup": warmup_factor < 1.0,
             "wsr_loss_current": L_current,
             "wsr_loss_perturbed": L_perturbed,
+            "wsr_grad_source": grad_source,
+            "wsr_gradient_substituted": grad_source == "unavailable",
         }
 
         return loss_tensor, info
@@ -530,9 +624,9 @@ class WorkspaceSharpnessRegularization(nn.Module):
         )
 
 
-# ═══════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
 #  One-line convenience function
-# ═══════════════════════════════════════════════════════════════════
+# ═══════════════════════════════════════════════════════════════════════════
 
 
 def wsr_sharpness(Q, embed_dim=768, rho=0.05, eta=0.01, step=0):

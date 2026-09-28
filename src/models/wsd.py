@@ -129,7 +129,58 @@ import torch
 from torch import nn
 
 
-class WorkspaceSyncDrift(nn.Module):
+class TrainingStateGuard(nn.Module):
+    """The single, greppable gate for mechanism state mutation.
+
+    ``src/train.py::_validate`` runs every mechanism's loss under
+    ``model.eval()`` + ``torch.no_grad()``.  Five mechanism modules
+    (wsd, sta, rdc, puc, gac) nevertheless wrote their EMA / step buffers
+    on that path, so the *trained weights* depended on whether a
+    validation split was loaded: two machines with the same seed produced
+    different models.
+
+    THE RULE (do not bypass): a mechanism may only mutate a registered
+    buffer or a persistent statistic while ``self.training`` is True.
+    Route every such write through ``self._mutate_state`` so that
+
+        grep -n "_mutate_state" src/models/*.py
+
+    lists every state write in the codebase.  Under ``eval()`` the
+    callable is not invoked at all, which makes the forward a pure
+    function of its inputs.
+
+    NOTE: this class lives in ``wsd.py`` only because a dedicated
+    ``src/models/_state_guard.py`` is not in any agent's file grant. It
+    should be moved there; every user imports it, so the move is
+    mechanical.
+
+    Args:
+        args: forwarded to ``nn.Module.__init__``.
+
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+
+    def _mutate_state(self, fn, *args, **kwargs):
+        """Run ``fn(*args, **kwargs)`` only while training.
+
+        Returns whatever ``fn`` returns in training mode, and ``None``
+        under ``eval()`` (where it is not called).
+
+        Args:
+            fn: a bound method or zero-argument callable that writes
+                buffers / persistent statistics.
+            *args: positional arguments forwarded to ``fn``.
+            **kwargs: keyword arguments forwarded to ``fn``.
+
+        """
+        if not self.training:
+            return None
+        return fn(*args, **kwargs)
+
+
+class WorkspaceSyncDrift(TrainingStateGuard):
     """Workspace-Target Synchronization Drift.
 
     Monitors the Grassmann distance between the JAWP workspace Q
@@ -232,12 +283,13 @@ class WorkspaceSyncDrift(nn.Module):
         # Periodic resync — AT MOST ONCE PER STEP: with CMC the drift is
         # evaluated twice per iteration, and a second in-place resync would
         # invalidate tensors saved by the first pass's autograd graph
-        # (audit R18).
+        # (audit R18). Guarded: under eval() a validation pass must not
+        # refresh the target workspace (TrainingStateGuard).
         if h_target is not None and step % self.sync_interval == 0 and prev_step != step:
-            self.update_target_cov(h_target)
-            self.resync_target_workspace()
+            self._mutate_state(self.update_target_cov, h_target)
+            self._mutate_state(self.resync_target_workspace)
 
-        self.step_count.fill_(step)
+        self._mutate_state(self.step_count.fill_, step)
 
         Q_jawp = Q_workspace[:, :k]  # (D, k)
         Q_tgt = self.target_Q[:, :k]  # (D, k)
@@ -256,7 +308,9 @@ class WorkspaceSyncDrift(nn.Module):
         drift_loss = (2.0 * k - 2.0 * cross_frob_sq_diff).clamp(min=0.0)
 
         # Running average
-        self.running_drift.mul_(0.99).add_(0.01 * drift.item())
+        self._mutate_state(
+            lambda: self.running_drift.mul_(0.99).add_(0.01 * drift.item()),
+        )
 
         # Diagnostics
         with torch.no_grad():
