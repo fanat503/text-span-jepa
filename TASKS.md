@@ -527,7 +527,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 
 ## Wave 2 cards (added after tick 1)
 
-### TASK-27 | group: G-COVER | status: todo | mode: solo
+### TASK-27 | group: G-COVER | status: done | mode: solo
 - goal: write the tests TASK-07 shipped without. `git grep` finds zero test
   references to `run_comparison`, and restoring the old file leaves the suite
   green.
@@ -545,7 +545,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   record which tests go red.
 - report: `.agent-notes/task-27.md`
 
-### TASK-28 | group: G-COVER | status: todo | mode: solo
+### TASK-28 | group: G-COVER | status: done | mode: solo
 - goal: pin the determinism fixture TASK-01 shipped without.
 - why: the worker reported honestly that no existing test fails if
   `tests/conftest.py` is deleted, and the verifier reproduced it (168 tests green
@@ -562,7 +562,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   own determinism regression, so this file is what closes that.
 - report: `.agent-notes/task-28.md`
 
-### TASK-29 | group: G-FIX | status: todo | mode: solo
+### TASK-29 | group: G-FIX | status: done | mode: solo
 - goal: make the config typo detector compare paths, not bare leaf names.
 - why: `src/train.py:849,874` builds `{p.split(".")[-1] for p in _leaves(known)}`
   and tests the key, so a key in the WRONG subtree, or an entirely misspelled
@@ -580,7 +580,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   again, naming the three cases that were silently accepted.
 - report: `.agent-notes/task-29.md`
 
-### TASK-30 | group: G-FIX | status: todo | mode: solo  (RAID seed-1, control-scout SURVIVED)
+### TASK-30 | group: G-FIX | status: done | mode: solo  (RAID seed-1, control-scout SURVIVED)
 - goal: make the baseline actually a control.
 - why: `baselines/mlm_baseline.py:5-7` claims "identical model capacity /
   identical compute". The control-scout reproduced every number and found the
