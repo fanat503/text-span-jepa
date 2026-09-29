@@ -36,6 +36,13 @@
 #   * `logging.write_tag`  — read by nothing; output paths come from
 #                            `logging.folder`.
 #
+# A third pair is deliberately ABSENT and must not be added until the trainer
+# actually reads it: `meta.deterministic` and `meta.num_threads`. Declaring an
+# unread key stops the startup typo warning, which converts "this key did
+# nothing" from a log line into a silent no-op. The full reasoning, the
+# environment variables that work today, and the exact call-site change that
+# would make the keys live are in the `meta:` block below.
+#
 # Structure follows NextLat (Microsoft Research, 2025).
 # C-JEPA best practice: explicit comments for every mechanism.
 
@@ -52,6 +59,57 @@ meta:
   load_checkpoint: false
   read_checkpoint: null
   model_name: text_span_jepa
+
+  # ── Reproducibility: TWO KEYS ARE DELIBERATELY NOT DECLARED HERE ───────
+  #
+  # `meta.deterministic` and `meta.num_threads` are the keys a run should use
+  # to request bitwise reproducibility. They are NOT in this file, and that is
+  # a decision, not an oversight. Declaring a key that `src/train.py` never
+  # reads would make `_warn_unknown_config_keys` stop warning about it, so a
+  # run asking for determinism would get silence and no determinism — the
+  # silent-no-op failure mode, which is worse than the typo warning a user
+  # gets today.
+  #
+  # Until the trainer reads them, request determinism from the ENVIRONMENT,
+  # which reaches the seeder through `src/utils/seed.py` with no call-site
+  # change and works today:
+  #
+  #   Windows (PowerShell):
+  #     $env:TEXT_SPAN_JEPA_DETERMINISTIC="1"; python -m src.train --fname <cfg>
+  #   POSIX:
+  #     TEXT_SPAN_JEPA_DETERMINISTIC=1 python -m src.train --fname <cfg>
+  #
+  # `TEXT_SPAN_JEPA_NUM_THREADS=<int>` pins the intra-op thread pool on its own
+  # (repeatable at a fixed N, still not portable across different CPUs).
+  # `TEXT_SPAN_JEPA_DETERMINISTIC=1` implies one thread plus
+  # `torch.use_deterministic_algorithms(warn_only=True)`, cudnn flags, and
+  # CUBLAS_WORKSPACE_CONFIG.
+  #
+  # THE ONE-LINE CHANGE THAT CLOSES THE CONFIG PATH (needs `src/train.py`'s
+  # owner; `src/train.py` is not this file's to edit). At
+  # `src/train.py:1148`, replace
+  #
+  #     seed_everything(seed)
+  #
+  # with
+  #
+  #     seed_everything(
+  #         seed,
+  #         deterministic=args.get("meta", {}).get("deterministic"),
+  #         num_threads=args.get("meta", {}).get("num_threads"),
+  #     )
+  #
+  # ...and then declare `meta.deterministic: false` / `meta.num_threads: null`
+  # in the block above. `null` means "leave torch's own thread count alone", so
+  # the default costs nothing. Log `reproducibility_state()` next to the seed
+  # so a run records what it pinned: a checkpoint carries weights, not a thread
+  # count, so this is the only place the answer survives.
+  #
+  # Measured cost of not doing this: 1 vs 2 intra-op threads, same seed, same
+  # data, 10 steps -> steps 0-2 bitwise equal, steps 3-9 differ by
+  # |d| = 1.19e-07 ... 2.38e-07, final `qkv` weight not bitwise equal. With
+  # determinism on, the same two launches agree bitwise. See
+  # `.agent-notes/task-24.md`.
 
 data:
   # Per-device micro-batch. 64 x grad_accum_steps 8 = 512 = the reference
