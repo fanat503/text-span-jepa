@@ -20,7 +20,10 @@ Pinned contracts
     `MechanismBundle.active_mechanisms()` -- the runtime truth -- never from the
     config's own `use_*` flags, so the WSD-needs-JAWP guard in
     `TextSpanJEPA.__init__` is honoured rather than assumed.
-3.  Every config key exists at its exact dotted path in `defaults.yaml`.
+3.  Every config key exists at its exact dotted path in `defaults.yaml`, and
+    `src/train.py`'s own startup warning now checks paths rather than bare
+    leaf names, so a misplaced key or a misspelled section is reported instead
+    of silently ignored.
 4.  No config restates a default it does not need to change, beyond one
     documented per-file exception (see `_allowed_repeats`).
 5.  `ema_tau_end < 1.0` everywhere and the target encoder provably still moves
@@ -35,7 +38,10 @@ on `meta` tensors; mechanism activation uses a shrunk shape.
 from __future__ import annotations
 
 import contextlib
+import logging
 import re
+import warnings
+from contextvars import ContextVar
 from pathlib import Path
 
 import pytest
@@ -44,7 +50,7 @@ import yaml
 
 from src.models.jepa import TextSpanJEPA, TextSpanJEPAConfig
 from src.models.mechanisms import MechanismBundle
-from src.train import _deep_merge, _normalize_model_name
+from src.train import _deep_merge, _normalize_model_name, _warn_unknown_config_keys
 from src.utils.schedulers import EMATauSchedule
 
 REPO = Path(__file__).resolve().parent.parent
@@ -61,17 +67,20 @@ ALL_MECHANISMS = tuple(MechanismBundle.ALL_MECHANISMS)
 GPT2_VOCAB = 50304
 
 # Keys `src.train._warn_unknown_config_keys` accepts without a defaults.yaml
-# entry. Reproduced so this file documents the trainer's real behaviour instead
-# of a guess at it. See `TestTrainerTypoDetectorGap`.
+# entry, as full dotted paths. Kept in step with the trainer's own list by
+# `test_trainer_extra_known_matches_the_trainer`, so a new opt-in there fails
+# here instead of silently changing what this file claims the trainer accepts.
+# See `TestTrainerTypoDetectorGap`.
 _TRAINER_EXTRA_KNOWN = {
-    "average_top_k_layers",
-    "loss_beta",
-    "loss_scale",
-    "ema_decay",
-    "ema_end_decay",
-    "ema_anneal_end_step",
-    "head_layers",
-    "dataset",
+    "model.average_top_k_layers",
+    "model.loss_beta",
+    "model.loss_scale",
+    "model.ema_decay",
+    "model.ema_end_decay",
+    "model.ema_anneal_end_step",
+    "model.head_layers",
+    "meta.dataset",
+    "data.allow_missing_validation",
 }
 
 # Shape/curriculum fields shrunk to something constructible in microseconds.
@@ -198,7 +207,9 @@ def _node_paths(d, prefix=""):
 _DEFAULTS_LEAF_MAP = dict(_leaves(_DEFAULTS))
 _DEFAULTS_LEAVES = set(_DEFAULTS_LEAF_MAP)
 _DEFAULTS_NODES = _node_paths(_DEFAULTS)
-_DEFAULTS_LEAF_NAMES = {p.split(".")[-1] for p in _DEFAULTS_LEAVES}
+# No `_DEFAULTS_LEAF_NAMES`. It existed only to mirror the trainer's
+# leaf-NAME comparison, which is the defect `TestTrainerTypoDetectorGap`
+# pins shut; a bare-name set in this file would invite the mirror back.
 
 
 def _get(cfg: dict, dotted: str):
@@ -461,8 +472,17 @@ class TestLeaveOneOut:
 
 
 # ══════════════════════════════════════════════════════════════════════
-#  3. Key paths -- the trainer's own detector matches leaf NAMES
+#  3. Key paths -- the trainer's own detector compares dotted PATHS
 # ══════════════════════════════════════════════════════════════════════
+
+
+#: The path quoted out of one `_warn_unknown_config_keys` warning line.
+_WARNED_PATH_RE = re.compile(r"Unknown config key '([^']+)'")
+
+#: `_trainer_would_warn` is a plain function, but it needs the `caplog`
+#: fixture, so the handle is threaded through a ContextVar rather than
+#: through every call site.
+_CAPLOG: ContextVar = ContextVar("caplog", default=None)
 
 
 def _bad_paths(cfg: dict) -> list:
@@ -483,30 +503,27 @@ def _bad_nodes(cfg: dict) -> list:
 
 
 def _trainer_would_warn(cfg: dict) -> set:
-    """Paths `src.train._warn_unknown_config_keys` would warn about.
+    """Paths `src.train._warn_unknown_config_keys` actually warns about.
 
-    Mirrors the shipped implementation, which compares the leaf *name* `k`
-    against every leaf name in defaults.yaml. Reproduced here so this file
-    documents the detector's real reach rather than asserting a guess.
+    Calls the shipped function and reads its warnings back, rather than
+    mirroring it: a mirror pins the copy, not the trainer, and the three cases
+    this file exists to catch are exactly the ones where the copy and the
+    trainer disagree about what a "key" is. The config is deep-merged over an
+    empty dict first, so the argument is the resolved tree a run would see.
     """
+    caplog = _CAPLOG.get()
+    if caplog is None:  # pragma: no cover - only reachable outside a test
+        raise RuntimeError("_trainer_would_warn needs the caplog fixture")
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        with caplog.at_level(logging.WARNING, logger=""):
+            caplog.clear()
+            _warn_unknown_config_keys(_deep_merge({}, cfg))
     warned = set()
-
-    def walk(d, prefix=""):
-        if not isinstance(d, dict):
-            return
-        for k, v in d.items():
-            p = f"{prefix}.{k}" if prefix else str(k)
-            if isinstance(v, dict):
-                walk(v, p)
-            elif (
-                k not in _DEFAULTS_LEAF_NAMES
-                and k not in {"_meta", "description"}
-                and k not in _TRAINER_EXTRA_KNOWN
-                and not p.startswith("_meta.")
-            ):
-                warned.add(p)
-
-    walk(cfg)
+    for record in caplog.records:
+        m = _WARNED_PATH_RE.search(record.getMessage())
+        if m:
+            warned.add(m.group(1))
     return warned
 
 
@@ -515,9 +532,10 @@ class TestKeyPaths:
     def test_every_key_exists_at_its_exact_path(self, rel):
         bad = _bad_paths(_raw(rel)) + _bad_nodes(_raw(rel))
         assert not bad, (
-            f"{rel}: {bad} do not exist at those paths in defaults.yaml. A key in "
-            f"the wrong subtree is accepted by the trainer and silently inert at "
-            f"runtime."
+            f"{rel}: {bad} do not exist at those paths in defaults.yaml. The "
+            f"trainer now warns about each of them by path, but a warning is a log "
+            f"line, not a stop: a key in the wrong subtree is still silently inert "
+            f"at runtime, so it must not be committed in the first place."
         )
 
     def test_defaults_yaml_declares_every_section_a_config_may_use(self):
@@ -526,30 +544,99 @@ class TestKeyPaths:
 
 
 class TestTrainerTypoDetectorGap:
-    """Documents the `src/train.py` leaf-name gap for that file's owner.
+    """The `src/train.py` detector compares full dotted PATHS, not leaf names.
 
-    The shipped detector builds `{p.split('.')[-1] for p in leaves(defaults)}` and
-    tests membership of the leaf *name*, so it cannot see a key in the wrong
-    subtree, or a wholly misspelled section. These are negative controls: they
-    assert the gap still exists, so a future fix to `src/train.py` turns this
-    file red and prompts the test to be rewritten rather than left stale.
+    History, because it is the reason these three tests exist at all. The
+    detector used to build `{p.split('.')[-1] for p in _leaves(defaults)}` and
+    test membership of the leaf *name*. It therefore could not see a key in the
+    wrong subtree, nor a wholly misspelled section, and each of the three
+    cases below was accepted silently: the value was never read, so the run
+    trained something other than what its config said.
+
+    They were negative controls -- asserting the gap still existed -- so the
+    fix turned them red first; this is the rewrite they asked for, and the
+    assertions are inverted to pin the fixed behaviour. They stay three
+    separate tests because the three cases are three different ways of being
+    wrong, and a partial fix (paths for leaves, names for sections) has to
+    fail.
     """
 
-    def test_misplaced_key_is_invisible_to_the_trainer(self):
+    @pytest.fixture(autouse=True)
+    def _capture(self, caplog):
+        """Publish this test's `caplog` to `_trainer_would_warn`."""
+        token = _CAPLOG.set(caplog)
+        try:
+            yield
+        finally:
+            _CAPLOG.reset(token)
+
+    def test_misplaced_key_is_detected(self):
+        """`batch_size` is a real key name; it just lives at `data.batch_size`."""
         misplaced = {"model": {"batch_size": 64}}
-        assert not _trainer_would_warn(misplaced), (
-            "src/train.py now detects misplaced keys by path; retire this control "
-            "and let TestKeyPaths rely on the trainer"
+        assert _trainer_would_warn(misplaced) == {"model.batch_size"}, (
+            "the trainer cannot see a real key sitting in the wrong subtree. "
+            "`model.batch_size` is read by nobody, so the run trains at the "
+            "defaults.yaml micro-batch whatever the config says."
         )
         assert _bad_paths(misplaced) == ["model.batch_size"]
 
-    def test_misspelled_section_is_invisible_to_the_trainer(self):
-        assert not _trainer_would_warn({"modle": {"embed_dim": 8}})
-        assert not _trainer_would_warn({"optimisation": {"lr": 1.0}})
+    def test_misspelled_section_is_detected(self):
+        """A new top-level namespace is the widest form of the same hole."""
+        assert _trainer_would_warn({"modle": {"embed_dim": 8}}) == {"modle.embed_dim"}
+        assert _trainer_would_warn({"optimisation": {"lr": 1.0}}) == {"optimisation.lr"}
         assert _bad_paths({"modle": {"embed_dim": 8}}) == ["modle.embed_dim"]
 
-    def test_nested_typo_inside_a_known_section_is_caught(self):
+    def test_nested_typo_inside_a_known_section_is_still_caught(self):
+        """The one case leaf-name matching got right, for free. Must not regress."""
         assert _trainer_would_warn({"model": {"lamda_swip": 0.1}}) == {"model.lamda_swip"}
+
+    def test_a_correctly_pathed_key_is_not_warned_about(self):
+        """The false-positive guard. A stricter detector is not a better one.
+
+        `TestKeyPaths` already proves every shipped config is path-clean, but
+        against this file's own predicate. This pins the trainer's log, so
+        over-strictness surfaces as a spurious startup warning on a correct
+        config rather than as a quiet slowdown in the check's usefulness.
+        """
+        assert _trainer_would_warn({"model": {"embed_dim": 64, "use_swip": True}}) == set()
+        assert _trainer_would_warn({"data": {"batch_size": 64}}) == set()
+        assert _trainer_would_warn({"optimization": {"grad_accum_steps": 8}}) == set()
+
+    def test_meta_and_documented_exemptions_stay_exempt(self):
+        """`_meta.*` provenance and the CLI-only opt-in must not become noise."""
+        cfg = {
+            "_meta": {"note": "free-form", "devices": 8},
+            "data": {"allow_missing_validation": True},
+            "model": {"description": "one line of prose", "head_layers": 2},
+        }
+        assert _trainer_would_warn(cfg) == set(), (
+            "an exemption in src/train.py's `extra_known` / `metadata_prefixes` "
+            "stopped covering a documented key, so every config using it would now "
+            "log a spurious 'possible typo' at startup"
+        )
+        # ...and the exemptions are PATH-scoped, so they cannot be borrowed
+        # from the wrong subtree to smuggle a key past the check.
+        assert _trainer_would_warn({"model": {"allow_missing_validation": True}}) == {
+            "model.allow_missing_validation"
+        }
+
+    def test_trainer_extra_known_matches_the_trainer(self):
+        """Keeps the two lists from drifting apart silently.
+
+        `_TRAINER_EXTRA_KNOWN` is this file's copy of the trainer's opt-in
+        list. It is read out of the source rather than restated, so an entry
+        added on the `src/` side without being documented here fails instead of
+        quietly changing what this file claims the trainer accepts.
+        """
+        block = re.search(r"extra_known = \{(.*?)\}", _TRAIN_SRC, re.DOTALL)
+        assert block is not None, "src/train.py no longer names an `extra_known` set"
+        found = set(re.findall(r'"([^"]+)"', block.group(1)))
+        assert all("." in k for k in found), (
+            f"src/train.py's extra_known went back to bare leaf names: {sorted(found)}. "
+            f"A name matches in every section, which is the hole this class pins shut."
+        )
+        drift = sorted(found ^ _TRAINER_EXTRA_KNOWN)
+        assert not drift, f"src/train.py's extra_known changed: {drift}"
 
 
 # ══════════════════════════════════════════════════════════════════════
