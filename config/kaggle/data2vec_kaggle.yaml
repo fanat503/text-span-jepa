@@ -13,7 +13,7 @@
 # declared once in defaults.yaml because all four data2vec rungs use the same
 # values.
 #
-# Guard: TestEveryConfigRuns, TestDeltaPurity
+# Guard: TestEveryConfigRuns, TestDeltaPurity, TestOneOutputDirPerRun
 
 _meta:
   config: data2vec_kaggle
@@ -41,4 +41,10 @@ optimization:
   final_weight_decay: 0.01
 
 logging:
-  folder: /kaggle/working/output/
+  # One directory per arm, as everywhere else in the repo
+  # (`output/ablations/<arm>/`, `output/wikitext/<arm>/`, ...). The three
+  # Kaggle arms used to share `/kaggle/working/output/`, so the last one run
+  # overwrote the other two's train_log.csv, best.pt and
+  # checkpoint-latest.pth.tar -- which is exactly the comparison this family
+  # exists to run. Guard: TestOneOutputDirPerRun.
+  folder: /kaggle/working/output/kaggle/data2vec/

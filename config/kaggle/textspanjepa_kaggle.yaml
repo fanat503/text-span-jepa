@@ -13,7 +13,8 @@
 # `TextSpanJEPAConfig.validate()` rejects and which freezes the target encoder.
 # The endpoint is now declared once, in defaults.yaml.
 #
-# Guard: TestEveryConfigRuns, TestDeltaPurity, TestEMATargetStillMoves
+# Guard: TestEveryConfigRuns, TestDeltaPurity, TestEMATargetStillMoves,
+# TestOneOutputDirPerRun
 
 _meta:
   config: textspanjepa_kaggle
@@ -52,4 +53,10 @@ optimization:
   grad_accum_steps: 16
 
 logging:
-  folder: /kaggle/working/output/
+  # One directory per arm, as everywhere else in the repo
+  # (`output/ablations/<arm>/`, `output/wikitext/<arm>/`, ...). The three
+  # Kaggle arms used to share `/kaggle/working/output/`, so the last one run
+  # overwrote the other two's train_log.csv, best.pt and
+  # checkpoint-latest.pth.tar -- which is exactly the comparison this family
+  # exists to run. Guard: TestOneOutputDirPerRun.
+  folder: /kaggle/working/output/kaggle/textspanjepa/

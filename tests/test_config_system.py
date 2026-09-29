@@ -30,6 +30,11 @@ Pinned contracts
     on the final scheduled step.
 6.  The scaling ladder varies width/depth and nothing else.
 7.  No dead keys, and the scaling filenames match measured parameter counts.
+8.  Every shipped config resolves to its own `logging.folder`, so no two
+    configs overwrite each other's `train_log.csv` / `best.pt` /
+    `checkpoint-latest.pth.tar`. (The one collision in the pre-guard tree was
+    the three `config/kaggle/*.yaml` arms, which trained the JEPA-vs-MLM-vs-
+    data2vec comparison into a single directory.)
 
 CPU-only, no network, no training. Model construction for parameter counting is
 on `meta` tensors; mechanism activation uses a shrunk shape.
@@ -1158,4 +1163,86 @@ class TestScalingParamCounts:
         assert reported < 0.5 * _total, (
             "TextSpanJEPA.get_num_params() now covers the target encoder; the "
             "comments in config/scaling/*.yaml must be recomputed"
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  9. One output directory per run
+# ══════════════════════════════════════════════════════════════════════
+
+
+def _folder(rel: str):
+    """The `logging.folder` a run started with `--fname <rel>` would use."""
+    return _get(_merged(rel), "logging.folder")
+
+
+# The three Kaggle arms, named here so a failure can point at them. This is
+# the whole of the Kaggle family: JEPA, MLM and data2vec trained on the same
+# corpus, the same effective batch and the same single T4, so the three runs
+# are comparable to each other -- which is the reason they must NOT overwrite
+# each other's results.
+KAGGLE_ARMS = (
+    "config/kaggle/textspanjepa_kaggle.yaml",
+    "config/kaggle/mlm_kaggle.yaml",
+    "config/kaggle/data2vec_kaggle.yaml",
+)
+
+# The folder each arm is expected to resolve to. Held as data here so that a
+# rename shows up as a diff in this test, rather than as a convention change
+# spread silently across three YAMLs.
+KAGGLE_FOLDERS = (
+    "/kaggle/working/output/kaggle/textspanjepa/",
+    "/kaggle/working/output/kaggle/mlm/",
+    "/kaggle/working/output/kaggle/data2vec/",
+)
+
+
+class TestOneOutputDirPerRun:
+    """Two configs that resolve to one folder overwrite each other's results.
+
+    `src/train.py` uses `logging.folder` verbatim (`log_dir = log_cfg.get(
+    "folder", "output/")`) and every artefact name under it is a fixed
+    literal -- `train_log.csv`, `best.pt`, `checkpoint-latest.pth.tar`,
+    `checkpoint-ep{N}.pth.tar`, the `params-*.yaml` dump -- so a shared folder
+    is a shared file list, not a shared namespace. Nothing in the trainer
+    namespaces by config. `src/utils/distributed.py::log_dir_lock` documents
+    the same hazard for independent jobs and its error message names the fix:
+    "point logging.folder somewhere else".
+
+    The property is asserted over the MERGED config, not the raw file, because
+    a config that omits `logging.folder` inherits `output/` from
+    defaults.yaml and would collide with nothing less than the whole default
+    tree.
+    """
+
+    def test_every_config_declares_a_usable_output_folder(self):
+        for rel in CONFIG_IDS:
+            folder = _folder(rel)
+            assert isinstance(folder, str) and folder, (
+                f"{rel}: logging.folder resolves to {folder!r}. src/train.py "
+                f"passes it to os.makedirs() and to os.path.join() for every "
+                f"artefact, so it must be a non-empty string"
+            )
+
+    def test_every_config_resolves_to_a_distinct_output_folder(self):
+        by_folder: dict = {}
+        for rel in CONFIG_IDS:
+            by_folder.setdefault(_folder(rel), []).append(rel)
+        collisions = {f: r for f, r in by_folder.items() if len(r) > 1}
+        assert not collisions, (
+            f"{len(collisions)} output folder(s) are shared by more than one "
+            f"config, so whichever config runs last overwrites train_log.csv, "
+            f"best.pt and checkpoint-latest.pth.tar of the others: "
+            + "; ".join(f"{f!r} <- {', '.join(sorted(r))}" for f, r in sorted(collisions.items()))
+        )
+
+    def test_the_three_kaggle_arms_get_one_directory_each(self):
+        """The named regression, so a re-collision names the culprit directly."""
+        got = tuple(_folder(rel) for rel in KAGGLE_ARMS)
+        assert got == KAGGLE_FOLDERS, (
+            f"the Kaggle arms resolve to {got}, expected {KAGGLE_FOLDERS}. The "
+            f"three runs are the head-to-head comparison -- JEPA vs MLM vs "
+            f"data2vec on one T4, one corpus, one effective batch -- so a shared "
+            f"folder destroys the comparison it exists to produce. Update "
+            f"KAGGLE_FOLDERS in this file when the convention changes."
         )
