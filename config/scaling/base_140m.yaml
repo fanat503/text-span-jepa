@@ -31,6 +31,23 @@
 # That is a `src/models/jepa.py` issue, not a config issue.
 #
 # Guard: TestScalingLadder, TestScalingParamCounts
+#
+# REPRODUCIBILITY: this file pins nothing about the machine the rung is run on,
+# and no config key can. `src/train.py` calls `seed_everything(seed)`, so the
+# intra-op thread count comes from whatever OMP/the launcher left, and the rung
+# is then only reproducible on a box with that same count. Measured
+# (`src/utils/seed.py`, `.agent-notes/task-24.md`): 1 vs 2 threads, same seed,
+# same data, 10 steps -> steps 0-2 bitwise equal, steps 3-9 differ by up to
+# 2.4e-07, final `qkv` weight not bitwise equal. A capacity curve therefore
+# cannot be re-derived bit-for-bit on a different machine unless determinism is
+# requested explicitly:
+#
+#   TEXT_SPAN_JEPA_DETERMINISTIC=1 python -m src.train --fname <this file>
+#
+# and `reproducibility_state()` should be logged next to the seed, because a
+# checkpoint does not carry its own thread count. The config key that would do
+# this properly is deliberately not declared -- see the `meta:` block of
+# defaults.yaml for the reasoning and the exact one-line `src/train.py` change.
 
 _meta:
   config: base_140m
