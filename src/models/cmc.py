@@ -141,47 +141,70 @@ from torch import nn
 
 # Salt mixed into the master seed for CMC's default mask stream, so the CMC
 # draws cannot coincide with another consumer's draws from the same seed.
+# CMC's second-mask randomness is derived from (master seed, step) rather than
+# held in a stateful generator. A module-global generator's position is not a
+# tensor, so it never reaches `state_dict`, and a resume silently replays the
+# mask sequence from the start. `defaults.yaml` sets `use_cmc: true`, so that is
+# the default path, not an edge case.
+#
+# A generator is constructed per draw instead. With `cmc_interval: 10` that is
+# one construction per ten training steps, next to a step that already runs a
+# forward and a backward.
 _MASK_RNG_SALT = 0x5EEDC0DE
+_MASK_SEED_MODULUS = 2**31 - 1
 
-# Lazily built, process-private stream for the default (no rng, no seed) path.
-# See `_default_mask_rng`.
-_mask_rng_default: torch.Generator | None = None
+# Counter for the CONVENIENCE path only, i.e. a caller that passed no step.
+# Deliberately not checkpointed: it exists so that inspection and test code can
+# ask for "some mask" without the public API becoming unusable. Training passes
+# `step` and therefore never reaches this.
+_mask_draw_counter = 0
 
 
-def _default_mask_rng() -> torch.Generator:
-    """Return CMC's process-private mask stream, building it on first use.
+def _derive_mask_rng(step: int) -> torch.Generator:
+    """Build the generator for one draw, as a pure function of `step`.
 
-    The stream is seeded from the master seed the caller already supplied:
-    `src/utils/seed.py::seed_everything` calls `torch.manual_seed`, and
-    `torch.initial_seed` reports that seed as a pure query — it reads no
-    randomness and does not move the global stream. Mixing in `_MASK_RNG_SALT`
-    keeps the CMC draws distinct from any other consumer seeded the same way.
+    `torch.initial_seed()` is a query, not a draw: it reports the seed the
+    process was given without reading randomness or moving the global stream.
+    Mixing in the step makes each draw independent of every other, so the whole
+    sequence is reproducible from `step` alone and nothing needs persisting.
 
-    Two consequences worth stating plainly:
+    Args:
+        step: the global training step, which the trainer checkpoints.
 
-    * Consecutive calls draw *different* masks (the stream advances), so
-      `generate_second_mask` still behaves like a random mask generator, while
-      the process-global torch RNG stream is never consumed and never advanced.
-    * The stream's position is module state, not a tensor buffer, so it is not
-      in `state_dict` and `src/train.py`'s `_capture_rng_state` cannot save it.
-      A resumed run therefore re-enters this stream part-way rather than
-      reproducing the uninterrupted sequence. Callers that need that should
-      pass `rng=` and own the checkpointing of that generator themselves.
+    Returns:
+        A freshly seeded CPU generator for this draw.
 
     """
-    global _mask_rng_default
-    if _mask_rng_default is None:
-        base = (int(torch.initial_seed()) + _MASK_RNG_SALT) % (2**63 - 1)
-        _mask_rng_default = torch.Generator(device="cpu")
-        _mask_rng_default.manual_seed(base)
-    return _mask_rng_default
+    base = int(torch.initial_seed()) + _MASK_RNG_SALT
+    derived = (base * 1_000_003 + int(step) * 2_654_435_761) % _MASK_SEED_MODULUS
+    gen = torch.Generator(device="cpu")
+    gen.manual_seed(derived)
+    return gen
+
+
+def _convenience_mask_rng() -> torch.Generator:
+    """Generator for a caller that passed no step. NOT resume-exact.
+
+    The counter is what makes consecutive calls return different masks, which is
+    what a mask generator is for. It is process state, so a resume would rewind
+    it, which is precisely why the training path passes `step`.
+
+    """
+    global _mask_draw_counter
+    base = int(torch.initial_seed()) + _MASK_RNG_SALT
+    derived = (base * 1_000_003 + _mask_draw_counter * 2_654_435_761) % _MASK_SEED_MODULUS
+    _mask_draw_counter += 1
+    gen = torch.Generator(device="cpu")
+    gen.manual_seed(derived)
+    return gen
 
 
 @contextlib.contextmanager
 def _mask_rng(
     rng: torch.Generator | None,
     seed: int | None,
-) -> Iterator[torch.Generator | None]:
+    step: int | None,
+) -> Iterator[torch.Generator]:
     """Yield the generator the CMC span draws must come from.
 
     Three cases, in priority order:
@@ -191,8 +214,12 @@ def _mask_rng(
        touched at all.
     2. `seed` given (no `rng`): a private generator is built from that seed, so
        the same seed reproduces the same mask and the global RNG is untouched.
-    3. Neither given: CMC's process-private stream (`_default_mask_rng`), which
-       the process-global torch RNG neither feeds nor is fed by.
+    3. `step` given (no `rng`, no `seed`): a generator derived from
+       (master seed, `step`). No state persists between calls, so this path is
+       resume-exact with no checkpoint entry. THIS IS THE TRAINING PATH.
+    4. Nothing given: a counter-based convenience path, so the function stays
+       usable for inspection and tests. Process state, therefore NOT
+       resume-exact. Training must pass `step`.
 
     Args:
         rng: caller-owned CPU generator, or None.
@@ -219,7 +246,10 @@ def _mask_rng(
         private.manual_seed(int(seed))
         yield private
         return
-    yield _default_mask_rng()
+    if step is not None:
+        yield _derive_mask_rng(int(step))
+        return
+    yield _convenience_mask_rng()
 
 
 class CrossMaskConsistency(nn.Module):
@@ -308,6 +338,7 @@ class CrossMaskConsistency(nn.Module):
         device: torch.device = torch.device("cpu"),
         rng: torch.Generator | None = None,
         seed: int | None = None,
+        step: int | None = None,
     ) -> torch.Tensor:
         """Generate a second span-based mask for CMC.
 
@@ -335,6 +366,10 @@ class CrossMaskConsistency(nn.Module):
                 generator seeded with it is used, so two calls with the same
                 seed return the same mask and the global RNG is untouched.
                 Mutually exclusive with `rng`.
+            step: the checkpointed global training step. On the training path
+                this is what makes the draw reproducible rather than merely
+                private. Omitting it outside the training loop is allowed and
+                yields a mask that is not resume-exact.
 
         Returns:
             mask: (B, T) binary mask. 1 = masked, 0 = visible.
@@ -347,7 +382,7 @@ class CrossMaskConsistency(nn.Module):
         min_span, max_span = span_length_range
         n_mask_target = int(seq_len * mask_ratio)
 
-        with _mask_rng(rng, seed) as draw_rng:
+        with _mask_rng(rng, seed, step) as draw_rng:
             for b in range(batch_size):
                 n_masked = 0
                 attempts = 0

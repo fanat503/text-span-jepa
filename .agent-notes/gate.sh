@@ -65,6 +65,9 @@ stage "security gates (checkpoint loading cannot execute a payload)"
 stage "checkpoint fidelity (resume must match a continuous run)"
 "$PY" tools/rt.py tests/test_checkpoint_fidelity.py || FAILED=1
 
+stage "CMC mask resume safety (a fresh interpreter must continue the sequence)"
+"$PY" tools/rt.py tests/test_cmc_resume.py || FAILED=1
+
 stage "training-state guards (eval must not mutate training state)"
 "$PY" tools/rt.py tests/test_training_state_guards.py || FAILED=1
 

@@ -1313,6 +1313,7 @@ def main(args):
                             batch_size=mask_positions.size(0),
                             mask_ratio=mask_positions.float().mean().item(),
                             device=mask_positions.device,
+                            step=global_step,
                         )
                         overlap = model.cmc.compute_overlap_mask(mask_positions, second_mask)
                     # Second forward pass (detached — only provides gradient
