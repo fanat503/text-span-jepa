@@ -66,3 +66,9 @@ V0.*.md
 V0.*.txt
 FULL_MODEL_CODE_*.md
 AUDIT_REPORT_*.md
+
+# Campaign scratch: one-shot measurement scripts written to take a number,
+# reported in the .md beside them and never re-run. Wave 3 committed 34 of these,
+# 96,790 lines, which is scratch dwarfing the actual change.
+.agent-notes/_probe_*.py
+
