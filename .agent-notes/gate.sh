@@ -34,6 +34,20 @@ fi
 FAILED=0
 stage() { printf '\n=== %s ===\n' "$1"; }
 
+stage "agent safety policy (the guard must itself be guarded)"
+# policy.js is what stands between a confused agent and `shutil.rmtree` on the
+# repo. A policy that silently stops matching is worse than none, because the
+# owner believes it is protected. 61 cases: the named blind spots, the
+# interpreter escape hatch, Windows shells, git history, publishing, and the
+# ordinary work that must stay frictionless.
+# Routed through python, not `node "C:/Users/..."`: Git-Bash mangles the
+# non-ASCII path segment and node then cannot resolve the module. The wrapper
+# also fails loud if the plugin or its test is missing, rather than skipping.
+"$PY" tools/check_policy.py || FAILED=1
+
+stage "opencode config syntax (brace balance + JSONC parse)"
+"$PY" tools/check_config_syntax.py || FAILED=1
+
 stage "ruff"
 "$PY" -m ruff check . --output-format concise || FAILED=1
 
