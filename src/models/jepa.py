@@ -9,8 +9,8 @@ import copy
 
 import torch
 import torch.nn.functional as F
-from torch import nn
 
+from ._state_guard import TrainingStateGuard
 from .cgn import ContextualGatingNetwork
 from .cmc import CrossMaskConsistency
 from .collapse import (
@@ -359,8 +359,14 @@ class TextSpanJEPAConfig:
         return True
 
 
-class TextSpanJEPA(nn.Module):
-    """Text-Span JEPA: Latent Predictive Learning for Language Representations."""
+class TextSpanJEPA(TrainingStateGuard):
+    """Text-Span JEPA: Latent Predictive Learning for Language Representations.
+
+    Inherits ``TrainingStateGuard`` so that the running target-centering
+    statistic, which lives in ``TargetCentering`` (a plain ``nn.Module``) and
+    therefore cannot guard itself, is still written only while training. See
+    ``compute_loss_with_targets``.
+    """
 
     def __init__(self, config: TextSpanJEPAConfig):
         super().__init__()
@@ -621,7 +627,18 @@ class TextSpanJEPA(nn.Module):
         with torch.no_grad():
             self._prev_target_h = getattr(self, "_prev_target_h", None)
             h_target, _ = self.target_encoder(original_input_ids)
-            h_target = self.target_centering(h_target)
+            # `target_centering.center` is training state, not a loss input: it
+            # is the EMA of the target mean over *training* batches and the next
+            # step subtracts it. `TargetCentering` is a plain `nn.Module` that
+            # cannot guard its own write, and this is the only place the model
+            # reaches it -- so the write is routed through the shared guard and
+            # the subtraction is kept, which is arithmetically identical in
+            # training mode and leaves the buffer alone under `eval()`.
+            # Otherwise `src/train.py::_validate` folds the validation split's
+            # mean into the statistic the next training step reads, so the
+            # trained weights depend on whether a validation split was loaded.
+            self._mutate_state(self.target_centering.update_center, h_target)
+            h_target = h_target - self.target_centering.center
             h_target = F.layer_norm(h_target, (h_target.size(-1),))
 
         # CGN: apply contextual gating before predictor
