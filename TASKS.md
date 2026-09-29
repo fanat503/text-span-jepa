@@ -223,6 +223,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 
 ### TASK-12 | group: G-COVER | status: todo | mode: solo
 - goal: fix the split redraw in `src/interp/layer_analysis.py`.
+- also covers: the former TASK-33, which duplicated this card.
 - why: `_train_linear_probe` draws a fresh unseeded `torch.randperm(N)` for
   **every layer** and reports max-over-epochs validation accuracy, so the
   12-layer accuracy profile is 12 measurements on 12 different splits.
@@ -273,6 +274,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   data**, not chosen to look plausible. State the measurement for each.
 
 ### TASK-15 | group: G-COVER | status: todo | mode: solo
+- also covers: the former TASK-32, which duplicated this card.
 - goal: fix the Benjamini-Hochberg implementation in
   `src/interp/statistical_tests.py`.
 - why: `corrected` uses the naive `p*n/rank` (L288) while `significant` uses the
@@ -614,9 +616,17 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   the three kaggle arms named.
 - report: `.agent-notes/task-31.md`
 
-### TASK-32 | group: G-COVER | status: todo | mode: solo
-- goal: fix the Benjamini-Hochberg implementation in
-  `src/interp/statistical_tests.py`.
+### TASK-32 | group: G-COVER | status: dup | mode: none
+- DUPLICATE of TASK-15. Same file, same defect, same fix. Folded in there.
+- closed because: the wave-2 block was written from RAID seeds without
+  checking it against the cards already on the board, so two seeds re-stated
+  two existing cards. Recorded rather than deleted, because "I created the same
+  card twice" is the useful part.
+
+### TASK-33 | group: G-COVER | status: dup | mode: none
+- DUPLICATE of TASK-12. Same file, same defect, same fix. Folded in there.
+- the old goal text, kept so the duplication is auditable: stop
+  `layer_analysis` redrawing its split per layer.
 - why: `corrected` uses the naive `p*n/rank` at L288 while `significant` uses the
   step-up rule at L280-284, so the two disagree. Reproduced with
   `p = [0.03, 0.049]`: `corrected = [0.06, 0.049]`, `significant = [0, 1]`, so a
