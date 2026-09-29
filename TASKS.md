@@ -146,7 +146,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   would restore only the hand-listed tensors and silently reproduce the 29%
   resume divergence this campaign removed.
 
-### TASK-08 | group: G-FIX | status: todo | mode: solo
+### TASK-08 | group: G-FIX | status: done | mode: solo
 - goal: stop `target_centering.center` from being mutated under `eval()`.
 - why: it was the last of the 24 buffers that `_validate` mutated, and the
   trainer-side snapshot-restore masks it rather than fixing it. Measured
@@ -221,7 +221,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   `min_accuracy=0.7` threshold. Splitting without fixing the shared split does
   not fix this.
 
-### TASK-12 | group: G-COVER | status: todo | mode: solo
+### TASK-12 | group: G-COVER | status: done | mode: solo
 - goal: fix the split redraw in `src/interp/layer_analysis.py`.
 - also covers: the former TASK-33, which duplicated this card.
 - why: `_train_linear_probe` draws a fresh unseeded `torch.randperm(N)` for
@@ -273,7 +273,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 - requirement: every threshold must be **derived from a measured null on this
   data**, not chosen to look plausible. State the measurement for each.
 
-### TASK-15 | group: G-COVER | status: todo | mode: solo
+### TASK-15 | group: G-COVER | status: done | mode: solo
 - also covers: the former TASK-32, which duplicated this card.
 - goal: fix the Benjamini-Hochberg implementation in
   `src/interp/statistical_tests.py`.
@@ -426,7 +426,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 - note: `jepa.py` is a hotspot and TASK-08 also wants it. They cannot run in the
   same tick. Order matters — see the tick plan.
 
-### TASK-22 | group: G-PERF | status: todo | mode: solo
+### TASK-22 | group: G-PERF | status: done | mode: solo
 - goal: make `tools`-free `src/utils/flops.py` either correct or gone.
 - why: measured against `torch.utils.flop_counter.FlopCounterMode` at base_140m
   dims, vocab 4096, B=4: real fwd+bwd is 5.419e11 at T=128, 1.117e12 at T=256,
@@ -465,7 +465,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   `20260824` — are reproducible but an ablation cannot vary them. Decide per site
   whether it should be a parameter. Record the decision list.
 
-### TASK-24 | group: G-HYGIENE | status: todo | mode: solo
+### TASK-24 | group: G-HYGIENE | status: done | mode: solo
 - goal: make thread count and `deterministic` reachable, or state that they are
   not.
 - why: measured 1 thread vs 8, same seed and same data, 10 steps: steps 0-2 are
@@ -601,7 +601,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   have to change. Do not paper over it with a docstring.
 - report: `.agent-notes/task-30.md`
 
-### TASK-31 | group: G-HYGIENE | status: todo | mode: solo
+### TASK-31 | group: G-HYGIENE | status: done | mode: solo
 - goal: give each run its own `logging.folder`.
 - why: the control-scout merged all 62 configs over `defaults.yaml` and found 60
   distinct folders, with exactly ONE collision in the entire repo: the three
@@ -617,44 +617,16 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 - report: `.agent-notes/task-31.md`
 
 ### TASK-32 | group: G-COVER | status: dup | mode: none
-- DUPLICATE of TASK-15. Same file, same defect, same fix. Folded in there.
-- closed because: the wave-2 block was written from RAID seeds without
-  checking it against the cards already on the board, so two seeds re-stated
-  two existing cards. Recorded rather than deleted, because "I created the same
-  card twice" is the useful part.
-
+- DUPLICATE of TASK-15. Same file, same defect, same fix. Closed with TASK-15.
+- kept rather than deleted because the duplication is the useful record:
+  the wave-2 block was written from RAID seeds without diffing against
+  the cards already on the board, and two seeds independently re-stated
+  two existing cards.
+- lesson: a partial-line edit to a ledger orphans the rest of the card.
+  This entry's first attempt replaced the header and the first goal line
+  only, and TASK-32's body ended up filed under TASK-33 - which then read
+  as a third card in the same file with a different goal. Edit whole cards.
 ### TASK-33 | group: G-COVER | status: dup | mode: none
-- DUPLICATE of TASK-12. Same file, same defect, same fix. Folded in there.
-- the old goal text, kept so the duplication is auditable: stop
+- DUPLICATE of TASK-12. Same file, same defect, same fix. Closed with TASK-12.
+- the goal it restated, kept so the duplication stays auditable: stop
   `layer_analysis` redrawing its split per layer.
-- why: `corrected` uses the naive `p*n/rank` at L288 while `significant` uses the
-  step-up rule at L280-284, so the two disagree. Reproduced with
-  `p = [0.03, 0.049]`: `corrected = [0.06, 0.049]`, `significant = [0, 1]`, so a
-  report can carry `p_value_bh = 0.06` (not significant) beside
-  `significant_bh = True`. The true adjusted p is the running minimum from the top
-  rank, which the code omits.
-- files_allowed: `src/interp/statistical_tests.py`, `tests/test_statistical.py` (new)
-- files_forbidden: other `src/interp/**`, `src/models/**`
-- verify: `& $PY tools/rt.py tests/test_statistical.py tests/test_interp.py`
-- report but do NOT fix, in the same file: `PairedPermutationTest` uses the
-  unpaired pooled SD for Cohen's d where the paired value is
-  `mean_diff / sd(diffs)`, systematically understating the effect in exactly the
-  correlated case the test exists for; and `BayesianComparison` is a bootstrap
-  documented as a posterior with a "credible interval". Separate cards.
-- report: `.agent-notes/task-32.md`
-
-### TASK-33 | group: G-COVER | status: todo | mode: solo
-- goal: stop `layer_analysis` redrawing its split per layer.
-- why: `_train_linear_probe` draws a fresh unseeded `torch.randperm(N)` for every
-  layer and reports max-over-epochs validation accuracy, so the 12-layer accuracy
-  profile is 12 measurements on 12 different splits. Measured on byte-identical
-  layers, `layer_uniformity` ranges 0.882 to 0.983 across 5 seeds: a 0.10 noise
-  band, the same magnitude as the between-condition effect it exists to detect.
-- files_allowed: `src/interp/layer_analysis.py`, `tests/test_layer_analysis.py` (new)
-- files_forbidden: other `src/interp/**`
-- verify: `& $PY tools/rt.py tests/test_layer_analysis.py tests/test_interp.py`
-- report but do NOT fix: `layer_uniformity = 1 - std/mean` is maximised by making
-  all layers identical, since 6 byte-identical layers score 0.884 against 6
-  independent random layers at 0.907. The metric cannot tell them apart, which is
-  a direction problem and a separate decision.
-- report: `.agent-notes/task-33.md`
