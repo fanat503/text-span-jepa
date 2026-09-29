@@ -21,7 +21,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 
 ---
 
-### TASK-01 | group: G-COVER | status: done | mode: warmup
+### 01 | group: G-COVER | status: done | mode: warmup
 - goal: add `tests/conftest.py` with an autouse fixture that seeds every RNG and
   pins `torch.set_num_threads(1)`, so the suite cannot become order-dependent.
 - why: 12 of 21 test files contain zero seeding calls and there is no conftest.
@@ -32,10 +32,10 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   then confirm the fixture is autouse by running two files in one process and in
   reverse order and getting identical results.
 - report: `.agent-notes/task-01.md`
-- mutation-verdict: remove the seed call from the fixture �’ a test that reads a
+- mutation-verdict: remove the seed call from the fixture → a test that reads a
   global RNG must become order-dependent; state which one and why.
 
-### TASK-02 | group: G-FIX | status: done | mode: warmup
+### 02 | group: G-FIX | status: done | mode: warmup
 - goal: make `src/models/cmc.py:251-252` use the `rng` parameter it is handed
   instead of falling back to the global torch RNG.
 - why: `src/train.py:1073` passes `rng=None`, so the dedicated generator
@@ -46,11 +46,11 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   needed instead of making it)
 - verify: `python tools/rt.py tests/test_cmc.py`
 - report: `.agent-notes/task-02.md`
-- mutation-verdict: pass the global RNG again �’ a test asserting the generator is
+- mutation-verdict: pass the global RNG again → a test asserting the generator is
   consumed must fail, because a supplied generator's state must advance and the
   global one's must not.
 
-### TASK-03 | group: G-HYGIENE | status: done | mode: warmup
+### 03 | group: G-HYGIENE | status: done | mode: warmup
 - goal: make `README.md`, `proofs/README.md` and
   `proofs/IMPLEMENTATION_STATUS.md` state the same mechanism count as the code.
 - why: `mechanisms.py` header and `README.md` say 16, `ALL_MECHANISMS` has 12,
@@ -72,7 +72,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 
 ---
 
-### TASK-04 | group: G-FIX | status: done | mode: solo
+### 04 | group: G-FIX | status: done | mode: solo
 - goal: fix `src/train.py:836`, where `ema_tau_end` falls back to `1.0`, so a
   `--no_defaults` run no longer freezes the target encoder.
 - why: `EMATauSchedule.step()` returns exactly `tau_end`, so the fallback makes
@@ -87,7 +87,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   is currently a documented skip. It must pass and the skip must be removed.
   Do not delete the test.
 
-### TASK-05 | group: G-FIX | status: todo | mode: solo
+### 05 | group: G-FIX | status: todo | mode: solo
 - goal: make the `src/train.py:849,874` config typo detector compare **paths**,
   not bare leaf names.
 - why: it builds `{p.split(".")[-1] for p in _leaves(known)}` and tests the key,
@@ -100,12 +100,12 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 - files_forbidden: `config/**`, `defaults.yaml`
 - verify: `python tools/rt.py tests/test_config_system.py --slow`
 - report: `.agent-notes/task-05.md`
-- mutation-verdict: revert to leaf-name matching �’ the three negative controls
+- mutation-verdict: revert to leaf-name matching → the three negative controls
   go red again, naming the three cases that were silently accepted.
 
 ---
 
-### TASK-06 | group: G-FIX | status: todo | mode: arena
+### 06 | group: G-FIX | status: todo | mode: arena
 - goal: wire `src/utils/distributed.py` into the training entry point so a
   `torchrun` launch is a real distributed run.
 - why: the module exists and is import-inert, but `main()` still creates no
@@ -129,7 +129,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   `spc.freq_basis` are in-graph only on steps where their branch fires, and
   `src/train.py:1127-1146` runs a second separate `backward()` for GAC.
 
-### TASK-07 | group: G-FIX | status: done | mode: solo
+### 07 | group: G-FIX | status: done | mode: solo
 - goal: repair `run_comparison.load_model()`, which reads per-module checkpoint
   keys that the new writer no longer emits.
 - why: `save_checkpoint` now writes `state["model"] = model.state_dict()`. Four
@@ -146,7 +146,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   would restore only the hand-listed tensors and silently reproduce the 29%
   resume divergence this campaign removed.
 
-### TASK-08 | group: G-FIX | status: todo | mode: solo
+### 08 | group: G-FIX | status: todo | mode: solo
 - goal: stop `target_centering.center` from being mutated under `eval()`.
 - why: it was the last of the 24 buffers that `_validate` mutated, and the
   trainer-side snapshot-restore masks it rather than fixing it. Measured
@@ -158,7 +158,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 - report: `.agent-notes/task-08.md`
 - note: `jepa.py` is a hotspot. Confirm no other agent holds it this tick.
 
-### TASK-09 | group: G-FIX | status: todo | mode: solo
+### 09 | group: G-FIX | status: todo | mode: solo
 - goal: fix `src/models/wsr.py` `_stiefel_retract` column-sign selection.
 - why: it takes signs from `diag((Q R)[:k, :])`, which is not triangular for a
   `(D, k)` matrix when `D > k`, so the retraction flips individual columns.
@@ -173,7 +173,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 - gate: the xfail named in `docs/decisions.md` D-010 must pass and the xfail
   decorator must be gone. Leaving it is not acceptance.
 
-### TASK-10 | group: G-FIX | status: todo | mode: arena
+### 10 | group: G-FIX | status: todo | mode: arena
 - goal: decide what `wsr_mode=sam` is supposed to compute, and make the code and
   its docstring agree.
 - why: it reads `Q.grad` during forward, but `src/train.py:1226` calls
@@ -196,7 +196,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 
 ---
 
-### TASK-11 | group: G-COVER | status: todo | mode: arena
+### 11 | group: G-COVER | status: todo | mode: arena
 - goal: give the five sibling probe metrics a held-out split, or rename them to
   say they do not have one.
 - why: after `src/eval/probes.py` was fixed, five more modules still report
@@ -221,7 +221,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   `min_accuracy=0.7` threshold. Splitting without fixing the shared split does
   not fix this.
 
-### TASK-12 | group: G-COVER | status: todo | mode: solo
+### 12 | group: G-COVER | status: todo | mode: solo
 - goal: fix the split redraw in `src/interp/layer_analysis.py`.
 - why: `_train_linear_probe` draws a fresh unseeded `torch.randperm(N)` for
   **every layer** and reports max-over-epochs validation accuracy, so the
@@ -238,7 +238,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   byte-identical layers score 0.884 vs 6 independent random layers 0.907.
   Report it; fixing the direction is a separate decision.
 
-### TASK-13 | group: G-COVER | status: done | mode: solo
+### 13 | group: G-COVER | status: done | mode: solo
 - goal: stop `feature_composition.FeatureInterferenceScore` using the treated
   samples as its own control.
 - why: `z_baseline = z` is the whole dataset including the top-activating
@@ -252,7 +252,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 - verify: `python tools/rt.py tests/test_interp.py`
 - report: `.agent-notes/task-13.md`
 
-### TASK-14 | group: G-COVER | status: todo | mode: arena
+### 14 | group: G-COVER | status: todo | mode: arena
 - goal: make `src/interp/ground_truth.py` able to fail.
 - why: it is the module whose stated job is catching exactly the failures this
   campaign found, and it cannot catch any of them.
@@ -272,7 +272,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 - requirement: every threshold must be **derived from a measured null on this
   data**, not chosen to look plausible. State the measurement for each.
 
-### TASK-15 | group: G-COVER | status: todo | mode: solo
+### 15 | group: G-COVER | status: todo | mode: solo
 - goal: fix the Benjamini-Hochberg implementation in
   `src/interp/statistical_tests.py`.
 - why: `corrected` uses the naive `p*n/rank` (L288) while `significant` uses the
@@ -290,7 +290,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   bootstrap documented as a posterior with a "credible interval". Those are
   separate cards; note them in the report.
 
-### TASK-16 | group: G-COVER | status: todo | mode: arena
+### 16 | group: G-COVER | status: todo | mode: arena
 - goal: decide whether `statistical_tests.py` should be wired into
   `run_comparison.py`, and what a rigorous comparison requires.
 - why: `run_comparison.py:261-279` has a "Phase 7 — Running statistical tests"
@@ -315,7 +315,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   with the sample's extraction index. The surface feature is computed nowhere,
   so the module's headline hypothesis is never tested.
 
-### TASK-17 | group: G-COVER | status: done | mode: solo
+### 17 | group: G-COVER | status: done | mode: solo
 - goal: fix the silent no-ops and the missing cleanup in `src/interp/ablation.py`.
 - why, all measured or read directly:
   - `AblatedModel.forward` subtracts `cfg.lambda_X * info["loss_X"]` guarded only
@@ -335,7 +335,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 - verify: `python tools/rt.py tests/test_interp.py`
 - report: `.agent-notes/task-17.md`
 
-### TASK-18 | group: G-COVER | status: todo | mode: arena
+### 18 | group: G-COVER | status: todo | mode: arena
 - goal: fix `src/interp/workspace_validation.py`.
 - why: `validate_workspace_claim` with `sae=None` builds a **random untrained**
   `TopKSAE` (L352-357) and still returns a verdict. Measured end to end:
@@ -361,7 +361,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 
 ---
 
-### TASK-19 | group: G-PERF | status: todo | mode: arena
+### 19 | group: G-PERF | status: todo | mode: arena
 - goal: stop `CollapseDiagnostics.compute` from running every training step.
 - why: measured **67% of the entire forward pass**. It performs 13
   `torch.linalg.svdvals` plus 4 full `torch.linalg.svd` on the full `(B·T, D)`
@@ -385,7 +385,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   private `torch.Generator` **first**, or gating the diagnostics changes results
   while looking like a pure optimisation. Do that in the same card and say so.
 
-### TASK-20 | group: G-PERF | status: todo | mode: arena
+### 20 | group: G-PERF | status: todo | mode: arena
 - goal: cut the device syncs in the per-step path.
 - why: measured by patching `torch.Tensor.item` and tracing the caller —
   **92 syncs per forward** with the shipping config, **201** with all twelve
@@ -406,7 +406,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   detaches the Stiefel-projection gradient. That is a correctness issue, not a
   perf one, and `mechanisms.py` is not yours — report it.
 
-### TASK-21 | group: G-PERF | status: todo | mode: arena
+### 21 | group: G-PERF | status: todo | mode: arena
 - goal: halve peak activation memory under gradient accumulation.
 - why: after `backward()` returns, `self._gac_z` (`jepa.py:650`) and
   `self._cmc_pass["slots"]` (`jepa.py:767`) still hold **live autograd graphs**
@@ -424,7 +424,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 - note: `jepa.py` is a hotspot and TASK-08 also wants it. They cannot run in the
   same tick. Order matters — see the tick plan.
 
-### TASK-22 | group: G-PERF | status: todo | mode: solo
+### 22 | group: G-PERF | status: todo | mode: solo
 - goal: make `tools`-free `src/utils/flops.py` either correct or gone.
 - why: measured against `torch.utils.flop_counter.FlopCounterMode` at base_140m
   dims, vocab 4096, B=4: real fwd+bwd is 5.419e11 at T=128, 1.117e12 at T=256,
@@ -445,7 +445,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   you delete this one, the report must justify why the test was testing a wrong
   expectation rather than a wrong implementation.
 
-### TASK-23 | group: G-HYGIENE | status: todo | mode: solo
+### 23 | group: G-HYGIENE | status: todo | mode: solo
 - goal: seed the 28 unseeded RNG draw sites in `src/interp/`, or make the
   unseeded ones take an explicit generator.
 - why: `src/utils/seed.py` is **never imported by anything in `src/interp/`**.
@@ -463,7 +463,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   `20260824` — are reproducible but an ablation cannot vary them. Decide per site
   whether it should be a parameter. Record the decision list.
 
-### TASK-24 | group: G-HYGIENE | status: todo | mode: solo
+### 24 | group: G-HYGIENE | status: todo | mode: solo
 - goal: make thread count and `deterministic` reachable, or state that they are
   not.
 - why: measured 1 thread vs 8, same seed and same data, 10 steps: steps 0-2 are
@@ -482,7 +482,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   on 6, so CI and local results are already not bitwise comparable. Say whether
   that matters for any published number.
 
-### TASK-25 | group: G-HYGIENE | status: todo | mode: solo
+### 25 | group: G-HYGIENE | status: todo | mode: solo
 - goal: make the parameter count the repo reports match the model it builds.
 - why: `get_num_params()` at `jepa.py:1069` subtracts token and position
   embeddings from the encoder and **omits the target encoder entirely**, so the
@@ -502,7 +502,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 - decision: report the true total, report trainable separately, or rename the
   configs. Record the choice and the rejected alternatives.
 
-### TASK-26 | group: G-RAID | status: done | mode: solo
+### 26 | group: G-RAID | status: done | mode: solo
 - goal: read-only re-scan for defects the five audits missed, in the three areas
   they covered least.
 - why: five audits covered config, interpretability, reproducibility, integration
@@ -522,6 +522,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   prove it is NOT a defect. Kills are recorded in `docs/decisions.md` with the
   reason, not silently dropped.
 
+
 ---
 
 ## Wave 2 cards (added after tick 1)
@@ -532,34 +533,36 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   green.
 - files_allowed: `tests/test_run_comparison.py` (new), `src/interp/run_comparison.py`
 - verify: `& $PY tools/rt.py tests/test_run_comparison.py`
-- must pin: (1) real `save_checkpoint` -> `load_model` round trip with
-  max-abs-difference exactly 0.0; (2) mechanism tensors (jawp, target_centering,
-  sigreg) present after the trip — the old 4 reads covered 85 of 90 tensors and
-  dropped the rest silently; (3) `regression_head.0.weight` restored bitwise,
-  which is what a randomly-initialised head would have failed;
-  (4) a legacy-shaped checkpoint raises a clear format error, not a bare
-  KeyError; (5) `strict=True` is genuinely strict.
-- mutation-verdict: revert run_comparison to the per-module `.get()` reads and
+- must pin: (1) a real `save_checkpoint` -> `load_model` round trip with
+  max-abs-difference exactly 0.0; (2) the mechanism tensors (jawp,
+  target_centering, sigreg) present after the trip, because the old four reads
+  covered 85 of 90 tensors and dropped the rest silently; (3)
+  `regression_head.0.weight` restored bitwise, which is what a randomly
+  initialised head would have failed; (4) a legacy-shaped checkpoint raises a
+  clear format error rather than a bare KeyError or a silent partial restore;
+  (5) `strict=True` is genuinely strict.
+- mutation-verdict: revert `run_comparison` to the per-module `.get()` reads and
   record which tests go red.
 - report: `.agent-notes/task-27.md`
 
 ### TASK-28 | group: G-COVER | status: todo | mode: solo
 - goal: pin the determinism fixture TASK-01 shipped without.
-- why: the worker reported honestly that **no existing test fails if
-  `tests/conftest.py` is deleted**, and the verifier reproduced that (168 tests
-  green with the file renamed away). The guard is currently decoration.
+- why: the worker reported honestly that no existing test fails if
+  `tests/conftest.py` is deleted, and the verifier reproduced it (168 tests green
+  with the file renamed away). The guard is currently decoration.
 - files_allowed: `tests/test_determinism.py` (new)
 - files_forbidden: `tests/conftest.py` itself, all `src/**`
 - verify: `& $PY tools/rt.py tests/test_determinism.py tests/test_sta.py`
-- must pin: the fixture is autouse (two tests observe different per-test streams);
-  the seed is derived from the node id and is therefore STABLE across runs, which
-  is why `hash()` must not be used (builtin string hashing is randomised per
-  process); the global RNG state at the start of a test is a function of its
-  node id. Also record the honest caveat: the suite is robustly non-flaky but
-  cannot detect its own determinism regression, so this file is what closes that.
+- must pin: the fixture is autouse, so two tests observe different per-test
+  streams; the seed derives from the node id and is therefore STABLE across
+  runs, which is why `hash()` must not be used, since builtin string hashing is
+  randomised per process; the global RNG state at the start of a test is a
+  function of its node id.
+- record the honest caveat: the suite is robustly non-flaky but cannot detect its
+  own determinism regression, so this file is what closes that.
 - report: `.agent-notes/task-28.md`
 
-### TASK-29 | group: G-COVER | status: todo | mode: solo
+### TASK-29 | group: G-FIX | status: todo | mode: solo
 - goal: make the config typo detector compare paths, not bare leaf names.
 - why: `src/train.py:849,874` builds `{p.split(".")[-1] for p in _leaves(known)}`
   and tests the key, so a key in the WRONG subtree, or an entirely misspelled
@@ -570,41 +573,41 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   negative controls once they pass)
 - files_forbidden: `config/**`, `defaults.yaml`
 - verify: `& $PY tools/rt.py tests/test_config_system.py --slow`
-- note: `TestTrainerTypoDetectorGap` holds three negative controls that are RED
-  today. They must go green. Do not delete them — a red control is the
+- note: `TestTrainerTypoDetectorGap` holds three negative controls that are red
+  today. They must go green. Do not delete them: a red control is the
   specification.
 - mutation-verdict: revert to leaf-name matching and confirm all three go red
   again, naming the three cases that were silently accepted.
 - report: `.agent-notes/task-29.md`
 
-### TASK-30 | group: G-FIX | status: todo | mode: solo  (from RAID seed-1, control-scout SURVIVED)
+### TASK-30 | group: G-FIX | status: todo | mode: solo  (RAID seed-1, control-scout SURVIVED)
 - goal: make the baseline actually a control.
 - why: `baselines/mlm_baseline.py:5-7` claims "identical model capacity /
   identical compute". The control-scout reproduced every number and found the
   claim false in the direction that FAVOURS the baseline. Corrected figures:
   JEPA total is 1.498x the baseline's, but the baseline's TRAINABLE count is
   1.281x JEPA's, and the entire excess is a separate untied `mlm_head` of
-  32,194,560 params that JEPA does not have at all (JEPA's `TiedTokenDecoder` is
-  1,639,680 and reuses the token embedding). The baseline is also given 3.89x
-  more prediction targets. A paper whose control is not a control is rejected at
-  review, not at rebuttal.
+  32,194,560 parameters that JEPA does not have at all (JEPA's
+  `TiedTokenDecoder` is 1,639,680 and reuses the token embedding). The baseline
+  is also given 3.89x more prediction targets. A paper whose control is not a
+  control is rejected at review, not at rebuttal.
 - files_allowed: `baselines/mlm_baseline.py`, `tests/test_baseline_parity.py` (new)
 - files_forbidden: `config/**`, `src/models/**`, other `src/interp/**`
 - verify: `& $PY tools/rt.py tests/test_baseline_parity.py tests/test_model.py --slow`
 - must pin: trainable-parameter parity within a stated tolerance, and a
   computation-parity statement that is either true or removed. If parity is
-  genuinely unreachable without changing the science, say so and name what
-  would have to change — do NOT paper over it with a docstring.
+  genuinely unreachable without changing the science, say so and name what would
+  have to change. Do not paper over it with a docstring.
 - report: `.agent-notes/task-30.md`
 
-### TASK-31 | group: G-HYGIENE | status: todo | mode: solo  (from RAID seed-5, SURVIVED)
+### TASK-31 | group: G-HYGIENE | status: todo | mode: solo  (RAID seed-5, SURVIVED)
 - goal: give each run its own `logging.folder`.
 - why: the control-scout merged all 62 configs over `defaults.yaml` and found 60
   distinct folders, with exactly ONE collision in the entire repo: the three
-  `config/kaggle/*.yaml` arms share one. That kills the obvious refutation
-  ("Kaggle sessions are ephemeral") — it is a deviation from the repo's own
-  convention. Concurrent arms overwrite each other's `train_log.csv`,
-  `best.pt` and `checkpoint-latest.pth.tar`.
+  `config/kaggle/*.yaml` arms share one. That kills the obvious refutation that
+  Kaggle sessions are ephemeral, since it is a deviation from the repo's own
+  convention. Concurrent arms overwrite each other's `train_log.csv`, `best.pt`
+  and `checkpoint-latest.pth.tar`.
 - files_allowed: `config/kaggle/*.yaml`, `tests/test_config_system.py` (add a
   uniqueness guard only)
 - verify: `& $PY tools/rt.py tests/test_config_system.py --slow`
@@ -613,34 +616,36 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 - report: `.agent-notes/task-31.md`
 
 ### TASK-32 | group: G-COVER | status: todo | mode: solo
-- goal: fix the Benjamini-Hochberg implementation in `src/interp/statistical_tests.py`.
-- why: `corrected` uses the naive `p*n/rank` (L288) while `significant` uses the
-  step-up rule (L280-284), so the two disagree. Reproduced with
-  `p = [0.03, 0.049]`: `corrected = [0.06, 0.049]`, `significant = [0, 1]` — a
+- goal: fix the Benjamini-Hochberg implementation in
+  `src/interp/statistical_tests.py`.
+- why: `corrected` uses the naive `p*n/rank` at L288 while `significant` uses the
+  step-up rule at L280-284, so the two disagree. Reproduced with
+  `p = [0.03, 0.049]`: `corrected = [0.06, 0.049]`, `significant = [0, 1]`, so a
   report can carry `p_value_bh = 0.06` (not significant) beside
-  `significant_bh = True`. The true BH adjusted p is the running minimum from the
-  top rank, which the code omits.
+  `significant_bh = True`. The true adjusted p is the running minimum from the top
+  rank, which the code omits.
 - files_allowed: `src/interp/statistical_tests.py`, `tests/test_statistical.py` (new)
 - files_forbidden: other `src/interp/**`, `src/models/**`
 - verify: `& $PY tools/rt.py tests/test_statistical.py tests/test_interp.py`
-- report ONLY, do not fix, these two in the same file: `PairedPermutationTest`
-  uses unpaired pooled SD for Cohen's d where the paired value is
-  `mean_diff / sd(diffs)`; and `BayesianComparison` is a bootstrap documented as a
-  posterior with a "credible interval". They are separate cards.
+- report but do NOT fix, in the same file: `PairedPermutationTest` uses the
+  unpaired pooled SD for Cohen's d where the paired value is
+  `mean_diff / sd(diffs)`, systematically understating the effect in exactly the
+  correlated case the test exists for; and `BayesianComparison` is a bootstrap
+  documented as a posterior with a "credible interval". Separate cards.
 - report: `.agent-notes/task-32.md`
 
 ### TASK-33 | group: G-COVER | status: todo | mode: solo
 - goal: stop `layer_analysis` redrawing its split per layer.
-- why: `_train_linear_probe` draws a fresh UNSEEDED `torch.randperm(N)` for every
+- why: `_train_linear_probe` draws a fresh unseeded `torch.randperm(N)` for every
   layer and reports max-over-epochs validation accuracy, so the 12-layer accuracy
   profile is 12 measurements on 12 different splits. Measured on byte-identical
-  layers: `layer_uniformity` ranges 0.882-0.983 across 5 seeds — a 0.10 noise
+  layers, `layer_uniformity` ranges 0.882 to 0.983 across 5 seeds: a 0.10 noise
   band, the same magnitude as the between-condition effect it exists to detect.
 - files_allowed: `src/interp/layer_analysis.py`, `tests/test_layer_analysis.py` (new)
 - files_forbidden: other `src/interp/**`
 - verify: `& $PY tools/rt.py tests/test_layer_analysis.py tests/test_interp.py`
-- report, do not fix: `layer_uniformity = 1 - std/mean` is maximised by making all
-  layers identical — 6 byte-identical layers score 0.884 vs 6 independent random
-  layers 0.907, so the metric cannot tell them apart. That is a direction
-  problem, a separate decision.
+- report but do NOT fix: `layer_uniformity = 1 - std/mean` is maximised by making
+  all layers identical, since 6 byte-identical layers score 0.884 against 6
+  independent random layers at 0.907. The metric cannot tell them apart, which is
+  a direction problem and a separate decision.
 - report: `.agent-notes/task-33.md`
