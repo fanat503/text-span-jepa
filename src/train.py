@@ -949,7 +949,28 @@ def _restore_training_state(
 
 
 def _warn_unknown_config_keys(args):
-    """Warn about config leaf keys absent from defaults.yaml (likely typos)."""
+    """Warn about config leaf keys absent from defaults.yaml (likely typos).
+
+    Compares the full dotted PATH, not the bare leaf name. Leaf-name matching
+    was blind to two whole classes of misconfiguration that then trained
+    something other than what the config said:
+
+    * a real key in the WRONG subtree — `model.batch_size` is a key name that
+      exists, but it lives at `data.batch_size`, so it is inert in `model:`;
+    * a wholly misspelled SECTION — `modle:` / `optimisation:` are new
+      top-level namespaces, so every leaf under them is unknown and none of
+      them reached a reader.
+
+    Both are the same failure as `lamda_swip`: the value is never read. The
+    nested typo was caught only by accident, because the leaf name happened to
+    be absent from defaults.yaml entirely.
+
+    Sections are matched as paths too, so `description` (prose at any level)
+    and `_meta.*` (provenance subtrees) stay exempt, and the
+    `data.allow_missing_validation` code-level opt-in keeps working.
+
+    Pinned by tests/test_config_system.py::TestTrainerTypoDetectorGap.
+    """
     try:
         base = os.path.dirname(os.path.abspath(__file__))
         defaults_path = os.path.join(base, "defaults.yaml")
@@ -960,33 +981,36 @@ def _warn_unknown_config_keys(args):
     except Exception:
         return
 
-    def _leaves(d, prefix=""):
+    def _paths(d, prefix=""):
+        """Every dotted path in a nested mapping: interior sections and leaves."""
         out = set()
         if isinstance(d, dict):
             for k, v in d.items():
                 p = f"{prefix}.{k}" if prefix else str(k)
                 out.add(p)
-                out |= _leaves(v, p)
+                out |= _paths(v, p)
         return out
 
-    known_leaf_names = {p.split(".")[-1] for p in _leaves(known)}
-    # Keys invisible to a textual defaults.yaml diff:
+    known_paths = _paths(known)
+    # Full paths, not names, for exactly the reason `known_paths` is paths --
+    # a bare name here would re-open the wrong-subtree hole this function
+    # exists to close. Keys invisible to a textual defaults.yaml diff:
     #   - consumed dynamically by baselines via model_cfg.get(...)
     #   - CLI-only overrides / descriptive provenance
     #   - read by src/train.py itself rather than by a model builder
-    #     (`allow_missing_validation` gates a deliberate train-without-validate
-    #      decision; it is a code-level opt-in, not a model hyperparameter, and
-    #      defaults.yaml is owned elsewhere)
+    #     (`data.allow_missing_validation` gates a deliberate
+    #      train-without-validate decision; it is a code-level opt-in, not a
+    #      model hyperparameter, and defaults.yaml is owned elsewhere)
     extra_known = {
-        "average_top_k_layers",
-        "loss_beta",
-        "loss_scale",
-        "ema_decay",
-        "ema_end_decay",
-        "ema_anneal_end_step",
-        "head_layers",
-        "dataset",
-        "allow_missing_validation",
+        "model.average_top_k_layers",
+        "model.loss_beta",
+        "model.loss_scale",
+        "model.ema_decay",
+        "model.ema_end_decay",
+        "model.ema_anneal_end_step",
+        "model.head_layers",
+        "meta.dataset",
+        "data.allow_missing_validation",
     }
     metadata_keys = {"_meta", "description"}  # declarative namespaces
     metadata_prefixes = ("_meta.",)  # _meta.* provenance subtrees
@@ -999,12 +1023,15 @@ def _warn_unknown_config_keys(args):
             if isinstance(v, dict):
                 _walk(v, p)
             elif (
-                k not in known_leaf_names
+                p not in known_paths
+                and p not in extra_known
                 and k not in metadata_keys
-                and k not in extra_known
                 and not p.startswith(metadata_prefixes)
             ):
-                logger.warning(f"Unknown config key '{p}' is not in defaults.yaml — possible typo")
+                logger.warning(
+                    f"Unknown config key '{p}' is not a path in defaults.yaml — "
+                    "possible typo, or a real key in the wrong section"
+                )
 
     _walk(args)
 
