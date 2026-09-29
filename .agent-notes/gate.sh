@@ -34,6 +34,17 @@ fi
 FAILED=0
 stage() { printf '\n=== %s ===\n' "$1"; }
 
+stage "new regression files (must not run only in CI)"
+# The tick-1 verifier found this hole: four test files shipped by workers were
+# never in the gate, so they ran only under the required CI check. A gate that
+# does not run a test is a comment.
+"$PY" tools/rt.py \
+  tests/test_cmc_resume.py \
+  tests/test_run_comparison.py \
+  tests/test_determinism.py \
+  tests/test_feature_composition.py \
+  tests/test_ablation_module.py || FAILED=1
+
 stage "agent safety policy (the guard must itself be guarded)"
 # policy.js is what stands between a confused agent and `shutil.rmtree` on the
 # repo. A policy that silently stops matching is worse than none, because the
