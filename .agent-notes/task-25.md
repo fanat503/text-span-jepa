@@ -374,3 +374,290 @@ a mutation verdict requires tests that can go red. **Additions only** —
 109 lines, one new class `TestParamCountReporting` plus two module-level
 helpers, inserted before `TestV010NewFeatures`. No existing test was modified,
 weakened, moved or deleted.
+
+---
+
+# APPENDIX — scope extension, authorised by the orchestrator
+
+Ruling: authorised to edit `config/scaling/*.yaml` (**comment lines only**),
+`tests/test_config_system.py`, and **one line** of `src/train.py`. Reasoning
+recorded: the four config comments document the number, a red test is not an
+acceptable resting state, and a green test in front of a documented lie is worse
+than a red one. Commit `53bee51`.
+
+Sections 1–7 above describe the state as of `dc8915c` and are left unmodified
+as the record of what was true then. This appendix supersedes §6a, §6b and §6c.
+
+---
+
+## A1. what changed
+
+| file | change |
+|---|---|
+| `config/scaling/{xsmall_30m,small_100m,base_140m,large_300m}.yaml` | comment block only; the three-measurement table + the `get_num_params()` line + an explicit "the FILENAME tracks TRAINABLE parameters" paragraph. No key, value or `_meta` touched. |
+| `tests/test_config_system.py` | the negative control at :1160 replaced by three positive tests; the class docstring's stale claim corrected. |
+| `src/train.py` | **one line**, :1175, the log label. Nothing else in the file. |
+| `baselines/*.py` | **not touched** — not authorised, and `baselines/mlm_baseline.py` is owned by TASK-30. See A5. |
+
+## A2. before / after of each comment
+
+All four had the identical three-line defect shape. `base_140m.yaml` verbatim:
+
+**before**
+```
+# Parameter counts, measured in-process with this file exactly as it resolves
+# (GPT-2 vocab 50304, max_seq_len 512, all mechanisms as declared):
+#   total parameters     : 262,021,633
+#   trainable parameters : 137,938,945   <- what the filename claims (~140M)
+#   get_num_params()     :  98,853,889
+# `get_num_params()` excludes the target encoder and both embeddings, so the
+# number the trainer logs at startup under-reports the true total by ~2.5x.
+# That is a `src/models/jepa.py` issue, not a config issue.
+```
+
+**after**
+```
+# Parameter counts, measured in-process with this file exactly as it resolves
+# (GPT-2 vocab 50304, max_seq_len 512, all mechanisms as declared):
+#   total parameters     : 262,021,633
+#   trainable parameters : 137,938,945
+#   non-embedding        : 183,968,257
+#   get_num_params()     : 262,021,633   (= the total; what the trainer logs)
+# The FILENAME tracks TRAINABLE parameters, not total: it claims ~140M against
+# a measured 137,938,945 trainable (-1.5%). The TOTAL is 1.87x the claimed
+# figure because `target_encoder` is an exact `deepcopy` of `encoder`
+# (124,082,688 frozen parameters, 47.4% of the model) and both encoders carry
+# a GPT-2-sized embedding table. Budget MEMORY against the total; budget
+# OPTIMIZER state against the trainable count. `src/train.py` logs the total
+# and the trainable count on adjacent lines.
+```
+
+the three deltas, per file:
+
+| | `get_num_params()` line | filename-track trainable | extra |
+|---|---|---|---|
+| xsmall_30m | `12,820,417` → `62,509,249` | "+7.8%", TOTAL 2.08x claim | frozen 30,160,896 = 48.2% |
+| small_100m | `56,384,641` → `170,706,561` | "−11.1%", TOTAL 1.71x claim | frozen 81,758,720 = 47.9% |
+| base_140m | `98,853,889` → `262,021,633` | "−1.5%", TOTAL 1.87x claim | frozen 124,082,688 = 47.4% |
+| large_300m | `232,272,897` → `537,990,145` | "−5.2%", TOTAL 1.79x claim | frozen 253,577,216 = 47.1%; 2.00 GiB weights + ~2.12 GiB AdamW |
+
+every figure is the measured one from §2 — no ranges, nothing that could be read
+either way. The deleted sentences "excludes the target encoder and both
+embeddings", "under-reports the true total by ~2.5x" and "That is a
+`src/models/jepa.py` issue, not a config issue" are all gone; a repo-wide grep
+for `under-report`, `2.5x smaller`, the four stale figures and
+`excludes the target encoder` now matches only historical records (this report,
+`TASKS.md`, the dated wave-1 audit plan, and the `.agent-notes/raid` finding
+index) — no live code or config claim remains.
+
+`src/train.py:1175`, one line:
+```diff
+-        logger.info(f"Model parameters (non-embedding): {num_params:,}")
++        logger.info(f"Model parameters (get_num_params()): {num_params:,}")
+```
+the label WAS wrong (the number is the total for `TextSpanJEPA`), so the
+`if and only if` condition is met. I named the *method* rather than a
+convention because a convention label would be **wrong on two of the three arms
+of `config/kaggle/`** — see A5. Naming the method is the only form of that line
+that is true for all three.
+
+## A3. verify — FULL PASTE
+
+the card's gate, `tests/test_config_system.py --slow`, **before and after**:
+
+```
+PS> $env:RT_BUDGET_SECONDS="240"; & $PY tools/rt.py tests/test_config_system.py --slow -q
+
+--- at dc8915c (tripwire still red) ---
+........................................................................ [ 98%]
+....F...                                                                 [100%]
+=== FAILURES ===
+___ TestScalingParamCounts.test_get_num_params_under_reports_the_true_total ___
+tests\test_config_system.py:1163: in test_get_num_params_under_reports_the_true_total
+    assert reported < 0.5 * _total, (
+E   AssertionError: TextSpanJEPA.get_num_params() now covers the target encoder; the
+    comments in config/scaling/*.yaml must be recomputed
+E   assert 262021633 < (0.5 * 262021633)
+========================= 1 failed, 562 passed, 21 skipped in 8.10s =========================
+
+--- at 53bee51 (after this appendix) ---
+PS> $env:RT_BUDGET_SECONDS="240"; & $PY tools/rt.py tests/test_config_system.py --slow -q
+rt.py: C:\Users\...\python.exe -m pytest -q --no-header -p no:cacheprovider tests/test_config_system.py -q
+rt.py: threads=1  total_budget=240s  slow_ok=True
+........................................................................ [ 12%]
+........................................................................ [ 24%]
+...............................s........................................ [ 36%]
+........................................................................ [ 48%]
+........................................................................ [ 60%]
+....................................................ss..........ssssssss [ 72%]
+..........................................ss..........ssssssss.......... [ 85%]
+........................................................................ [ 97%]
+................                                                         [100%]
+571 passed, 21 skipped in 7.27s
+```
+
+**571 passed, 21 skipped, 0 failed.** the 21 skips are pre-existing platform
+skips; I added none. test count moved 584 → 592: −1 negative control, +9
+parametrized positives.
+
+the other three gates:
+```
+PS> & $PY tools/rt.py tests/test_model.py --slow
+====================== 155 passed, 4 warnings in 44.58s =======================
+
+PS> & $PY tools/rt.py tests/test_baseline_parity.py tests/test_mechanism_wiring.py tests/test_sterility.py
+======================= 61 passed, 3 warnings in 20.46s =======================
+
+PS> & $PY -m ruff check .
+All checks passed!
+
+PS> & $PY -m black --check .
+114 files would be left unchanged.
+```
+
+`black` reformatted `tests/test_config_system.py` once (my long assert
+messages); re-run clean after. No skip, no xfail, no `--no-verify`, no test
+weakened or deleted. No training.
+
+## A4. the four mutations
+
+the new guard is `test_config_comment_states_the_count_get_num_params_returns`,
+which parses every figure sitting on a `get_num_params()` line out of the
+comment and demands it equal what the method actually returns. Each config's
+`get_num_params()` figure was reverted to its stale value in turn. All four
+caught, each isolating only its own file (`...F`, `..F.`, `F...`, `.F..`).
+
+**mutation 1/4 — `xsmall_30m.yaml`, `62,509,249` → `12,820,417`**
+```
+tests\test_config_system.py ...F                                         [100%]
+E   AssertionError: config/scaling/xsmall_30m.yaml claims get_num_params() returns
+    12820417, but it returns 62509249 (= the total)
+E   assert 12820417 == 62509249
+================= 1 failed, 3 passed, 588 deselected in 2.26s ==================
+```
+
+**mutation 2/4 — `small_100m.yaml`, `170,706,561` → `56,384,641`**
+```
+tests\test_config_system.py ..F.                                         [100%]
+E   AssertionError: config/scaling/small_100m.yaml claims get_num_params() returns
+    56384641, but it returns 170706561 (= the total)
+E   assert 56384641 == 170706561
+================= 1 failed, 3 passed, 588 deselected in 2.37s ==================
+```
+
+**mutation 3/4 — `base_140m.yaml`, `262,021,633` → `98,853,889`**
+```
+tests\test_config_system.py F...                                         [100%]
+E   AssertionError: config/scaling/base_140m.yaml claims get_num_params() returns
+    98853889, but it returns 262021633 (= the total)
+E   assert 98853889 == 262021633
+================= 1 failed, 3 passed, 588 deselected in 2.26s ==================
+```
+
+**mutation 4/4 — `large_300m.yaml`, `537,990,145` → `232,272,897`**
+```
+tests\test_config_system.py .F..                                         [100%]
+E   AssertionError: config/scaling/large_300m.yaml claims get_num_params() returns
+    232272897, but it returns 537990145 (= the total)
+E   assert 232272897 == 537990145
+================= 1 failed, 3 passed, 588 deselected in 2.48s ==================
+```
+
+**restore** — all four copied back from a pre-mutation backup, then verified
+both ways:
+```
+PS> git diff --stat config/
+ config/scaling/base_140m.yaml  | 15 ++++++++++-----
+ config/scaling/large_300m.yaml | 16 +++++++++++-----
+ config/scaling/small_100m.yaml | 15 ++++++++++-----
+ config/scaling/xsmall_30m.yaml | 15 ++++++++++-----
+ 4 files changed, 41 insertions(+), 20 deletions(-)
+
+PS> Select-String -Path config\scaling\*.yaml -Pattern "12,820,417|56,384,641|98,853,889|232,272,897|under-report|excludes the target encoder"
+(no output)
+
+PS> & $PY tools/rt.py tests/test_config_system.py --slow -q
+571 passed, 21 skipped in 7.27s
+```
+
+## A5. the baseline default — MEASURED, and it is NOT safe as it stands
+
+I could not state that it was safe, so here is the measurement instead. All
+three `config/kaggle/` arms, built exactly as `src/train.py::create_model`
+builds them and reduced through the same `get_num_params()` that :1174 logs:
+
+| arm | `get_num_params()` → logged | total | trainable | reported ÷ total |
+|---|---|---|---|---|
+| `textspanjepa_kaggle` | **262,021,633** | 262,021,633 | 137,938,945 | 1.0000 |
+| `mlm_kaggle` | **123,689,472** | 162,716,160 | 162,716,160 | 0.7602 |
+| `data2vec_kaggle` | **85,646,592** | 248,755,968 | 124,673,280 | 0.3443 |
+
+**three arms, three different quantities, 3.1x apart.** `config/kaggle/` exists
+precisely so these three runs are comparable — `test_config_system.py`'s own
+`KAGGLE_ARMS` docstring says so — and the number a reader tabulates from the
+three startup logs is now not comparable at all. Before this work all three were
+non-embedding (consistent in convention, individually wrong for JEPA which also
+omitted the target encoder); now the conventions differ. **My change made this
+specific failure worse, and I am not going to describe it as safe.**
+
+I did not fix it, because `baselines/` was not in the authorisation and
+`baselines/mlm_baseline.py` is owned by TASK-30 (see
+`.agent-notes/task-30.md`). The one-line fix per file is to flip the default:
+```python
+# baselines/mlm_baseline.py:183  and  baselines/data2vec_baseline.py:185
+-    def get_num_params(self, non_embedding: bool = True) -> int:
++    def get_num_params(self, non_embedding: bool = False) -> int:
+```
+which would make all three arms report a total, and would then let
+`src/train.py:1175` say `(total)` instead of `(get_num_params())`. Note
+`Data2VecTextBaseline` has no `get_num_params_trainable()` at all, which is
+worth adding in the same pass.
+
+**Why the comparison is recoverable today, without that fix:**
+`src/train.py:1176-1177` computes trainable generically from
+`p.requires_grad`, so it is emitted for **every** arm, and it is genuinely
+like-for-like — the frozen target encoder is excluded from JEPA and data2vec's
+frozen backbone alike:
+
+| arm | `Trainable parameters:` |
+|---|---|
+| `textspanjepa_kaggle` | 137,938,945 |
+| `mlm_kaggle` | 162,716,160 |
+| `data2vec_kaggle` | 124,673,280 |
+
+`baselines/mlm_baseline.py:189-198` already says this in its docstring ("the
+only like-for-like capacity comparison ... is the one the module header
+reports"). So a reader comparing arms must use that line. This is now stated in
+`README.md`'s new "parameter counts" section, and is the reason the `train.py`
+label names the method rather than claiming a convention.
+
+## A6. real remaining defects
+
+1. **the two baseline modules (highest value, needs authorisation).**
+   `baselines/mlm_baseline.py:183` and `baselines/data2vec_baseline.py:185`.
+   Cross-arm capacity comparison is broken as measured in A5. Two one-line
+   default flips. Owner: whoever holds `baselines/` — TASK-30 is the natural
+   successor. Benefit 4.
+
+2. **`Data2VecTextBaseline` has no `get_num_params_trainable()`.** It is the
+   one arm whose like-for-like number cannot be read off the object, only off
+   the log. Consistency gap with the other two arms.
+
+3. **`config/kaggle/` comments do not carry parameter tables at all.** The four
+   `config/scaling/*.yaml` files now do; the three kaggle arms document none, so
+   the exact place where a three-way comparison will be made has no stated
+   convention to read. Suggested follow-up: add the same four-line block to
+   each. Benefit 3.
+
+4. **`docs/plans/2026-09-27-wave1-audit-findings-perf.md:48-51` is now stale.**
+   It states `get_num_params()` under-reports 2.7x. Left deliberately — it is a
+   dated audit record and rewriting history is worse than a dated error. Flagged
+   so nobody quotes it as current.
+
+5. **the scaling filenames still do not say what they track.** `base_140m` is
+   262,021,633 parameters. The comments now state this in every rung, and
+   `README.md` says it, but the *filename* remains ambiguous and is the thing
+   most likely to be quoted out of context. Renaming is a `config/**` decision
+   affecting four file names, four `_meta` blocks and at least one README
+   reference — deliberately out of scope here, recorded as the open option the
+   card originally offered.
