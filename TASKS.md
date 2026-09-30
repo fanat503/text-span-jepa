@@ -392,7 +392,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   private `torch.Generator` **first**, or gating the diagnostics changes results
   while looking like a pure optimisation. Do that in the same card and say so.
 
-### TASK-20 | group: G-PERF | status: todo | mode: arena
+### TASK-20 | group: G-PERF | status: done | mode: arena
 - goal: cut the device syncs in the per-step path.
 - why: measured by patching `torch.Tensor.item` and tracing the caller —
   **92 syncs per forward** with the shipping config, **201** with all twelve
@@ -489,7 +489,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   on 6, so CI and local results are already not bitwise comparable. Say whether
   that matters for any published number.
 
-### TASK-25 | group: G-HYGIENE | status: todo | mode: solo
+### TASK-25 | group: G-HYGIENE | status: done | mode: solo
 - goal: make the parameter count the repo reports match the model it builds.
 - why: `get_num_params()` at `jepa.py:1069` subtracts token and position
   embeddings from the encoder and **omits the target encoder entirely**, so the
@@ -658,3 +658,25 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   measured cold AND warm? "Structurally better but 4x slower" is not better
   unless the caching holds.
 - report: `.agent-notes/task-34.md`
+
+### TASK-35 | group: G-FIX | status: todo | mode: solo
+- goal: make all three comparison arms log the SAME parameter quantity.
+- why: TASK-25 made `get_num_params()` report the TOTAL for JEPA. The two
+  baselines kept their old default, so the three arms in the one directory the
+  repo builds so those runs are comparable now log three different quantities,
+  3.1x apart: jepa 262,021,633 / mlm 123,689,472 / data2vec 85,646,592. The
+  worker that caused this reported it rather than calling it safe, which is the
+  only reason this card exists.
+- why this is worse than the old state: before TASK-25 all three were wrong in
+  the same direction, so a comparison was at least consistently wrong. Now they
+  are inconsistently wrong, which is harder to catch and easier to publish.
+- files_allowed: `baselines/mlm_baseline.py`, `baselines/data2vec_baseline.py`
+- files_forbidden: `src/models/**`, `config/**`, `src/train.py`
+- verify: `& $PY tools/rt.py tests/test_baseline_parity.py tests/test_model.py --slow`
+- must pin: a test that builds all three arms at one shape and asserts the
+  logged quantity is the same KIND for all three, not merely that the numbers
+  are close. Different architectures cannot have equal counts; equal KIND is
+  what a comparison needs.
+- also: `Data2VecTextBaseline` has no `get_num_params_trainable()` at all, so
+  today only JEPA emits the like-for-like `Trainable parameters:` line.
+- report: `.agent-notes/task-35.md`
