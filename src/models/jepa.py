@@ -1083,11 +1083,47 @@ class TextSpanJEPA(TrainingStateGuard):
         ws_Q_wsr = self.jawp.workspace_Q[:, :k_active_wsr]  # live view: WSR shapes Q
         return self.wsr(ws_Q_wsr, step=current_step)
 
-    def get_num_params(self, non_embedding=True):
-        enc = self.encoder.get_num_params(non_embedding)
-        pred = self.predictor.get_num_params()
-        dec = sum(p.numel() for p in self.decoder.parameters())
-        return enc + pred + dec
+    def get_num_params(self, non_embedding=False):
+        """Total parameter count of the whole model.
+
+        Covers every submodule: `encoder`, the frozen `target_encoder` (an
+        exact `deepcopy` of the encoder, so ~half of all parameters),
+        `predictor`, `decoder`, and the GWP mechanisms that hang off this
+        module. The result is the number of scalars the model allocates and
+        writes to the checkpoint, which is what `src/train.py` logs at startup
+        as "Model parameters" and what the memory story has to be built on.
+
+        This used to add up encoder-minus-both-embeddings + predictor +
+        decoder. That dropped the target encoder and both embedding tables, so
+        the trainer logged ~2.5x less than the checkpoint it then saved. The
+        old number was neither the model's size nor its trainable size: on a
+        small config it came out *below* the trainable count, which is
+        impossible for any correct total.
+
+        Args:
+            non_embedding: subtract the token and position embedding tables of
+                BOTH encoders. Kept because "non-embedding" is a standard
+                published convention, but it is not the model's size and must
+                not be quoted as one. The default is `False` so that a bare
+                `get_num_params()` is the size of the model.
+
+        Use `get_num_params_trainable()` for the number of parameters that
+        actually receive gradients.
+        """
+        total = sum(p.numel() for p in self.parameters())
+        if not non_embedding:
+            return total
+        embeddings = 0
+        for enc in (self.encoder, self.target_encoder):
+            embeddings += enc.token_embedding.weight.numel()
+            embeddings += enc.pos_embedding.numel()
+        return total - embeddings
 
     def get_num_params_trainable(self):
+        """Parameters that receive gradients: the total minus the frozen target encoder.
+
+        `src/train.py` already logs this on the line after `get_num_params()`,
+        so the two numbers are complementary: one is the size of the model,
+        this one is the size of what is trained.
+        """
         return sum(p.numel() for p in self.parameters() if p.requires_grad)
