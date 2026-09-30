@@ -24,11 +24,17 @@
 # Parameter counts, measured in-process with this file exactly as it resolves
 # (GPT-2 vocab 50304, max_seq_len 512, all mechanisms as declared):
 #   total parameters     : 537,990,145
-#   trainable parameters : 284,412,929   <- what the filename claims (~300M)
-#   get_num_params()     : 232,272,897
-# `get_num_params()` excludes the target encoder and both embeddings, so the
-# number the trainer logs at startup under-reports the true total by ~2.5x.
-# That is a `src/models/jepa.py` issue, not a config issue.
+#   trainable parameters : 284,412,929
+#   non-embedding        : 433,918,977
+#   get_num_params()     : 537,990,145   (= the total; what the trainer logs)
+# The FILENAME tracks TRAINABLE parameters, not total: it claims ~300M against
+# a measured 284,412,929 trainable (-5.2%). The TOTAL is 1.79x the claimed
+# figure because `target_encoder` is an exact `deepcopy` of `encoder`
+# (253,577,216 frozen parameters, 47.1% of the model) and both encoders carry
+# a GPT-2-sized embedding table. Budget MEMORY against the total: this rung
+# needs 2.00 GiB of fp32 weights plus ~2.12 GiB of AdamW m/v state over the
+# trainable set. `src/train.py` logs the total and the trainable count on
+# adjacent lines.
 #
 # NOTE: this is the widest rung and is the one config that must never be used
 # as a local validation step — see AGENTS.md.
