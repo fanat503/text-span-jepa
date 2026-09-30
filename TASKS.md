@@ -258,7 +258,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 - verify: `python tools/rt.py tests/test_interp.py`
 - report: `.agent-notes/task-13.md`
 
-### TASK-14 | group: G-COVER | status: todo | mode: arena
+### TASK-14 | group: G-COVER | status: done | mode: arena
 - goal: make `src/interp/ground_truth.py` able to fail.
 - why: it is the module whose stated job is catching exactly the failures this
   campaign found, and it cannot catch any of them.
@@ -635,3 +635,26 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 - DUPLICATE of TASK-12. Same file, same defect, same fix. Closed with TASK-12.
 - the goal it restated, kept so the duplication stays auditable: stop
   `layer_analysis` redrawing its split per layer.
+### TASK-34 | group: G-FIX | status: todo | mode: arena
+- goal: finish or refute the structural rival to TASK-14 seed A.
+- why: TASK-14 was run as a tournament and only seed A completed. Seed B
+  (the module measures its own null at call time, calibration travels with the
+  verdict, nulls cached at module scope) produced a coherent 824-line diff and
+  then its session died; three attempts to hand that diff to a fresh agent were
+  interrupted before any of them ran a command. Seed C was never dispatched.
+  So the structural approach is UNPROVEN, not refuted.
+- why it still matters: a measured-null CONSTANT is what seed A shipped, and a
+  corrected constant silently rots when the data changes, where a computed
+  threshold cannot. Seed B's own notes put the cold cost of full_validation at
+  roughly 4x with module-scope caching, and bound the per-test false-positive
+  level at 1/(2*n_null+1). Those are claims to verify, not conclusions.
+- evidence: `.agent-notes/task-14-seed-b-abandoned.diff` (verbatim, 97KB),
+  branch `agent/task-14b`.
+- files_allowed: `src/interp/ground_truth.py`
+- files_forbidden: `src/interp/disentanglement.py`,
+  `src/interp/information_theory.py`, all other `src/interp/**`
+- verify: `& $PY tools/rt.py tests/test_interp.py`
+- must decide: is the per-call cost acceptable on a 6-core box that is in use,
+  measured cold AND warm? "Structurally better but 4x slower" is not better
+  unless the caching holds.
+- report: `.agent-notes/task-34.md`
