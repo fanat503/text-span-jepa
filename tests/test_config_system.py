@@ -1132,9 +1132,8 @@ class TestScalingParamCounts:
     Measured in-process on this machine with each config exactly as it resolves.
     The filename tracks TRAINABLE parameters (encoder + predictor + mechanisms;
     the target encoder is frozen). `get_num_params()` -- the number the trainer
-    logs at startup -- excludes the target encoder and both embeddings, so it
-    under-reports by ~2.5x. That is a `src/` issue and is reported, not fixed
-    here.
+    logs at startup -- returns the TOTAL, so the two figures sit adjacent in
+    every startup log and both are pinned here.
     """
 
     @pytest.mark.parametrize("name,claim", sorted(LADDER_CLAIM.items()))
@@ -1157,13 +1156,77 @@ class TestScalingParamCounts:
                 f"which one the filename refers to"
             )
 
-    def test_get_num_params_under_reports_the_true_total(self):
-        """Negative control on a `src/` defect this file cannot fix."""
-        _total, _trainable, reported = _count_params("config/scaling/base_140m.yaml")
-        assert reported < 0.5 * _total, (
-            "TextSpanJEPA.get_num_params() now covers the target encoder; the "
-            "comments in config/scaling/*.yaml must be recomputed"
+    def test_get_num_params_reports_the_total(self):
+        """The number the trainer logs is the model's size, on every rung.
+
+        This began life as a negative control asserting that the under-count
+        still existed. `TextSpanJEPA.get_num_params()` was corrected to cover
+        the target encoder and both embedding tables, which made the control
+        fire and named its own follow-up. It is now a guard on the other
+        place the wrong figure was written down: the `config/scaling/*.yaml`
+        comments. A tripwire that only ever fires once is a historical note,
+        not a guard.
+        """
+        for name in sorted(LADDER_CLAIM):
+            total, trainable, reported = _count_params(f"config/scaling/{name}")
+            assert reported == total, (
+                f"config/scaling/{name}: get_num_params() returned {reported}, "
+                f"not the total {total}. src/train.py logs this number as "
+                f"'Model parameters'."
+            )
+            assert trainable < total, (
+                f"config/scaling/{name}: the target encoder is frozen, so the "
+                f"trainable count ({trainable}) must be below the total ({total})"
+            )
+
+    @pytest.mark.parametrize("name", sorted(LADDER_CLAIM))
+    def test_config_comment_states_the_count_get_num_params_returns(self, name):
+        """Every `get_num_params()` figure written in a config comment must be the total.
+
+        The stale comments quoted the pre-fix under-count (12,820,417 for
+        xsmall_30m, 98,853,889 for base_140m, ...), which read as a third
+        quantity that nothing in the code produced. This parses the figure off
+        the comment line that names the method and demands it equal what the
+        method actually returns, so reverting a comment goes red.
+        """
+        total, _trainable, reported = _count_params(f"config/scaling/{name}")
+        text = (SCALING_DIR / name).read_text(encoding="utf-8")
+
+        quoted = [
+            int(m.group(1).replace(",", ""))
+            for m in re.finditer(r"get_num_params\(\)[^\n\d]*([\d][\d,]*)", text)
+        ]
+        assert quoted, (
+            f"config/scaling/{name} must state what get_num_params() returns; "
+            f"no figure on a get_num_params() line was found"
         )
+        for value in quoted:
+            assert value == reported, (
+                f"config/scaling/{name} claims get_num_params() returns "
+                f"{value}, but it returns {reported} (= the total)"
+            )
+
+    @pytest.mark.parametrize("name", sorted(LADDER_CLAIM))
+    def test_config_comment_names_what_the_filename_tracks(self, name):
+        """The comment must say the filename tracks trainable, not total.
+
+        `total` is 1.7-2.1x the claimed figure while `trainable` is within
+        1-15% of it, so a reader who is not told which one the name refers to
+        will size the run against the wrong number.
+        """
+        text = (SCALING_DIR / name).read_text(encoding="utf-8")
+        block = text.split("Parameter counts", 1)
+        assert len(block) == 2, f"config/scaling/{name} has no 'Parameter counts' block"
+        counts = block[1].split("#\n", 1)[0]
+        assert re.search(
+            r"filename", counts, re.IGNORECASE
+        ), f"config/scaling/{name} must say which quantity its filename tracks"
+        assert re.search(
+            r"trainable", counts, re.IGNORECASE
+        ), f"config/scaling/{name} must say its filename tracks the trainable count"
+        assert re.search(
+            r"total", counts, re.IGNORECASE
+        ), f"config/scaling/{name} must state the total as a distinct figure"
 
 
 # ══════════════════════════════════════════════════════════════════════

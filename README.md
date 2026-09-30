@@ -25,7 +25,7 @@ training
 --------
 
 ```
-# JEPA on WikiText-103 (~100M params)
+# JEPA on WikiText-103 (88.9M trainable / 170.7M total — see "parameter counts")
 python -m src.train --fname config/scaling/small_100m.yaml
 
 # ablations: each toggles one mechanism against defaults.yaml
@@ -44,6 +44,42 @@ configs live in `config/`:
 resume: set `meta.load_checkpoint: true` in the config. picks up from
 `<logging.folder>/checkpoint-latest.pth.tar`. override output dir with
 `--output_dir`; skip the defaults merge with `--no_defaults`.
+
+parameter counts
+----------------
+
+three numbers exist per model and they are not interchangeable:
+
+- **total** — every parameter tensor, including the frozen `target_encoder`
+  (an exact `deepcopy` of the encoder, so ~half the model) and both
+  embedding tables. This is the model's size, what occupies memory, and what
+  lands in the checkpoint. `TextSpanJEPA.get_num_params()` returns this.
+- **trainable** — what receives gradients, i.e. total minus the frozen target
+  encoder. `TextSpanJEPA.get_num_params_trainable()` returns this, and the
+  trainer logs it on the line after the total.
+- **non-embedding** — total minus the token and position embedding tables of
+  *both* encoders. Available as `get_num_params(non_embedding=True)`. A
+  published convention, but **not** the model's size; do not quote it as one.
+
+the trainer logs the total and the trainable count adjacently, so a startup
+log contains both. quote the one that matches what you mean.
+
+the scaling filenames (`xsmall_30m`, `small_100m`, `base_140m`,
+`large_300m`) track **trainable** parameters, not total. measured on this
+machine with each config exactly as it resolves (GPT-2 vocab 50304,
+`max_seq_len` 512, only `use_jawp` enabled — all 12 mechanisms add
++0.4–0.5%):
+
+| config | filename claims | total | trainable | total / claim |
+|---|---|---|---|---|
+| `xsmall_30m` (d384 L6 h6)  | 30 M  | 62,509,249  | 32,348,353  | 2.08× |
+| `small_100m` (d640 L10 h10) | 100 M | 170,706,561 | 88,947,841  | 1.71× |
+| `base_140m` (d768 L12 h12)  | 140 M | 262,021,633 | 137,938,945 | 1.87× |
+| `large_300m` (d1024 L16 h16) | 300 M | 537,990,145 | 284,412,929 | 1.79× |
+
+so a rung's total is 1.7–2.1× its name. budget memory against **total**:
+`large_300m` is 538M parameters ≈ 2.0 GiB of fp32 weights plus ~4.1 GiB of
+AdamW m/v state.
 
 operational notes
 -----------------

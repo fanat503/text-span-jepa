@@ -1437,6 +1437,115 @@ class TestV010Bugfixes:
         assert model.predictor.num_refine_steps == 3
 
 
+def _counted_model():
+    """A small TextSpanJEPA used by the parameter-count tests below.
+
+    Width/seq/vocab are chosen so the two encoder embedding tables and the
+    frozen target encoder are each a visible fraction of the total, rather
+    than rounding noise -- a count that forgets one of them has to show up.
+    """
+    from src.models.jepa import TextSpanJEPA, TextSpanJEPAConfig
+
+    config = TextSpanJEPAConfig(
+        vocab_size=100,
+        max_seq_len=16,
+        embed_dim=32,
+        encoder_depth=2,
+        num_heads=4,
+        mlp_ratio=2.0,
+        predictor_embed_dim=16,
+        predictor_depth=2,
+        future_offsets=(1,),
+        num_refine_steps=1,
+    )
+    return TextSpanJEPA(config)
+
+
+def _named_submodule_total(model):
+    """Total, summed over the four named submodules plus everything else.
+
+    Deliberately does NOT reuse `model.parameters()`: it is an independent
+    recount of the same quantity, so it catches a `get_num_params()` that
+    forgets one of the parts rather than restating whatever the module
+    happens to walk.
+    """
+    parts = (model.encoder, model.target_encoder, model.predictor, model.decoder)
+    seen = set()
+    total = 0
+    for part in parts:
+        for p in part.parameters():
+            seen.add(id(p))
+            total += p.numel()
+    total += sum(p.numel() for p in model.parameters() if id(p) not in seen)
+    return total
+
+
+class TestParamCountReporting:
+    """`get_num_params()` must count the model that is built and checkpointed.
+
+    It used to add up encoder-minus-both-embeddings + predictor + decoder,
+    which drops the frozen target encoder entirely and so reported ~2.5x
+    less than the module holds. `src/train.py` logs that number as "Model
+    parameters", so the under-count reaches any paper that quotes the log.
+    """
+
+    def test_num_params_equals_every_parameter_in_the_module(self):
+        model = _counted_model()
+        expected = sum(p.numel() for p in model.parameters())
+        assert model.get_num_params() == expected, (
+            "get_num_params() must report the whole model: the target encoder "
+            "and both embedding tables are parameters that the trainer "
+            "allocates, optimises around and writes into the checkpoint"
+        )
+
+    def test_num_params_covers_the_frozen_target_encoder(self):
+        """The target encoder is half the model and is the part that was lost."""
+        model = _counted_model()
+        frozen = sum(p.numel() for p in model.target_encoder.parameters())
+        trainable = model.get_num_params_trainable()
+
+        assert frozen > 0, "target_encoder must own parameters for this test to mean anything"
+        assert model.get_num_params() == trainable + frozen, (
+            f"total {model.get_num_params()} != trainable {trainable} + frozen "
+            f"{frozen}: the reported count still omits the target encoder"
+        )
+        assert model.get_num_params() == _named_submodule_total(model), (
+            "get_num_params() must sum encoder + target_encoder + predictor + "
+            "decoder + mechanisms"
+        )
+
+    def test_non_embedding_variant_drops_both_embedding_tables(self):
+        """`non_embedding=True` stays available, and covers both encoders."""
+        model = _counted_model()
+        encoder = model.encoder
+        per_encoder_embeddings = (
+            encoder.token_embedding.weight.numel() + encoder.pos_embedding.numel()
+        )
+        assert per_encoder_embeddings > 0
+
+        without = model.get_num_params(non_embedding=True)
+        assert without == model.get_num_params() - 2 * per_encoder_embeddings, (
+            "non_embedding=True must subtract the token and position "
+            "embeddings of BOTH the encoder and the target encoder"
+        )
+        assert without < model.get_num_params()
+
+    def test_default_call_reports_total_not_trainable(self):
+        """`train.py` calls `get_num_params()` with no arguments.
+
+        The default is therefore the number that lands in the startup log,
+        and it must be the model's size -- not its trainable half, and not a
+        partial sum of it.
+        """
+        model = _counted_model()
+        reported = model.get_num_params()
+        trainable = model.get_num_params_trainable()
+
+        assert reported == sum(p.numel() for p in model.parameters())
+        assert reported > trainable, "the target encoder is frozen, so total > trainable"
+        assert trainable == sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
 class TestV010NewFeatures:
     def test_seed_everything(self):
         """seed_everything should produce deterministic results."""

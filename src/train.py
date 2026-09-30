@@ -1172,7 +1172,7 @@ def main(args):
 
     if hasattr(model, "get_num_params"):
         num_params = model.get_num_params()
-        logger.info(f"Model parameters (non-embedding): {num_params:,}")
+        logger.info(f"Model parameters (get_num_params()): {num_params:,}")
     trainable = sum(p.numel() for p in model.parameters() if p.requires_grad)
     logger.info(f"Trainable parameters: {trainable:,}")
 
