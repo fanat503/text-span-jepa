@@ -87,7 +87,12 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   is currently a documented skip. It must pass and the skip must be removed.
   Do not delete the test.
 
-### TASK-05 | group: G-FIX | status: todo | mode: solo
+### TASK-05 | group: G-FIX | status: dup | mode: none
+- DUPLICATE of TASK-29. Same goal, same files (`src/train.py` +
+  `tests/test_config_system.py`), same fix. Closed with TASK-29, which is done.
+- third duplicate found while selecting the wave-4 set, which means the card
+  board had been written from findings without ever being diffed against itself.
+  Card-writing now diffs against the board before it adds.
 - goal: make the `src/train.py:849,874` config typo detector compare **paths**,
   not bare leaf names.
 - why: it builds `{p.split(".")[-1] for p in _leaves(known)}` and tests the key,
