@@ -336,19 +336,32 @@ class SpectralPredictiveCoding(TrainingStateGuard):
         return z_freq @ self.freq_basis.T
 
     def _update_running_statistics(self, band_residuals, target_bands, device) -> None:
-        """Advance the per-band residual-variance / predictability EMAs."""
+        """Advance the per-band residual-variance / predictability EMAs.
+
+        Args:
+            band_residuals: (n_bands,) tensor of per-band residual variances.
+                Already on ``device`` — see ``forward``, which stacks them
+                rather than reading each one back to the host.
+            target_bands: list of per-band target tensors.
+            device: torch device for the buffers.
+
+        """
         self.adapt_step.add_(1)
         mom = self.adapt_momentum
-        # Update residual variances
-        new_vars = torch.tensor(band_residuals, device=device)
+        # Update residual variances. The old code built this tensor from a
+        # Python list of `.item()` floats, so the values here are the same ones
+        # the old code materialised, only without the per-band host reads.
+        new_vars = band_residuals.to(device=device, dtype=self.running_residual_vars.dtype)
         self.running_residual_vars.mul_(mom).add_((1 - mom) * new_vars)
 
-        # Estimate predictability: 1 - residual/target_variance
-        target_vars = []
-        for b in range(self.n_bands):
-            tv = target_bands[b].pow(2).mean().item()
-            target_vars.append(max(tv, self.eps))
-        target_var_t = torch.tensor(target_vars, device=device)
+        # Estimate predictability: 1 - residual/target_variance.
+        # Stacked, not looped: this ran one `.item()` per band per step.
+        target_var_t = torch.stack([tb.pow(2).mean() for tb in target_bands])
+        # clamp(min=eps) is the tensor form of the old `max(tv, self.eps)`:
+        # for NaN it propagates NaN, and Python's max(nan, eps) is also nan.
+        target_var_t = target_var_t.clamp(min=self.eps).to(
+            device=device, dtype=self.running_predictability.dtype
+        )
         predictability = (1.0 - new_vars / (target_var_t + self.eps)).clamp(0, 1)
         self.running_predictability.mul_(mom).add_((1 - mom) * predictability)
 
@@ -374,18 +387,24 @@ class SpectralPredictiveCoding(TrainingStateGuard):
         # Get band weights
         weights = self.get_band_weights()
 
-        # Compute per-band residuals
-        band_residuals = []
-        band_losses = []
+        # Compute per-band residuals.
+        # The residual VARIANCES stay on device in a stacked tensor: reading
+        # each one back with `.item()` cost one hard device sync per band per
+        # step (n_bands syncs), and every consumer below wants either a tensor
+        # or a list that a single `.tolist()` can produce.
+        residual_var_t = []
+        band_loss_t = []
         total_loss = torch.tensor(0.0, device=z_pred.device)
 
         for b in range(self.n_bands):
             residual_b = pred_bands[b] - target_bands[b]
             residual_var_b = residual_b.pow(2).mean()
-            band_residuals.append(residual_var_b.item())
+            residual_var_t.append(residual_var_b)
             band_loss_b = weights[b] * residual_var_b
-            band_losses.append(band_loss_b.item())
+            band_loss_t.append(band_loss_b)
             total_loss = total_loss + band_loss_b
+
+        band_residuals_t = torch.stack(residual_var_t)
 
         # Online weight adaptation: update running statistics
         # This allows the weights to track changing predictability
@@ -394,14 +413,29 @@ class SpectralPredictiveCoding(TrainingStateGuard):
         with torch.no_grad():
             self._mutate_state(
                 self._update_running_statistics,
-                band_residuals,
+                band_residuals_t.detach(),
                 target_bands,
                 z_pred.device,
             )
 
-        # Diagnostics
+        # Diagnostics.
+        # Scalars the info dict reports are computed as 0-dim tensors and read
+        # back in ONE batched `.tolist()` below, rather than one `.item()` per
+        # scalar. `torch.stack(...).tolist()[i]` is bit-identical to the
+        # matching `.item()` for every float dtype (measured; see
+        # .agent-notes/task-21.md), so the reported numbers do not move.
         with torch.no_grad():
-            # Uniform loss (all weights = 1) for comparison
+            # Band vectors: batched reads instead of one `.item()` per band.
+            band_residuals = band_residuals_t.detach().tolist()
+            band_losses = torch.stack(band_loss_t).detach().tolist()
+
+            # Uniform loss (all weights = 1) for comparison.
+            # Python's sum() over the list, NOT a tensor .sum(): Python
+            # accumulates in float64 left to right, torch reduces in the tensor
+            # dtype in a different order. Measured to differ by up to 1.1e-6
+            # (fp32) and 2.7e-2 (bf16), so this arithmetic deliberately stays
+            # on the host. It costs no extra sync — the list it reads is the
+            # one the batched read above already produced.
             uniform_loss = sum(band_residuals) / self.n_bands
 
             # Weight concentration (entropy of weight distribution)
@@ -409,26 +443,48 @@ class SpectralPredictiveCoding(TrainingStateGuard):
             weight_entropy = -(w_normalized * (w_normalized + self.eps).log()).sum()
 
             # Frequency utilization: how many bands have significant weight
-            significant = (weights > 0.5).sum().item()
+            significant = (weights > 0.5).sum()
 
             # Spectral tilt: log(w_high / w_low) — measures preference
             w_low = weights[: self.n_bands // 2].mean()
             w_high = weights[self.n_bands // 2 :].mean()
-            spectral_tilt = (w_high / (w_low + self.eps)).log().item()
+            spectral_tilt = (w_high / (w_low + self.eps)).log()
 
             # Orthonormality of frequency basis
             F_mat = self.freq_basis
             gram = F_mat.T @ F_mat
-            ortho_err = (gram - torch.eye(D, device=F_mat.device)).abs().max().item()
+            ortho_err = (gram - torch.eye(D, device=F_mat.device)).abs().max()
+
+            # Batched read-back: ONE sync for all five tensor scalars below.
+            # No dtype casts: torch.stack promotes to the widest input, which
+            # is a widening for every pair here, so each list entry is still
+            # the exact Python float its own `.item()` would have returned.
+            # `significant` is an int64 band count and promotes into the float
+            # dtype exactly (a count is far below 2**24 for any real n_bands).
+            (
+                weight_entropy_v,
+                significant_v,
+                spectral_tilt_v,
+                ortho_err_v,
+                total_loss_v,
+            ) = torch.stack(
+                [
+                    weight_entropy,
+                    significant,
+                    spectral_tilt,
+                    ortho_err,
+                    total_loss.detach(),
+                ]
+            ).tolist()
 
         info = {
-            "spc_total_loss": total_loss.item(),
+            "spc_total_loss": total_loss_v,
             "spc_uniform_loss": uniform_loss,
-            "spc_weight_entropy": weight_entropy.item(),
-            "spc_n_significant_bands": significant,
-            "spc_spectral_tilt": spectral_tilt,
-            "spc_ortho_error": ortho_err,
-            "spc_band_weights": weights.tolist(),
+            "spc_weight_entropy": weight_entropy_v,
+            "spc_n_significant_bands": int(significant_v),
+            "spc_spectral_tilt": spectral_tilt_v,
+            "spc_ortho_error": ortho_err_v,
+            "spc_band_weights": weights.detach().tolist(),
             "spc_band_residuals": band_residuals,
             "spc_band_losses": band_losses,
             "spc_band_predictability": self.running_predictability.tolist(),
