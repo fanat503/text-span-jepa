@@ -185,6 +185,12 @@ class JAWPModule(nn.Module):
 
         # Current active workspace dimension (for curriculum)
         self.register_buffer("active_k", torch.tensor(k_start, dtype=torch.long))
+        # Host-side mirror of `active_k`. The buffer is only ever written by
+        # `fill_(k)` with a Python int, so the host already knows this value;
+        # reading it back with `.item()` costs a device sync on every call.
+        # Kept in sync by `_set_active_k`, and refreshed on checkpoint load
+        # (see `_load_from_state_dict`) so a restored buffer cannot desync it.
+        self._active_k = int(k_start)
 
         # PCA-initialized flag (for 'pca' init mode)
         self._pca_initialized = init != "pca"
@@ -221,13 +227,43 @@ class JAWPModule(nn.Module):
         """
         if self.workspace_Q.grad is None:
             return
-        k = int(self.active_k.item())
+        k = self.active_k_value()
         G = self.workspace_Q.grad
         Qa = self.workspace_Q.data[:, :k]
         Ga = G[:, :k]
         QtG = Qa.T @ Ga
         sym_QtG = 0.5 * (QtG + QtG.T)
         G[:, :k] = Ga - Qa @ sym_QtG
+
+    def active_k_value(self) -> int:
+        """The active workspace width as a Python int, without a device sync.
+
+        `active_k` is a registered buffer, so it is part of the state_dict and
+        can be restored by `load_state_dict` from a checkpoint written at a
+        different curriculum step. `_load_from_state_dict` re-reads the buffer
+        there, so this mirror cannot silently disagree with the buffer.
+
+        Returns:
+            k: the active workspace dimension.
+
+        """
+        return self._active_k
+
+    def _set_active_k(self, k: int) -> None:
+        """Write the active workspace width to the buffer and the host mirror."""
+        self.active_k.fill_(k)
+        self._active_k = int(k)
+
+    def _load_from_state_dict(self, *args, **kwargs):
+        """Re-sync the host mirror after a checkpoint restore.
+
+        `active_k` travels in the state_dict, so a resumed run can bring back
+        a width the constructor never saw. Without this the mirror would keep
+        reporting the constructor's `k_start` and every slice taken through
+        `active_k_value()` would be the wrong width.
+        """
+        super()._load_from_state_dict(*args, **kwargs)
+        self._active_k = int(self.active_k.item())
 
     @torch.no_grad()
     def stiefel_retract(self):
@@ -248,7 +284,7 @@ class JAWPModule(nn.Module):
         SVD retraction applies to ALL columns (needed for curriculum).
         """
         Q = self.workspace_Q.data
-        k_active = int(self.active_k.item())
+        k_active = self.active_k_value()
         k_total = Q.shape[1]
 
         # Riemannian gradient correction: project gradient onto tangent space
@@ -323,7 +359,7 @@ class JAWPModule(nn.Module):
         """
         D = z_pred.size(-1)
         k = self.current_k(step)
-        self.active_k.fill_(k)
+        self._set_active_k(k)
 
         Q = self.workspace_Q[:, :k]  # (D, k) — LEARNED, gets gradients
 
@@ -360,47 +396,97 @@ class JAWPModule(nn.Module):
             # when Q is orthonormal (Stiefel constraint)
             ws_energy = (pred_ws_d**2).sum()
             total_energy = (z_pred_flat**2).sum() + 1e-10
-            workspace_utilization = (ws_energy / total_energy).clamp(0, 1).item()
+            workspace_utilization_t = (ws_energy / total_energy).clamp(0, 1)
 
             # Target workspace fraction: same orthonormality trick
             target_ws_energy = (target_ws_d**2).sum()
             target_total_energy = (z_target_flat**2).sum() + 1e-10
-            target_ws_fraction = (target_ws_energy / target_total_energy).clamp(0, 1).item()
+            target_ws_fraction_t = (target_ws_energy / target_total_energy).clamp(0, 1)
 
-            # Workspace prediction cosine
+            # Workspace prediction cosine.
+            # The old code branched on `pred_norm > 1e-10 and target_norm >
+            # 1e-10`, and each `bool(tensor)` is a device sync. Select the
+            # branch on device instead: the cosine is computed unconditionally
+            # and discarded when the guard is false, which is the same number
+            # the old branch returned (0.0) and the same number when the guard
+            # is true. cosine_similarity clamps its own denominator, so the
+            # unguarded call is safe at zero norm.
             pred_norm = pred_ws_d.norm()
             target_norm = target_ws_d.norm()
-            if pred_norm > 1e-10 and target_norm > 1e-10:
-                ws_cosine = (
-                    F.cosine_similarity(
-                        pred_ws_d.flatten().unsqueeze(0),
-                        target_ws_d.flatten().unsqueeze(0),
-                    )
-                    .clamp(-1, 1)
-                    .item()
-                )
-            else:
-                ws_cosine = 0.0
+            cos_raw = F.cosine_similarity(
+                pred_ws_d.flatten().unsqueeze(0),
+                target_ws_d.flatten().unsqueeze(0),
+            )
+            ws_cosine_t = torch.where(
+                (pred_norm > 1e-10) & (target_norm > 1e-10),
+                cos_raw.clamp(-1, 1),
+                cos_raw.new_zeros(()),
+            ).reshape(())
 
-            # Q orthonormality score (1 = perfect, from Stiefel retraction)
+            # Q orthonormality score (1 = perfect, from Stiefel retraction).
+            # The `1.0 -` is left to the host: it was float64 arithmetic on a
+            # Python float and stays exactly that.
             off_diag = gram.clone()
             off_diag.fill_diagonal_(0)
-            ortho_score = 1.0 - off_diag.abs().mean().clamp(0, 1).item()
+            ortho_offdiag_t = off_diag.abs().mean().clamp(0, 1)
 
-            # Predictive relevance: workspace prediction quality vs full
+            # Predictive relevance: workspace prediction quality vs full.
+            # `pred_rel_div` and `pred_rel_ok` are read separately so the
+            # `1.0 - ratio` and `max(0.0, ...)` steps still run in float64 on
+            # the host, as they did when each was its own `.item()`. Selecting
+            # the branch on device avoids the sync that `bg_pred_error.item()
+            # > 1e-10` cost.
             bg_pred_error = ((z_pred_flat - z_target_flat) ** 2).mean()
             ws_pred_error = ((pred_ws_d - target_ws_d) ** 2).mean()
-            if bg_pred_error.item() > 1e-10:
-                predictive_relevance = max(0.0, 1.0 - (ws_pred_error / bg_pred_error).item())
+            pred_rel_div = ws_pred_error / bg_pred_error
+            pred_rel_ok = (bg_pred_error > 1e-10).to(pred_rel_div.dtype)
+
+            # PCA alignment: subspace similarity between learned Q and PCA.
+            # Returns a tensor; the isfinite / clamp policy stays on the host.
+            pca_alignment_t = self._compute_pca_alignment(z_target_flat, Q, k)
+
+            # ONE batched read for every scalar the info dict reports. Each
+            # entry is bit-identical to the `.item()` it replaces: torch.stack
+            # promotes to the widest input, which is a widening for every pair
+            # here, and `stack(...).tolist()[i]` is the exact Python float that
+            # element's own `.item()` would return. Verified for fp32, fp64,
+            # bf16 and fp16 (.agent-notes/task-21.md).
+            (
+                loss_workspace_v,
+                loss_predictor_focus_v,
+                workspace_utilization,
+                target_ws_fraction,
+                ws_cosine,
+                ortho_offdiag,
+                pred_rel_div_v,
+                pred_rel_ok_v,
+                pca_alignment_raw,
+            ) = torch.stack(
+                [
+                    loss_workspace.detach(),
+                    loss_predictor_focus.detach(),
+                    workspace_utilization_t,
+                    target_ws_fraction_t,
+                    ws_cosine_t,
+                    ortho_offdiag_t,
+                    pred_rel_div,
+                    pred_rel_ok,
+                    pca_alignment_t,
+                ]
+            ).tolist()
+
+            ortho_score = 1.0 - ortho_offdiag
+            if pred_rel_ok_v:
+                predictive_relevance = max(0.0, 1.0 - pred_rel_div_v)
             else:
                 predictive_relevance = 1.0
-
-            # PCA alignment: subspace similarity between learned Q and PCA
-            pca_alignment = self._compute_pca_alignment(z_target_flat, Q, k)
+            pca_alignment = (
+                max(0.0, min(1.0, pca_alignment_raw)) if math.isfinite(pca_alignment_raw) else 0.0
+            )
 
         info = {
-            "loss_workspace": loss_workspace.item(),
-            "loss_predictor_focus": loss_predictor_focus.item(),
+            "loss_workspace": loss_workspace_v,
+            "loss_predictor_focus": loss_predictor_focus_v,
             "k": k,
             "workspace_utilization": workspace_utilization,
             "target_ws_fraction": target_ws_fraction,
@@ -415,11 +501,18 @@ class JAWPModule(nn.Module):
     @staticmethod
     @torch.no_grad()
     def _compute_pca_alignment(target_flat, Q, k):
-        """Subspace similarity between learned Q and PCA of target."""
+        """Subspace similarity between learned Q and PCA of target.
+
+        Returns a 0-dim tensor, not a Python float: the caller reads it in the
+        same batched `.tolist()` as the rest of the diagnostics, so the value
+        never costs a device sync of its own. The isfinite / clamp policy that
+        used to live here now runs on the host, on that same value, so the
+        number reported is unchanged.
+        """
         try:
             N, D = target_flat.shape
             if N <= 1 or k > D or k < 1:
-                return 0.0
+                return target_flat.new_zeros(())
 
             centered = target_flat - target_flat.mean(dim=0)
             cov = (centered.T @ centered) / max(N - 1, 1)
@@ -428,38 +521,30 @@ class JAWPModule(nn.Module):
 
             cross = Q.T @ V_pca  # (k, k)
             trace_term = (cross**2).sum()
-            similarity = trace_term / k
-
-            val = similarity.item()
-            if not math.isfinite(val):
-                return 0.0
-            return max(0.0, min(1.0, val))
+            return trace_term / k
         except Exception:
-            return 0.0
+            return target_flat.new_zeros(())
 
     def get_workspace_basis(self, step=None):
         """Return current workspace basis matrix Q (D, k)."""
         if step is not None:
-            k = self.current_k(step)
-            self.active_k.fill_(k)
-        k = int(self.active_k.item())
+            self._set_active_k(self.current_k(step))
+        k = self.active_k_value()
         return self.workspace_Q.data[:, :k]
 
     def project_to_workspace(self, z, step=None):
         """Project representations z into workspace: Q^T z."""
         if step is not None:
-            k = self.current_k(step)
-            self.active_k.fill_(k)
-        k = int(self.active_k.item())
+            self._set_active_k(self.current_k(step))
+        k = self.active_k_value()
         Q = self.workspace_Q.data[:, :k]
         return z @ Q
 
     def project_to_background(self, z, step=None):
         """Project representations z into background: (I - QQ^T) z."""
         if step is not None:
-            k = self.current_k(step)
-            self.active_k.fill_(k)
-        k = int(self.active_k.item())
+            self._set_active_k(self.current_k(step))
+        k = self.active_k_value()
         Q = self.workspace_Q.data[:, :k]
         return z - (z @ Q) @ Q.T
 
@@ -629,7 +714,7 @@ class JAWPModule(nn.Module):
 
         """
         D = z_pred.size(-1)
-        k = int(self.active_k.item())
+        k = self.active_k_value()
         Q = self.workspace_Q.data[:, :k]  # (D, k)
 
         z_target_flat = z_target.reshape(-1, D).float()
@@ -700,7 +785,7 @@ class JAWPModule(nn.Module):
 
         """
         D = z_pred.size(-1)
-        k = int(self.active_k.item())
+        k = self.active_k_value()
         Q = self.workspace_Q.data[:, :k]
 
         z_pred_flat = z_pred.reshape(-1, D).float()
@@ -827,7 +912,7 @@ class JAWPModule(nn.Module):
 
         """
         Q = self.workspace_Q.data
-        k_active = int(self.active_k.item())
+        k_active = self.active_k_value()
         k_total = Q.shape[1]
 
         gauge_norm = 0.0
@@ -892,9 +977,8 @@ class JAWPModule(nn.Module):
 
         """
         if step is not None:
-            k = self.current_k(step)
-            self.active_k.fill_(k)
-        k = int(self.active_k.item())
+            self._set_active_k(self.current_k(step))
+        k = self.active_k_value()
         Q1 = self.workspace_Q.data[:, :k]
 
         if other_Q is None:
@@ -1028,7 +1112,7 @@ class JAWPModule(nn.Module):
 
         """
         D = z_pred.size(-1)
-        k = int(self.active_k.item())
+        k = self.active_k_value()
         Q = self.workspace_Q.data[:, :k]
 
         z_flat = z_pred.reshape(-1, D).float()
@@ -1100,7 +1184,7 @@ class JAWPModule(nn.Module):
 
         """
         D = z_pred.size(-1)
-        k = int(self.active_k.item())  # active WIDTH; current_k() treats it as a step (R18 bugfix)
+        k = self.active_k_value()  # active WIDTH; current_k() treats it as a step (R18 bugfix)
 
         Q = self.workspace_Q[:, :k]  # differentiable
         z_flat = z_pred.reshape(-1, D)

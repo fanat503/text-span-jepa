@@ -249,6 +249,16 @@ class PredictiveCascadeRefinement(nn.Module):
             "level_offsets",
             torch.cumsum(torch.tensor([0] + self.level_dims[:-1]), 0),
         )
+        # Host-side mirror of `level_offsets`. The buffer is the running sum of
+        # `level_dims`, which is a plain Python list fixed at construction and
+        # never mutated, so the same running sum is computable on the host with
+        # no device read. The buffer stays: it is in the state_dict, and this
+        # mirror must keep matching it.
+        self._level_offsets_py = []
+        _running = 0
+        for _d in self.level_dims:
+            self._level_offsets_py.append(_running)
+            _running += _d
 
         # Refinement blocks — one per level
         refine_hidden = refine_mlp_hidden or (2 * max(self.level_dims))
@@ -306,7 +316,9 @@ class PredictiveCascadeRefinement(nn.Module):
             P: (D, d_l) orthonormal projection matrix
 
         """
-        offset = self.level_offsets[level].item()
+        # Host-side offset: the buffer holds the same integers, and reading it
+        # back per level per step was one device sync each.
+        offset = self._level_offsets_py[level]
         dim = self.level_dims[level]
         return self.workspace_Q[:, offset : offset + dim]
 
@@ -338,8 +350,11 @@ class PredictiveCascadeRefinement(nn.Module):
         else:
             warmup_factor = min((step - self.warmup_steps) / max(self.warmup_steps, 1), 1.0)
 
-        total_refinement_norm = 0.0
-        level_info = []
+        # Per-level diagnostics are collected as 0-dim tensors and read back in
+        # ONE batched `.tolist()` after the loop, together with the three
+        # overall scalars. Previously each level cost four `.item()` calls —
+        # 4 x n_levels hard device syncs per step — plus three more below.
+        level_diag_t = []
 
         for l in range(self.n_levels):
             P_l = self._get_subspace_proj(l)  # (D, d_l)
@@ -362,22 +377,17 @@ class PredictiveCascadeRefinement(nn.Module):
 
             # Diagnostics
             with torch.no_grad():
-                correction_norm = (gate * correction).norm().item()
-                total_refinement_norm += correction_norm
-                # Subspace utilization: how much of the residual is in this subspace
-                r_energy = (r_projected**2).sum().item()
-                total_r_energy = (residual**2).sum().item() + 1e-10
-                subspace_fraction = r_energy / (total_r_energy + r_energy)
-
-                level_info.append(
-                    {
-                        f"pcr_level_{l}_correction_norm": correction_norm,
-                        f"pcr_level_{l}_gate": (
-                            gate.item() if isinstance(gate, torch.Tensor) else gate
-                        ),
-                        f"pcr_level_{l}_subspace_fraction": subspace_fraction,
-                        f"pcr_level_{l}_dim": self.level_dims[l],
-                    },
+                # Subspace utilization: how much of the residual is in this
+                # subspace. The `+ 1e-10` and the division stay on the host
+                # (see the batched read below) so the float64 arithmetic and
+                # therefore the reported fraction are unchanged.
+                level_diag_t.append(
+                    [
+                        (gate * correction).norm(),
+                        gate.reshape(()),
+                        (r_projected**2).sum(),
+                        (residual**2).sum(),
+                    ]
                 )
 
         # Reshape back
@@ -386,19 +396,53 @@ class PredictiveCascadeRefinement(nn.Module):
         # Compute overall diagnostics
         with torch.no_grad():
             # Improvement: how much the residual decreased
-            initial_residual = (z_target_flat - z_pred_flat).norm().item()
-            final_residual = (z_target_flat - z_current).norm().item()
-            if initial_residual > 1e-10:
-                improvement = 1.0 - final_residual / initial_residual
-            else:
-                improvement = 0.0
+            initial_residual_t = (z_target_flat - z_pred_flat).norm()
+            final_residual_t = (z_target_flat - z_current).norm()
 
             # Q orthonormality
             Q = self.workspace_Q
             gram = Q.T @ Q
             off_diag = gram.clone()
             off_diag.fill_diagonal_(0)
-            ortho_score = 1.0 - off_diag.abs().mean().clamp(0, 1).item()
+            ortho_offdiag_t = off_diag.abs().mean().clamp(0, 1)
+
+            # ONE batched read for every scalar the info dict reports. Each
+            # entry is bit-identical to the `.item()` it replaces: stack
+            # promotes to the widest input (a widening for every pair here)
+            # and `stack(...).tolist()[i]` is the exact Python float that
+            # element's own `.item()` returns. Verified for fp32/fp64/bf16/fp16
+            # (.agent-notes/task-21.md). All the arithmetic below therefore
+            # still runs on the same float64 Python values as before.
+            flat = torch.stack(
+                [t for level in level_diag_t for t in level]
+                + [initial_residual_t, final_residual_t, ortho_offdiag_t]
+            ).tolist()
+
+        # Unpack: 4 values per level, then the 3 overall scalars.
+        overall = flat[4 * self.n_levels :]
+        initial_residual = overall[0]
+        final_residual = overall[1]
+        ortho_score = 1.0 - overall[2]
+        if initial_residual > 1e-10:
+            improvement = 1.0 - final_residual / initial_residual
+        else:
+            improvement = 0.0
+
+        total_refinement_norm = 0.0
+        level_info = []
+        for l in range(self.n_levels):
+            correction_norm, gate_v, r_energy, total_r = flat[4 * l : 4 * l + 4]
+            total_refinement_norm += correction_norm
+            total_r_energy = total_r + 1e-10
+            subspace_fraction = r_energy / (total_r_energy + r_energy)
+            level_info.append(
+                {
+                    f"pcr_level_{l}_correction_norm": correction_norm,
+                    f"pcr_level_{l}_gate": gate_v,
+                    f"pcr_level_{l}_subspace_fraction": subspace_fraction,
+                    f"pcr_level_{l}_dim": self.level_dims[l],
+                },
+            )
 
         info = {
             "pcr_improvement": max(improvement, 0.0),
