@@ -21,10 +21,110 @@
 #    - Probing complexity matches known structure
 #    - Polysemanticity correctly identifies non-polysemantic dims
 #    - CKA correctly reflects structural similarity
+#
+# A validity test is only worth its cost if it can FAIL. Every pass/fail
+# decision below is therefore a bound read off a measured null rather than a
+# plausible-looking constant; the measurements and the null suite they come
+# from are in the threshold block further down this file.
 
 import math
 
 import torch
+
+# ═══════════════════════════════════════════════════════════════════════
+# PASS/FAIL THRESHOLDS — every one measured against a null
+# ═══════════════════════════════════════════════════════════════════════
+#
+# Before this block the four pass/fail decisions in this module were bare
+# literals: `frac_monosemantic > 0`, `10 < eff_dim < 60`, `0 < aniso < 0.99`,
+# `n_valid >= n_total - 1`. None of them was a measurement, and the audit
+# showed each one accepts data the module is supposed to reject.
+#
+# Every constant below is a bound read off a null distribution measured on
+# this data, at N=300, D=64 (the shape the validators actually use). The null
+# suite is a set of STRUCTURE-FREE representation matrices — matrices that
+# carry none of the class / position / depth signal the generator plants. The
+# windows are the gaps between the structured measurement and the nearest
+# null on each side.
+#
+# STRUCTURED (50 `SyntheticStructuredModel.generate` seeds):
+#     effective_dimension  min 37   median 38   max 39
+#     anisotropy           min 0.957547  median 0.961584  max 0.964939
+#
+# NULL SUITE (260 draws, structure-free):
+#     name          draws  effective_dimension      anisotropy
+#     isotropic      60    62 .. 63                 0.578705 .. 0.648987
+#     same_scale     60    58 .. 59                 0.884535 .. 0.911024
+#     het_scale.5    60    55 .. 59                 0.865978 .. 0.970509
+#     low_rank8      40    8                        0.987390 .. 0.990536
+#     dead16         20    47                       1.0
+#     rank1          20    1                        1.0
+#
+#     isotropic  = iid Gaussian.                    (the audit's example null)
+#     same_scale = iid Gaussian rescaled to the generator's own per-dimension
+#                  standard deviation: same nuisance scale profile, no
+#                  semantics. This is the realistic null.
+#     het_scale.5= iid Gaussian with per-column lognormal(0, 0.5) scale:
+#                  a nuisance per-dimension scale spread, which real encoder
+#                  representations have.
+#     low_rank8  = rank-8 signal + 0.2 noise.       (too few live dimensions)
+#     dead16     = iid Gaussian with 16 zero dims.  (partially collapsed)
+#     rank1      = rank-1 signal.                   (fully collapsed)
+#
+# Verdict of the old windows `(10, 60)` and `(0, 0.99)` on that suite:
+#     same_scale 60/60 PASS, het_scale.5 60/60 PASS, everything else rejected.
+#     120 of 260 structure-free matrices were declared a valid structured
+#     representation. (The iid Gaussian the audit names is the one null the
+#     old effective-dimension window happens to catch, at 62..63.)
+#
+# Verdict of the windows below on the same suite: 0/260 pass.
+
+# Effective-dimension window. Lower edge: the largest effective dimension any
+# null produces BELOW the structured value (low_rank8 is exactly 8 on all 40
+# draws; rank1 is 1). Upper edge: the smallest effective dimension any null
+# produces ABOVE it (dead16 is exactly 47 on all 20 draws; het_scale.5 starts
+# at 55, same_scale at 58, isotropic at 62). Both nulls are exact integers, so
+# the strict inequalities reject them with no floating-point slack to argue
+# about. Structured margin: 29 above the lower edge, 8 below the upper one.
+_EFF_DIM_NULL_LOWER = 8.0
+_EFF_DIM_NULL_UPPER = 47.0
+
+# Anisotropy window. Lower edge 0.93, placed between the largest anisotropy
+# measured among the nulls that stay below the structured value (same_scale,
+# 0.911024 over 60 draws; isotropic, 0.648987) and the structured minimum
+# (0.957547). het_scale.5 reaches 0.970509 and so CROSSES the structured
+# range — anisotropy alone cannot exclude that null, and the
+# effective-dimension window above is what rejects it. Upper edge 0.98,
+# placed between the smallest anisotropy measured above the structured value
+# (low_rank8, 0.987390 over 40 draws; dead16 and rank1 are exactly 1.0) and
+# the structured maximum (0.964939).
+# Structured margin: 0.0275 above the lower edge, 0.0151 below the upper one.
+_ANISO_NULL_LOWER = 0.93
+_ANISO_NULL_UPPER = 0.98
+
+# PSI. `_compute_dim_psi` returns 0.0 for a dimension that raises, and the
+# outer handler returns mean_psi = inf, so a completely broken index reports
+# the best possible score (frac_monosemantic = 1.0). Measured:
+#     iid Gaussian 300x64, 40 draws -> mean_psi = 0.0 exactly, 40/40
+#     broken index (every dim raises) -> mean_psi = 0.0, frac_monosemantic = 1.0
+#     the structured data           -> mean_psi = 0.0905771255 (deterministic)
+# `frac_monosemantic` is 1.0 on the structured data, on the null, AND on a
+# broken index — three-way degenerate, zero discriminative power, so it is
+# reported but not used to decide. `mean_psi` separates all three.
+_PSI_NULL_MAX_MEAN_PSI = 0.0
+
+# DCI informativeness. The estimator is the mean adjusted R^2 of a full
+# linear predictor (see `disentanglement.DCIMetrics`). Pooled null over 192
+# independent N=200, D=64, K=3 draws (three `measure_noise_floor` batches of
+# 64): mean 0.000522662, sd 0.041811848, observed maximum 0.101496144.
+# The threshold is mean + 4 sd = 0.167770056; 4 sd is a two-sided normal
+# tail of about 6e-5, so a run with no factor information passes by chance
+# once in ~17000. The old literal 0.1 sits INSIDE the measured null (one
+# draw of 192 reached 0.1015). Structured measurement: 0.9915197211.
+_DCI_NULL_MEAN = 0.000522662
+_DCI_NULL_SD = 0.041811848
+_DCI_NULL_SIGMAS = 4.0
+_DCI_NULL_THRESHOLD = _DCI_NULL_MEAN + _DCI_NULL_SIGMAS * _DCI_NULL_SD  # 0.167770056
 
 
 class SyntheticStructuredModel:
@@ -182,10 +282,18 @@ class GroundTruthValidation:
         }
 
     def validate_polysemanticity(self):
-        """Test: does PSI correctly identify that class dims are
-        monosemantic and noise dims are polysemantic?
+        """Test: does PSI score the known-structure data above a
+        structure-free null?
 
-        Expected: class dims → low PSI, noise dims → high PSI
+        Expected: mean PSI > 0 on the structured data, and the class dims
+        are the monosemantic ones.
+
+        The old predicate was `frac_monosemantic > 0`. Measured, that
+        statistic is 1.0 on the structured data, 1.0 on an iid Gaussian of
+        the same shape (40/40 draws) and 1.0 on a PSI that raises on every
+        dimension — so it could not fail, which is the defect this check
+        exists to catch. `mean_psi` is the discriminator: 0.0 on the null,
+        0.0 on a broken index, 0.0906 on the structured data.
         """
         from src.interp.polysemanticity import PolysemanticityIndex
 
@@ -200,20 +308,34 @@ class GroundTruthValidation:
 
         result = psi.compute(data["representations"], data["labels"])
 
-        # With structured data, frac_monosemantic should be > 0
-        # (at least the class dims should be monosemantic)
+        mean_psi = float(result["mean_psi"])
+        n_scored = len(result.get("per_dim_psi", []))
+
+        # A PSI that raised returns mean_psi = inf (outer handler) or
+        # scored nothing at all; either must be a failure, not a pass.
+        psi_usable = math.isfinite(mean_psi) and n_scored > 0
+        above_null = mean_psi > _PSI_NULL_MAX_MEAN_PSI
+
         return {
-            "mean_psi": result["mean_psi"],
+            "mean_psi": mean_psi,
             "frac_monosemantic": result["frac_monosemantic"],
-            "pipeline_valid": result["frac_monosemantic"] > 0,
+            "n_dims_scored": n_scored,
+            "psi_null_max_mean_psi": _PSI_NULL_MAX_MEAN_PSI,
+            "psi_usable": psi_usable,
+            "psi_above_null": above_null,
+            "pipeline_valid": psi_usable and above_null,
         }
 
     def validate_geometry(self):
         """Test: does geometry correctly identify that the synthetic
         model has structured (non-random) representations?
 
-        Expected: effective_dim ≈ 48 (3/4 of dims are structured),
-        not 64 (all dims) or ~0 (collapsed)
+        Expected: effective dimension and anisotropy both land in the gap
+        between the structured data and the measured null suite. See the
+        threshold block at the top of this module for the suite and the
+        numbers; the short version is that the old windows (10, 60) and
+        (0, 0.99) admitted 120 of 260 structure-free matrices and these
+        admit none.
         """
         from src.interp.representation_geometry import RepresentationGeometry
 
@@ -222,14 +344,16 @@ class GroundTruthValidation:
 
         geom = RepresentationGeometry.compute_all(data["representations"])
 
-        # Should have moderate effective dim (not all 64, not near 0)
-        reasonable_eff_dim = 10 < geom["effective_dimension"] < 60
-        # Should have moderate anisotropy (structured but not collapsed)
-        reasonable_anisotropy = 0 < geom["anisotropy"] < 0.99
+        # Both edges are null bounds, not round numbers: the structured data
+        # is excluded from neither, and every null is excluded from both.
+        reasonable_eff_dim = _EFF_DIM_NULL_LOWER < geom["effective_dimension"] < _EFF_DIM_NULL_UPPER
+        reasonable_anisotropy = _ANISO_NULL_LOWER < geom["anisotropy"] < _ANISO_NULL_UPPER
 
         return {
             "effective_dim": geom["effective_dimension"],
             "anisotropy": geom["anisotropy"],
+            "eff_dim_window": (_EFF_DIM_NULL_LOWER, _EFF_DIM_NULL_UPPER),
+            "aniso_window": (_ANISO_NULL_LOWER, _ANISO_NULL_UPPER),
             "reasonable_eff_dim": reasonable_eff_dim,
             "reasonable_anisotropy": reasonable_anisotropy,
             "pipeline_valid": reasonable_eff_dim and reasonable_anisotropy,
@@ -259,11 +383,19 @@ class GroundTruthValidation:
 
         result = DCIMetrics.compute(data["representations"], factors)
 
+        informativeness = result["informativeness"]
+
+        # The literal 0.1 that stood here sat inside the measured null: 1 of
+        # 192 iid N=200/D=64/K=3 draws reached 0.1015, so noise could pass.
+        # The bound is now mean + 4 sd of that null (see the threshold block).
+        # A NaN from DCIMetrics' own failure path compares False here, which
+        # is the behaviour a failure path should have.
         return {
             "disentanglement": result["disentanglement"],
             "completeness": result["completeness"],
-            "informativeness": result["informativeness"],
-            "pipeline_valid": result["informativeness"] > 0.1,
+            "informativeness": informativeness,
+            "informativeness_threshold": _DCI_NULL_THRESHOLD,
+            "pipeline_valid": informativeness > _DCI_NULL_THRESHOLD,
         }
 
     def full_validation(self):
@@ -272,6 +404,19 @@ class GroundTruthValidation:
         Returns:
             dict with per-test results and overall pass/fail
 
+        `pipeline_reliable` was `n_valid >= n_total - 1`, which is a licence
+        for exactly one of the four checks to be broken. The suite has four
+        checks and the audit found four distinct ways for it to be blind, so
+        tolerating one failure is tolerating one whole class of blindness —
+        and the blind checks are the ones that cannot fail at all, so in
+        practice the tolerated failure is a real one. Measured on the code as
+        it stood: the probing check already fails (class_min_depth = 2 while
+        class_max_acc = 1.0) and the old rule still reported
+        `pipeline_reliable: True`.
+
+        The rule is now unanimity. Injecting one known failure into an
+        otherwise healthy run must flip the summary, which is the property
+        `tests/test_interp_ground_truth_thresholds.py` pins.
         """
         results = {}
 
@@ -302,7 +447,11 @@ class GroundTruthValidation:
             "n_tests_passed": n_valid,
             "n_tests_total": n_total,
             "all_passed": n_valid == n_total,
-            "pipeline_reliable": n_valid >= n_total - 1,  # Allow 1 failure
+            "pipeline_reliable": n_valid == n_total,
+            "n_failed": n_total - n_valid,
+            "failed_tests": sorted(
+                name for name, v in results.items() if not v.get("pipeline_valid", False)
+            ),
         }
 
         return results
