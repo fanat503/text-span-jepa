@@ -660,6 +660,21 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 - report: `.agent-notes/task-34.md`
 
 ### TASK-35 | group: G-FIX | status: todo | mode: solo
+- LOST, NOT CLOSED. The orchestrator's own error destroyed the work; read this
+  before re-dispatching it.
+- what happened: the worker's session was interrupted after it had staged a
+  working fix (two baselines defaulting to the total, plus a 14-test
+  `TestLoggedQuantityIsOneKind` guard). To undo an in-flight mutation test the
+  orchestrator ran `git checkout HEAD -- <files>`, which restores from the
+  BRANCH POINT and not from the index - so it discarded the staged fix along
+  with the mutation. `git checkout -- <file>` restores from the index and is
+  the correct command for undoing a mutation. Recovery via `git fsck` found only
+  the two 244-byte mutation fragments, not the 20KB files, so the work is gone.
+- lesson, the general one: restore a mutation from the INDEX, never from HEAD.
+  A mutation you cannot undo is cheap; a worktree you destroy while trying to
+  undo it is not.
+- the fix as specified was sound, and was verified green before the loss:
+  37 passed, ruff clean, black clean, the KIND guard present with 14 tests.
 - goal: make all three comparison arms log the SAME parameter quantity.
 - why: TASK-25 made `get_num_params()` report the TOTAL for JEPA. The two
   baselines kept their old default, so the three arms in the one directory the
