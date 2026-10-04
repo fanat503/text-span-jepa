@@ -191,38 +191,157 @@ class TestNotTriviallyZeroAtNTopEqualsNTreated:
 
 
 class TestComparableAcrossDatasetSize:
-    def test_score_does_not_scale_with_n_top_over_n(self):
-        """Same pool, same structure, two dataset sizes.
+    """The score must not carry the old ``(1 - n_top/N)`` multiplicative factor.
 
-        The old implementation multiplied the score by (1 - n_top/N): 0.5 at
-        N=240 versus 0.95 at N=2400. A measure that is supposed to compare
-        models across corpora cannot carry that factor.
+    All numbers below are measured on this seed scheme over 240 draws (15 of
+    which are non-overlapping blocks of 16, used as the block simulation for the
+    shipped ``DRAWS``). ``n_features=25``, ``N_small=240``, ``N_large=2400``:
 
-        Measured over six feature subsamples with this data: the fixed
-        implementation returns ratios in [0.72, 0.97] and the attenuated one
-        in [0.44, 0.59], so 0.65 separates them with margin on both sides.
-        A mild downward bias survives at small N -- with a fixed n_top the top
-        100 rows are genuinely more extreme in a 2400-row sample than in a
-        240-row one -- but the n_top/N factor itself is gone.
+    ============  =====================  ==================  ==============
+    ``n_top``     fixed: per-draw min..max  old: per-draw min..max  A(n_top)
+    ============  =====================  ==================  ==============
+        25         0.611 .. 1.304         0.553 .. 1.180       0.9053
+        50         0.590 .. 1.384         0.477 .. 1.119       0.8085
+       100         0.623 .. 1.311         0.379 .. 0.798       0.6087
+       200         0.501 .. 1.912         0.078 .. 0.366       0.1818
+    mean of ratio 0.966 / 1.011 / 0.940 / 0.900         (old: 0.874 / 0.818 /
+                                                          0.572 / 0.139)
+
+    ``A(n_top) = ((Ns-n)/Ns) / ((Nl-n)/Nl)`` is the old defect in closed form:
+    with the control set equal to the whole dataset the score is *exactly*
+    ``(N - n_top)/N`` times the correct one, so ``old_ratio(n) = A(n) *
+    fixed_ratio(n)`` holds to 1.3e-07 in float32.
+
+    Three measured facts shape every assertion below.
+
+    1. **A per-draw ratio band at a single ``n_top`` cannot separate the two
+       implementations**, and a single draw is not a property of the statistic.
+       At ``n_top <= 100`` the ranges overlap heavily, so the previous
+       ``0.65 < ratio < 1.25`` band let the *attenuated* implementation through
+       in 8 of 60 draws -- it was never a regression test. The per-draw ratio
+       at ``n_top=100`` ranges over 0.623..1.311 and *0 of 240* draws fall below
+       the 0.609 that Linux CI produced where this box produced 0.719, so that
+       band was a knife edge resting on one platform's draw.
+
+    2. **The defect is deterministic**, so it is best seen in the *mean* over
+       draws, which is far better behaved: the block simulation gives
+       ``mean R(100)`` in 0.883..0.997 for the fixed code against 0.537..0.607
+       for the old one, and per-``n_top`` means whose smallest value is 0.824
+       against 0.153.
+
+    3. **What separates them is the dependence on ``n_top`` itself.** ``A(n_top)``
+       collapses from 0.905 to 0.182 across the sweep -- a 4.98x swing -- while
+       the fixed ratio barely moves. ``max_n mean_n / min_n mean_n`` is
+       1.056..1.233 across blocks for the fixed code against 5.641..6.940 for
+       the old one. The 2.5 cap below sits in that gap: 2.03x above the fixed
+       maximum, 2.26x below the old minimum, against a geometric midpoint of
+       sqrt(1.233 * 5.641) = 2.64.
+
+    A residual downward bias survives and is *not* an artifact: with a fixed
+    absolute ``n_top`` the treatment covers 42% of a 240-row dataset but 4% of a
+    2400-row one, so it spans more of the block structure at small N. Removing
+    it would mean turning ``n_top`` into a fraction, which contradicts this
+    module's documented contract and four other assertions here.
+    """
+
+    N_SMALL = 240
+    N_LARGE = 2400
+    N_FEATURES = 25
+    N_TOP_SWEEP = (25, 50, 100, 200)
+    # 16 draws. The per-draw ratio has sd 0.146, so the mean over DRAWS draws
+    # has a standard error of 0.146/sqrt(DRAWS): 0.037 here, which puts the
+    # 0.75 edge of the band below about 5 standard errors from the measured
+    # mean of 0.94. Fewer draws would make the band a statement about a
+    # handful of samples, which is the failure mode this class is fixing.
+    DRAWS = 16
+
+    @classmethod
+    def _draw_ratios(cls, draw):
+        """Ratio small/large at every n_top, for one decorrelated seed tuple."""
+        sae = _sae(draw)
+        pool = _block_reps(cls.N_LARGE, seed=1000 + draw)
+        order = torch.randperm(cls.N_LARGE, generator=torch.Generator().manual_seed(2000 + draw))
+        small = pool[order[: cls.N_SMALL]]
+        large = pool[order[: cls.N_LARGE]]
+
+        out = {}
+        for n_top in cls.N_TOP_SWEEP:
+            lo = FeatureInterferenceScore.compute(
+                sae, small, n_features=cls.N_FEATURES, n_top=n_top, seed=draw
+            )
+            hi = FeatureInterferenceScore.compute(
+                sae, large, n_features=cls.N_FEATURES, n_top=n_top, seed=draw
+            )
+            out[n_top] = (lo, hi)
+        return out
+
+    @classmethod
+    def _old_attenuation(cls, n_top):
+        """The exact multiplicative factor the ``z_baseline = z`` defect carried."""
+        return ((cls.N_SMALL - n_top) / cls.N_SMALL) / ((cls.N_LARGE - n_top) / cls.N_LARGE)
+
+    @classmethod
+    def _mean_ratios(cls):
+        """``n_top -> mean over DRAWS draws`` of (score at N_SMALL / at N_LARGE).
+
+        Deliberately NOT memoised. Each test re-derives from the
+        implementation it is asserting about; caching the inputs would let a
+        stale value survive a change in ``compute`` (verified: a class-level
+        cache made both tests pass against a deliberately broken
+        implementation in the same process).
         """
-        sae = _sae()
-        pool = _block_reps(2400)
-        order = torch.randperm(2400, generator=torch.Generator().manual_seed(99))
+        totals = {n: [] for n in cls.N_TOP_SWEEP}
+        for draw in range(cls.DRAWS):
+            for n_top, (lo, hi) in cls._draw_ratios(draw).items():
+                if n_top == 100:
+                    # Unchanged: at n_top=100 both ends get a 100-row treatment,
+                    # so any movement is the statistic, not the split size.
+                    assert lo["n_treated"] == hi["n_treated"] == n_top
+                assert hi["mean_interference"] > 0
+                totals[n_top].append(lo["mean_interference"] / hi["mean_interference"])
+        return {n: sum(v) / len(v) for n, v in totals.items()}
 
-        small = FeatureInterferenceScore.compute(
-            sae, pool[order[:240]], n_features=25, n_top=100, seed=0
+    def test_score_does_not_scale_with_n_top_over_n(self):
+        means = self._mean_ratios()
+
+        # One-sided floor per n_top. The defect was an *attenuation*, so the
+        # lower edge is what carries the weight: measured worst per-n_top mean
+        # over 15 blocks is 0.824 (fixed) against 0.153 (old).
+        for n_top, mean_ratio in means.items():
+            assert mean_ratio > 0.40, (
+                f"n_top={n_top}: score is {mean_ratio:.3f}x its N={self.N_LARGE} "
+                f"value on average over {self.DRAWS} draws. The closed-form "
+                f"{self._old_attenuation(n_top):.3f}x (1 - n_top/N) attenuation "
+                f"is exactly what this looks like."
+            )
+
+        # The dependence on n_top is the discriminator. Measured across blocks:
+        # 1.056..1.233 (fixed) against 5.641..6.940 (attenuated). 2.5 sits in
+        # the gap with ~2x on both sides.
+        spread = max(means.values()) / min(means.values())
+        assert spread < 2.5, (
+            f"mean score varies {spread:.2f}x across n_top={list(self.N_TOP_SWEEP)} "
+            f"on identical structure; {means} vs expected near 1 each. The old "
+            f"defect's factor alone spans "
+            f"{self._old_attenuation(25) / self._old_attenuation(200):.2f}x over "
+            f"the same sweep, which is the n_top/N attenuation returning."
         )
-        large = FeatureInterferenceScore.compute(
-            sae, pool[order[:2400]], n_features=25, n_top=100, seed=0
-        )
 
-        assert small["n_treated"] == large["n_treated"] == 100
-        assert large["mean_interference"] > 0
+    def test_mean_score_is_comparable_across_a_tenfold_dataset_growth(self):
+        """Positive form of the same claim, averaged so the band can be tight.
 
-        ratio = small["mean_interference"] / large["mean_interference"]
-        assert 0.65 < ratio < 1.25, (
-            f"score moved by {ratio:.3f}x between N=240 and N=2400 on identical "
-            f"structure; n_top/N attenuation is still present"
+        Per-draw the ratio has sd 0.146 and cannot be pinned; its mean over
+        DRAWS draws can. Measured block means at n_top=100 are 0.883..0.997
+        (fixed) against 0.537..0.607 (attenuated). The 0.75 edge sits 0.13
+        below the worst measured block and about 5 standard errors below the
+        population mean, so this is a statement about the population, not about
+        one draw.
+        """
+        mean_ratio = self._mean_ratios()[100]
+        assert 0.75 < mean_ratio < 1.35, (
+            f"mean score moved {mean_ratio:.3f}x between N={self.N_SMALL} and "
+            f"N={self.N_LARGE} over {self.DRAWS} draws; a score used to compare "
+            f"models across corpora must not depend on N"
         )
 
 

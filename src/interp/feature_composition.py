@@ -261,6 +261,19 @@ class FeatureInterferenceScore:
     (b) otherwise attenuates it by ``n_top/N``, so the number would not be
     comparable across datasets or across models scored with different ``N``.
 
+    After that fix the score is a function of the treatment and control row
+    sets alone -- ``N`` enters only through the ``min(n_top, N // 2)`` cap --
+    so the multiplicative ``n_top/N`` factor is gone. What remains is a real
+    property of the estimand, not a leftover defect: ``n_top`` counts rows, so
+    the treatment is a 10x larger *fraction* of the dataset at the smaller N,
+    spans correspondingly more of the structure, and the score therefore sits
+    slightly low. Measured over 240 draws at ``n_top=100``, the mean of
+    ``score(N=240) / score(N=2400)`` is 0.940 and individual draws range over
+    0.62..1.31, so treat that as the comparability the statistic actually
+    delivers rather than exact invariance. Removing the bias would mean taking
+    ``n_top`` as a fraction of ``N`` rather than a count, which is a different
+    parameter contract; ``TestComparableAcrossDatasetSize`` pins both claims.
+
     JEPA hypothesis: JEPA features have LOWER interference than MLM.
     """
 
