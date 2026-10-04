@@ -68,10 +68,11 @@ import math
 from typing import Any
 
 import torch
-from torch import nn
+
+from ._state_guard import TrainingStateGuard
 
 
-class RepresentationDriftCompensation(nn.Module):
+class RepresentationDriftCompensation(TrainingStateGuard):
     """Representation Drift Compensation — prevents loss of exogenous features.
 
     Tracks per-step drift in representations and penalizes drift orthogonal
@@ -191,24 +192,12 @@ class RepresentationDriftCompensation(nn.Module):
         loss = self.eta * warmup_factor * mean_ortho_drift
 
         # --- Diagnostics ---
-        with torch.no_grad():
-            # Update running mean of z
-            self.z_previous.mul_(self.ema_beta).add_((1 - self.ema_beta) * z_mean)
-
-            # Update running statistics
-            self.running_drift_norm.mul_(0.99).add_(0.01 * mean_total_drift.sqrt().item())
-            self.running_ortho_drift_norm.mul_(0.99).add_(0.01 * mean_ortho_drift.sqrt().item())
-            self.running_workspace_drift_norm.mul_(0.99).add_(
-                0.01 * mean_workspace_drift.sqrt().item(),
-            )
-
-            # Drift ratio: ||Δz_⊥|| / ||Δz|| (0 = all drift in workspace, 1 = all orthogonal)
-            if mean_total_drift > 1e-12:
-                drift_ratio = (mean_ortho_drift / mean_total_drift).sqrt().item()
-            else:
-                drift_ratio = 0.0
-            self.running_drift_ratio.mul_(0.99).add_(0.01 * drift_ratio)
-            self.total_steps.add_(1)
+        drift_ratio = self._update_running_statistics(
+            z_mean,
+            mean_total_drift,
+            mean_workspace_drift,
+            mean_ortho_drift,
+        )
 
         # Theoretical bound: ε(1-η)^T · T/√k (transient)
         eps_estimate = self.running_ortho_drift_norm.item()
@@ -237,14 +226,77 @@ class RepresentationDriftCompensation(nn.Module):
 
         return loss, info
 
+    def _update_running_statistics(
+        self,
+        z_mean: torch.Tensor,
+        mean_total_drift: torch.Tensor,
+        mean_workspace_drift: torch.Tensor,
+        mean_ortho_drift: torch.Tensor,
+    ) -> float:
+        """Advance the running mean of z and the drift EMAs.
+
+        Training only (TrainingStateGuard): a validation pass must not
+        move ``z_previous`` or the reported norms, otherwise loading a
+        validation split changes the trajectory of the trained model.
+
+        Returns the instantaneous drift ratio ||Δz_⊥|| / ||Δz||, which is
+        a pure function of this batch and is reported either way.
+        """
+        # Drift ratio: ||Δz_⊥|| / ||Δz|| (0 = all drift in workspace, 1 = all orthogonal)
+        if mean_total_drift > 1e-12:
+            drift_ratio = (mean_ortho_drift / mean_total_drift).sqrt().item()
+        else:
+            drift_ratio = 0.0
+
+        with torch.no_grad():
+            # Update running mean of z
+            self._mutate_state(
+                lambda: self.z_previous.mul_(self.ema_beta).add_((1 - self.ema_beta) * z_mean),
+            )
+
+            # Update running statistics
+            self._mutate_state(
+                lambda: self.running_drift_norm.mul_(0.99).add_(
+                    0.01 * mean_total_drift.sqrt().item(),
+                ),
+            )
+            self._mutate_state(
+                lambda: self.running_ortho_drift_norm.mul_(0.99).add_(
+                    0.01 * mean_ortho_drift.sqrt().item(),
+                ),
+            )
+            self._mutate_state(
+                lambda: self.running_workspace_drift_norm.mul_(0.99).add_(
+                    0.01 * mean_workspace_drift.sqrt().item(),
+                ),
+            )
+            self._mutate_state(lambda: self.running_drift_ratio.mul_(0.99).add_(0.01 * drift_ratio))
+            self._mutate_state(self.total_steps.add_, 1)
+
+        return drift_ratio
+
     def update_workspace(self, Q: torch.Tensor):
         """Update workspace projection (e.g., from JAWP's learned Q).
 
         Call this after JAWP retraction to keep RDC's workspace aligned.
+
+        .. warning::
+           **TEST-ONLY in the current codebase.**  ``src/train.py`` and
+           ``src/models/mechanisms.py`` never call this; every production
+           path passes ``workspace_Q=`` explicitly to :meth:`forward`,
+           so the ``workspace_Q`` buffer keeps the ``eye(D, k)``
+           initialisation for the whole run.  Wiring it into the
+           training loop would change what is written to checkpoints
+           (and, because the buffer is then non-identity, what
+           :meth:`forward` computes when no ``workspace_Q`` is given), so
+           it needs an explicit human decision rather than a silent
+           change here.
+
+        A no-op under ``eval()`` (TrainingStateGuard).
         """
         k = min(Q.size(1), self.k_workspace)
         with torch.no_grad():
-            self.workspace_Q[:, :k].copy_(Q[:, :k])
+            self._mutate_state(lambda: self.workspace_Q[:, :k].copy_(Q[:, :k]))
 
     def checkpoint_dict(self) -> dict[str, Any]:
         """Get state for checkpoint save."""

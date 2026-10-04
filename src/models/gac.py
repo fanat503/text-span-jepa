@@ -98,10 +98,11 @@
 import torch
 from typing import Any
 import torch.nn.functional as F
-from torch import nn
+
+from ._state_guard import TrainingStateGuard
 
 
-class GradientAllocatedCapacity(nn.Module):
+class GradientAllocatedCapacity(TrainingStateGuard):
     """Gradient-Allocated Capacity — prevents background gradient starvation.
 
     When JAWP focuses prediction on workspace, background dimensions
@@ -179,7 +180,11 @@ class GradientAllocatedCapacity(nn.Module):
 
         # Update running gradient norms (EMA)
         with torch.no_grad():
-            self.running_grad_norms.mul_(self.ema_beta).add_((1 - self.ema_beta) * gn)
+            self._mutate_state(
+                lambda: self.running_grad_norms.mul_(self.ema_beta).add_(
+                    (1 - self.ema_beta) * gn,
+                ),
+            )
 
         # Identify starved dimensions: ||g_i|| < tau_grad
         starved_mask = (gn < self.tau_grad).float()  # (D,)
@@ -196,8 +201,7 @@ class GradientAllocatedCapacity(nn.Module):
 
         # Diagnostics
         with torch.no_grad():
-            self.running_starved_fraction.mul_(0.99).add_(0.01 * starved_fraction)
-            self.total_gac_steps.add_(1)
+            self._mutate_state(self._update_running_diagnostics, starved_fraction)
 
         info = {
             "gac_loss": loss.item(),
@@ -212,6 +216,11 @@ class GradientAllocatedCapacity(nn.Module):
         }
 
         return loss, info
+
+    def _update_running_diagnostics(self, starved_fraction: float) -> None:
+        """EMA the reported starved fraction and advance the step counter."""
+        self.running_starved_fraction.mul_(0.99).add_(0.01 * starved_fraction)
+        self.total_gac_steps.add_(1)
 
     # AUDIT R15: PROXY ESTIMATE — implemented loss uses batch-mean energy
     # (theorem bound scales by 1/N accordingly) and EMA-smoothed grad norms;

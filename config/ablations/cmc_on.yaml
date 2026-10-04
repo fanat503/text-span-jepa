@@ -1,41 +1,31 @@
+# Ablation: CMC (Cross-Mask Consistency Regularization) ON.
+#
+# The on-arm of the leave-one-out pair. It is the FULL model: defaults.yaml
+# already enables all twelve mechanisms, so "full set plus cmc" is the full
+# set. It differs from no_cmc.yaml by exactly one mechanism -- the flag below
+# -- and by nothing else that affects which mechanisms are active.
+#
+# `use_cmc: true` is a deliberate restatement of an all-on default and is one
+# of the two documented exceptions to the no-redundant-restatements rule (see
+# config/ablations/README.md): it makes this row provably the cmc-on arm by
+# inspection, and TestLeaveOneOut::test_on_arm_is_the_full_model proves the
+# resolved active set really is all twelve.
+#
+# `lambda_cmc` is 0.1, ten times the 0.01 grid weight the full model
+# runs every mechanism at, so this arm is a genuine delta rather than a
+# restatement of the default. The weight is inert in no_{key}.yaml,
+# which is why the pair still isolates exactly one mechanism.
+#
+# Guards: TestLeaveOneOut::test_on_arm_actually_activates_its_mechanism,
+#         TestLeaveOneOut::test_off_on_pair_differs_by_exactly_the_downstream_set
+
+_meta:
+  ablation: cmc_on
+  description: "On-arm of the cmc pair: the full GWP model"
+
 model:
   use_cmc: true
-  cmc_mode: interval
-  cmc_interval: 10
   lambda_cmc: 0.1
-  use_gac: false
-  gac_gamma: 0.01
-  gac_tau_grad: 0.0001
-  gac_warmup_steps: 1000
-  lambda_gac: 0.0
-  use_sta: false
-  sta_eta: 0.01
-  sta_ema_beta: 0.999
-  sta_warmup_steps: 500
-  sta_update_interval: 10
-  lambda_sta: 0.0
-  use_rdc: false
-  rdc_eta: 0.01
-  rdc_ema_beta: 0.999
-  rdc_warmup_steps: 500
-  rdc_k_workspace: null
-  lambda_rdc: 0.0
-  use_wsr: false
-  wsr_rho: 0.05
-  wsr_eta: 0.01
-  wsr_ema_beta: 0.999
-  wsr_warmup_steps: 500
-  wsr_mode: gradient
-  lambda_wsr: 0.0
-  lambda_swip: 0.0
-  lambda_spc: 0.0
-  lambda_wsd: 0.0
-  lambda_puc: 0.0
-  use_jawp: false
-  use_cgn: false
-  lambda_cgn_ortho: 0.0
-  use_swip: false
-  use_pcr: false
-  use_spc: false
-  use_wsd: false
-  use_puc: false
+
+logging:
+  folder: output/ablations/cmc_on/

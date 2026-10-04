@@ -262,41 +262,70 @@ class MultipleComparisonCorrection:
     def benjamini_hochberg(p_values, alpha=0.05):
         """Benjamini-Hochberg FDR correction.
 
-        Controls the expected fraction of false discoveries.
-        Less conservative than Bonferroni.
+        Benjamini & Hochberg (1995). Controls the expected fraction of false
+        discoveries. Less conservative than Bonferroni.
+
+        Two outputs, which are NOT independent statements — they are the same
+        decision written twice:
+
+        - the step-up rule: reject every hypothesis up to the largest rank k
+          with p_(k) <= k/n * alpha;
+        - the adjusted p-value  q_(i) = min_{j >= i} min(p_(j) * n / j, 1),
+          the running minimum taken from the TOP rank downwards.
+
+        Benjamini & Hochberg (1995, eq. 2.4) prove that { i : q_i <= alpha }
+        is exactly the step-up rejection set, so `significant` is read off
+        `corrected` here. Deriving the two from different rules is what let a
+        report publish ``p_value_bh = 0.06`` next to ``significant_bh = True``:
+        p = [0.03, 0.049] gives step-up k = 2 (both rejected) but naive
+        p*n/rank = 0.06 for the first, which reads as not significant. The
+        running minimum is what repairs it: q_(1) = min(0.06, 0.049) = 0.049.
 
         Returns:
-            dict with corrected p-values and list of significant indices
+            dict with:
+                corrected   -- BH adjusted p-values, in the order of `p_values`
+                significant -- sorted indices whose adjusted p is <= alpha
+                threshold   -- the alpha that was used
+                n_significant, n_total
 
         """
-        n = len(p_values)
+        p = [float(x) for x in p_values]
+        n = len(p)
         if n == 0:
-            return {"corrected": [], "significant": [], "threshold": alpha}
+            return {
+                "corrected": [],
+                "significant": [],
+                "threshold": alpha,
+                "n_significant": 0,
+                "n_total": 0,
+            }
 
-        # Sort p-values
-        indexed = sorted(enumerate(p_values), key=lambda x: x[1])
+        # Ascending p-values; ties keep their input order (stable sort), and the
+        # running minimum below makes tied p-values share one adjusted value.
+        order = sorted(range(n), key=lambda i: p[i])
 
-        # BH procedure: find largest k where p_(k) <= k/n * alpha
-        threshold_idx = -1
-        for rank, (orig_idx, p) in enumerate(indexed, 1):
-            if p <= rank / n * alpha:
-                threshold_idx = rank - 1
+        # p_(rank) * n / rank, capped at 1. This is the single scaled quantity
+        # that both the step-up rule and the adjusted p read, so the two outputs
+        # cannot disagree through floating-point reassociation.
+        scaled = [min(p[i] * n / rank, 1.0) for rank, i in enumerate(order, 1)]
 
-        # Corrected p-values
+        # BH adjusted p: running minimum from the top rank downwards. This is the
+        # step the naive p*n/rank omits, and it is what makes q monotone in the
+        # p-order (q_(1) <= q_(2) <= ... <= q_(n)).
+        adjusted_sorted = list(scaled)
+        for rank in range(n - 2, -1, -1):
+            adjusted_sorted[rank] = min(adjusted_sorted[rank], adjusted_sorted[rank + 1])
+
+        # Scatter back into the caller's order.
         corrected = [0.0] * n
-        for rank, (orig_idx, p) in enumerate(indexed, 1):
-            bh_p = p * n / rank
-            corrected[orig_idx] = min(bh_p, 1.0)
+        for rank, i in enumerate(order):
+            corrected[i] = adjusted_sorted[rank]
 
-        # Significant indices
-        significant = []
-        if threshold_idx >= 0:
-            for i in range(threshold_idx + 1):
-                significant.append(indexed[i][0])
+        significant = sorted(i for i in range(n) if corrected[i] <= alpha)
 
         return {
             "corrected": corrected,
-            "significant": sorted(significant),
+            "significant": significant,
             "threshold": alpha,
             "n_significant": len(significant),
             "n_total": n,

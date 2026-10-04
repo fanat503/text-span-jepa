@@ -1,127 +1,48 @@
+# Ablation: SIGReg replaces VICReg.
+#
+# Collapse prevention is the one thing the objective must not lose, so this arm
+# swaps the VICReg variance/covariance terms for SIGReg (LeJEPA, 2025) — a
+# single-hyperparameter isotropic-Gaussian regulariser — while keeping the
+# mechanisms that are independent of the collapse-preventer. Compared with
+# none.yaml this keeps JAWP; compared with the full model it removes the other
+# eleven mechanisms and the two VICReg terms.
+#
+# `meta` and `optimization` are declared as empty mappings on purpose: this arm
+# must inherit the reference seed/precision and the reference schedule from
+# defaults.yaml, and tests/test_v025_integration.py asserts those sections
+# exist. An empty mapping is a no-op in `src.train._deep_merge`.
+#
+# Guard: TestDeltaPurity::test_no_unnecessary_restatements
+
 _meta:
   ablation: sigreg_only
-  description: "SIGReg replaces VICReg \u2014 no variance/covariance terms"
-meta:
-  seed: 42
-  use_bfloat16: true
-  model_name: text_span_jepa_small
-  load_checkpoint: false
-  dataset: wikitext103
-data:
-  batch_size: 128
-  max_seq_len: 512
-  tokenizer: gpt2
-  num_workers: 4
-  root_path: data/wikitext-103
-  mask_ratio: 0.35
-  span_length_range:
-  - 3
-  - 10
+  description: "JAWP with SIGReg as the only collapse preventer; no VICReg variance/covariance terms"
+
+meta: {}
+optimization: {}
+
 model:
-  embed_dim: 640
-  encoder_depth: 10
-  num_heads: 10
-  mlp_ratio: 4.0
-  qkv_bias: true
-  drop_rate: 0.0
-  attn_drop_rate: 0.0
-  drop_path_rate: 0.1
-  predictor_embed_dim: 320
-  predictor_depth: 4
-  future_offsets:
-  - 1
-  - 4
-  - 16
-  num_refine_steps: 3
-  refine_step_size: 0.1
-  decoder_bias: false
-  variance_margin: 1.0
-  centering_momentum: 0.9
-  ema_tau_start: 0.996
-  ema_tau_end: 1.0
-  lambda_span: 1.0
-  lambda_future: 0.5
-  lambda_decoder: 0.1
-  lambda_variance: 0.0
-  lambda_covariance: 0.0
-  mask_ratio_start: 0.15
-  mask_ratio_end: 0.35
-  future_warmup_steps: 5000
-  use_jawp: true
-  jawk_k_start: 1
-  jawk_k_end: null
-  jawk_curriculum_steps: 10000
-  jawk_alpha: 0.1
-  jawk_init: identity
-  lambda_sigreg: 0.1
-  sigreg_n_sketches: 64
-  sigreg_n_integration_points: 17
-  sigreg_sigma: 1.0
-  ema_schedule: cosine
-  gradient_checkpointing: false
-  jspace_variance_threshold: 0.1
-  jspace_k_workspace: 25
-  lambda_predictive_rank: 0.0
   use_cgn: false
-  cgn_n_groups: 8
-  cgn_tau_start: 1.0
-  cgn_tau_end: 0.1
-  cgn_anneal_steps: 10000
-  lambda_cgn_ortho: 0.0
+  # `lambda_swip` is zeroed next to the flag: any config that names a
+  # mechanism must name its weight (tests/test_swip.py asserts this for
+  # SWIP; no other mechanism has such a test yet). Inert today — with
+  # `use_swip: false` the module is never constructed — and it stops a later
+  # edit that flips the flag back from silently enabling SWIP at 0.01.
+
   use_swip: false
-  swip_k_workspace: null
-  swip_target_variance: 1.0
   lambda_swip: 0.0
-  use_sta: false
-  sta_eta: 0.01
-  sta_ema_beta: 0.999
-  sta_warmup_steps: 500
-  sta_update_interval: 10
-  lambda_sta: 0.0
-  use_gac: false
-  gac_gamma: 0.01
-  gac_tau_grad: 0.0001
-  gac_warmup_steps: 1000
-  lambda_gac: 0.0
-  use_puc: false
-  puc_eta: 0.01
-  puc_ema_beta: 0.999
-  puc_warmup_steps: 500
-  lambda_puc: 0.0
-  use_rdc: false
-  rdc_eta: 0.01
-  rdc_ema_beta: 0.999
-  rdc_warmup_steps: 500
-  rdc_k_workspace: null
-  lambda_rdc: 0.0
-  use_wsr: false
-  wsr_rho: 0.05
-  wsr_eta: 0.01
-  wsr_ema_beta: 0.999
-  wsr_warmup_steps: 500
-  wsr_mode: gradient
-  lambda_wsr: 0.0
-  lambda_spc: 0.0
-  lambda_wsd: 0.0
-  lambda_cmc: 0.0
   use_pcr: false
   use_spc: false
   use_wsd: false
   use_cmc: false
-optimization:
-  ema:
-  - 0.996
-  - 1.0
-  epochs: 30
-  ipe_scale: 1.0
-  lr: 0.001
-  start_lr: 0.0002
-  final_lr: 1.0e-05
-  warmup: 10
-  weight_decay: 0.04
-  final_weight_decay: 0.4
-  grad_accum_steps: 4
+  use_gac: false
+  use_sta: false
+  use_puc: false
+  use_rdc: false
+  use_wsr: false
+  lambda_sigreg: 0.1
+  lambda_variance: 0.0
+  lambda_covariance: 0.0
+
 logging:
   folder: output/ablations/sigreg_only/
-  log_freq: 10
-  write_tag: ablation_sigreg_only

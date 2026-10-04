@@ -16,10 +16,21 @@
 # each layer to maintain predictive information, whereas MLM allows
 # layers to "forget" information that's not needed for reconstruction.
 
+import math
+
 import torch
 import torch.nn.functional as F
 from torch import nn
 from src.utils.cka_metrics import linear_cka
+
+#: Offset added to ``LayerwiseProbe.seed`` to derive the probe-weight stream, so
+#: one run seed yields two independent, reproducible streams (which samples are
+#: held out, and which weights the probe starts from). They must not be the
+#: same stream: the split is a property of the data, the weights are not.
+WEIGHT_STREAM_OFFSET = 1
+
+#: Default held-out fraction, unchanged from the pre-split-sharing code.
+DEFAULT_TRAIN_FRAC = 0.8
 
 
 class LayerwiseProbe:
@@ -32,6 +43,15 @@ class LayerwiseProbe:
 
     JEPA hypothesis: JEPA layers have MORE UNIFORM probe accuracy
     (information distributed evenly) vs MLM (sharp peaks at specific layers).
+
+    The train/validation split is drawn ONCE per call and shared by every
+    layer. It used to be redrawn inside ``_train_linear_probe`` from the
+    process-global RNG, which made an L-layer accuracy profile L measurements
+    taken on L different partitions of the same data: measured on
+    byte-identical layers, ``layer_uniformity`` moved by ~0.10 from the split
+    alone, the same magnitude as the between-condition effect it exists to
+    detect. Every draw here comes from a private ``torch.Generator`` seeded
+    from ``seed``, so this module never consumes the caller's global stream.
     """
 
     def __init__(
@@ -42,6 +62,8 @@ class LayerwiseProbe:
         max_epochs=30,
         patience=5,
         device="cpu",
+        seed=0,
+        train_frac=DEFAULT_TRAIN_FRAC,
     ):
         self.embed_dim = embed_dim
         self.num_classes = num_classes
@@ -49,23 +71,137 @@ class LayerwiseProbe:
         self.max_epochs = max_epochs
         self.patience = patience
         self.device = device
+        self.seed = int(seed)
+        self.train_frac = float(train_frac)
 
-    def _train_linear_probe(self, representations, labels):
-        """Train a single linear probe."""
+    @staticmethod
+    def train_val_split(N, seed=0, train_frac=DEFAULT_TRAIN_FRAC):
+        """Draw ONE train/validation index split.
+
+        Public and deterministic so the split a report was produced on can be
+        reproduced, and reused, without re-running the probes.
+
+        Args:
+            N: number of rows to partition
+            seed: seeds a private ``torch.Generator``; the process-global RNG
+                is never touched
+            train_frac: fraction of rows used for training
+
+        Returns:
+            ``(train_idx, val_idx)``, disjoint 1-D int64 tensors whose union is
+            ``range(N)``.
+
+        """
+        N = int(N)
+        n_train = int(train_frac * N)
+        if n_train < 1 or n_train >= N:
+            raise ValueError(
+                f"train_frac={train_frac!r} on N={N} leaves "
+                f"{n_train} training and {N - n_train} validation rows; both "
+                f"sides must be non-empty for a validation accuracy to exist"
+            )
+        gen = torch.Generator().manual_seed(int(seed))
+        idx = torch.randperm(N, generator=gen)
+        return idx[:n_train], idx[n_train:]
+
+    def weight_generator(self):
+        """Private generator for the probe-weight stream.
+
+        Separate from the split stream, and advanced by the caller so that
+        each layer trains its own independently initialised probe (the module's
+        pre-existing estimand) while the whole profile stays reproducible.
+        """
+        return torch.Generator().manual_seed(self.seed + WEIGHT_STREAM_OFFSET)
+
+    @staticmethod
+    def seeded_linear(in_features, out_features, generator, bias=True):
+        """An ``nn.Linear`` whose ``reset_parameters`` law is driven by `generator`.
+
+        ``nn.Linear`` offers no generator argument, so the default constructor
+        draws from the process-global RNG -- which was the second unseeded
+        per-layer draw here, and the larger of the two noise channels. This
+        reproduces torch's own law (kaiming_uniform with ``a=sqrt(5)`` is
+        exactly ``uniform(-1/sqrt(fan_in), 1/sqrt(fan_in))``; see
+        ``torch.nn.Linear.reset_parameters``) from a private generator, in the
+        same order, so it is bit-identical to the stock initialisation given
+        the same seed. ``tests/test_layer_analysis.py`` asserts that equality
+        rather than trusting it.
+
+        The module is built on the default device and then moved, so the
+        generator only ever draws on the generator's own device.
+
+        """
+        layer = nn.Linear(in_features, out_features, bias=bias)
+        bound = 1.0 / math.sqrt(in_features) if in_features > 0 else 0.0
+        with torch.no_grad():
+            layer.weight.copy_(
+                torch.empty_like(layer.weight).uniform_(-bound, bound, generator=generator)
+            )
+            if layer.bias is not None:
+                layer.bias.copy_(
+                    torch.empty_like(layer.bias).uniform_(-bound, bound, generator=generator)
+                )
+        return layer
+
+    @staticmethod
+    def _check_split(split, N):
+        """Reject a split that does not describe a partition of ``N`` rows.
+
+        Cheap O(1) bounds and size checks only. Duplicated rows cannot come out
+        of :meth:`train_val_split`; a caller that hand-builds a split owns it.
+
+        """
+        train_idx, val_idx = split
+        n_train, n_val = train_idx.numel(), val_idx.numel()
+        if n_train == 0 or n_val == 0:
+            raise ValueError(
+                f"split has {n_train} training and {n_val} validation rows; an "
+                f"empty side has no accuracy to report"
+            )
+        if n_train + n_val != N:
+            raise ValueError(
+                f"split covers {n_train + n_val} rows but the representations "
+                f"have {N}; it was drawn for a different dataset"
+            )
+        for name, idx in (("train", train_idx), ("val", val_idx)):
+            if int(idx.min()) < 0 or int(idx.max()) >= N:
+                raise ValueError(
+                    f"{name} indices fall outside [0, {N}); the split does not "
+                    f"address these rows"
+                )
+
+    def _train_linear_probe(self, representations, labels, split=None, generator=None):
+        """Train a single linear probe.
+
+        Args:
+            representations: (N, D) layer representations
+            labels: (N,) class labels
+            split: ``(train_idx, val_idx)``. **Supply this whenever you
+                compare two or more representations.** Omitting it draws a
+                fresh split, which is only correct for a standalone probe.
+            generator: private generator for the probe weights; a fresh one is
+                derived from ``self.seed`` when omitted
+
+        """
         representations = representations.detach().float()
         N = representations.size(0)
         if N < 10:
             return 0.0
 
-        n_train = int(0.8 * N)
-        idx = torch.randperm(N)
-        train_reps = representations[idx[:n_train]].to(self.device)
-        train_labels = labels[idx[:n_train]].to(self.device)
-        val_reps = representations[idx[n_train:]].to(self.device)
-        val_labels = labels[idx[n_train:]].to(self.device)
+        if split is None:
+            split = self.train_val_split(N, seed=self.seed, train_frac=self.train_frac)
+        self._check_split(split, N)
+        train_idx, val_idx = split
+
+        train_reps = representations[train_idx].to(self.device)
+        train_labels = labels[train_idx].to(self.device)
+        val_reps = representations[val_idx].to(self.device)
+        val_labels = labels[val_idx].to(self.device)
 
         num_classes = max(int(labels.max().item()) + 1, 2)
-        probe = nn.Linear(self.embed_dim, num_classes).to(self.device)
+        if generator is None:
+            generator = self.weight_generator()
+        probe = self.seeded_linear(self.embed_dim, num_classes, generator).to(self.device)
         opt = torch.optim.Adam(probe.parameters(), lr=self.lr)
 
         best_acc = 0.0
@@ -95,28 +231,49 @@ class LayerwiseProbe:
         return best_acc
 
     @torch.no_grad()
-    def probe_all_layers(self, layer_representations, labels, task_name="default"):
+    def probe_all_layers(
+        self, layer_representations, labels, task_name="default", return_split=False
+    ):
         """Probe each layer for task-specific information.
+
+        All layers are trained and validated on ONE split, drawn once here.
+        The accuracies are therefore comparable to each other, which is the
+        entire point of a layer profile: `layer_uniformity` is a dispersion
+        statistic over them, and a dispersion statistic over measurements
+        taken on different partitions is a statistic of the partitions.
 
         Args:
             layer_representations: list of (N, D) tensors, one per layer
             labels: (N,) class labels
             task_name: name of the probing task
+            return_split: if True, also return the ``train_idx`` / ``val_idx``
+                actually used, so the split behind the numbers is auditable.
+                Off by default because the payload is written to reports.
 
         Returns:
-            dict with per-layer accuracy and peak layer
+            dict with per-layer accuracy, peak layer, and the split's
+            provenance (``split_seed``, ``n_train``, ``n_val``)
 
         """
         with torch.enable_grad():
+            split = None
+            if layer_representations:
+                n_rows = layer_representations[0].size(0)
+                split = self.train_val_split(n_rows, seed=self.seed, train_frac=self.train_frac)
+            generator = self.weight_generator()
             accuracies = []
-            for layer_idx, reps in enumerate(layer_representations):
-                acc = self._train_linear_probe(reps, labels)
+            for reps in layer_representations:
+                acc = self._train_linear_probe(reps, labels, split=split, generator=generator)
                 accuracies.append(acc)
 
         # Find peak layer
         peak_layer = accuracies.index(max(accuracies)) if accuracies else 0
 
         # Layer uniformity: 1 - std(accuracies) / mean(accuracies)
+        # KNOWN DEFECT, reported not fixed: this is MAXIMISED by making every
+        # layer identical, which the module cannot distinguish from a real
+        # result. Changing the direction is a separate decision -- see
+        # .agent-notes/task-12.md and the card.
         if accuracies and sum(accuracies) > 0:
             mean_acc = sum(accuracies) / len(accuracies)
             std_acc = (sum((a - mean_acc) ** 2 for a in accuracies) / len(accuracies)) ** 0.5
@@ -124,7 +281,7 @@ class LayerwiseProbe:
         else:
             uniformity = 0.0
 
-        return {
+        result = {
             "task": task_name,
             "per_layer_accuracy": accuracies,
             "peak_layer": peak_layer,
@@ -132,10 +289,23 @@ class LayerwiseProbe:
             "mean_accuracy": sum(accuracies) / len(accuracies) if accuracies else 0.0,
             "layer_uniformity": max(min(uniformity, 1.0), 0.0),
             "n_layers": len(accuracies),
+            "split_seed": self.seed,
+            "n_train": split[0].numel() if split is not None else 0,
+            "n_val": split[1].numel() if split is not None else 0,
         }
+        if return_split and split is not None:
+            result["train_idx"] = split[0].tolist()
+            result["val_idx"] = split[1].tolist()
+        return result
 
     def compare_layer_profiles(self, jepa_layers, baseline_layers, labels, task_name="default"):
         """Compare layer-wise profiles between JEPA and baseline.
+
+        Both arms run at the same ``seed`` and the same row count, so they are
+        probed on the same held-out rows: `jepa_more_uniform` is then a
+        statement about the representations rather than about two draws. (If
+        the two arms have different row counts they get different splits,
+        necessarily -- a partition is defined per dataset size.)
 
         Args:
             jepa_layers: list of (N, D) JEPA layer representations
@@ -315,17 +485,32 @@ class LayerRoutingAnalysis:
     """
 
     @staticmethod
-    def routing_score(layer_representations, task_labels_dict, embed_dim=768, device="cpu"):
+    def routing_score(
+        layer_representations,
+        task_labels_dict,
+        embed_dim=768,
+        device="cpu",
+        seed=0,
+        train_frac=DEFAULT_TRAIN_FRAC,
+    ):
         """Compute routing scores: how critical is each layer for each task.
 
         Uses leave-one-out: remove each layer (ablate) and measure
         performance drop. Large drop = that layer is critical for that task.
+
+        Every probe in the matrix -- the baseline and all of the leave-one-out
+        arms -- is trained and validated on ONE split. This is a difference of
+        differences (``baseline - ablated``), so drawing the halves from
+        different partitions measures which rows each draw held out, not what
+        the layer contributed. It used to: one unseeded ``randperm`` per probe.
 
         Args:
             layer_representations: list of (N, D) tensors
             task_labels_dict: {task_name: (N,) labels}
             embed_dim: embedding dimension
             device: compute device
+            seed: seeds the private generators for the split and the weights
+            train_frac: fraction of rows used for training
 
         Returns:
             dict with (n_layers, n_tasks) routing matrix
@@ -344,15 +529,28 @@ class LayerRoutingAnalysis:
                 "skipped": True,
             }
 
+        for task_name, labels in task_labels_dict.items():
+            if labels.numel() != layer_representations[0].size(0):
+                raise ValueError(
+                    f"task {task_name!r} has {labels.numel()} labels but the "
+                    f"layers have {layer_representations[0].size(0)} rows; "
+                    f"leave-one-out needs one label per row"
+                )
+
+        # One split and one weight stream for the whole matrix.
+        n_rows = layer_representations[0].size(0)
+        split = LayerwiseProbe.train_val_split(n_rows, seed=seed, train_frac=train_frac)
+        generator = torch.Generator().manual_seed(int(seed) + WEIGHT_STREAM_OFFSET)
+
         # First, compute baseline accuracy using ALL layers (sum)
         combined = sum(layer_representations) / n_layers
         baseline_accs = {}
         for task_name, labels in task_labels_dict.items():
-            from src.interp.layer_analysis import LayerwiseProbe
-
             probe = LayerwiseProbe(embed_dim=embed_dim, max_epochs=20, device=device)
             with torch.enable_grad():
-                acc = probe._train_linear_probe(combined.detach().float(), labels)
+                acc = probe._train_linear_probe(
+                    combined.detach().float(), labels, split=split, generator=generator
+                )
             baseline_accs[task_name] = acc
 
         # Leave-one-out: remove each layer and recompute
@@ -365,11 +563,14 @@ class LayerRoutingAnalysis:
                 n_layers
             )
             for t_idx, (task_name, labels) in enumerate(task_labels_dict.items()):
-                from src.interp.layer_analysis import LayerwiseProbe
-
                 probe = LayerwiseProbe(embed_dim=embed_dim, max_epochs=20, device=device)
                 with torch.enable_grad():
-                    acc = probe._train_linear_probe(loo_combined.detach().float(), labels)
+                    acc = probe._train_linear_probe(
+                        loo_combined.detach().float(),
+                        labels,
+                        split=split,
+                        generator=generator,
+                    )
                 # Routing score = baseline - leave-one-out (higher = more critical)
                 routing[i, t_idx] = baseline_accs[task_name] - acc
 

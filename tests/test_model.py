@@ -1437,6 +1437,115 @@ class TestV010Bugfixes:
         assert model.predictor.num_refine_steps == 3
 
 
+def _counted_model():
+    """A small TextSpanJEPA used by the parameter-count tests below.
+
+    Width/seq/vocab are chosen so the two encoder embedding tables and the
+    frozen target encoder are each a visible fraction of the total, rather
+    than rounding noise -- a count that forgets one of them has to show up.
+    """
+    from src.models.jepa import TextSpanJEPA, TextSpanJEPAConfig
+
+    config = TextSpanJEPAConfig(
+        vocab_size=100,
+        max_seq_len=16,
+        embed_dim=32,
+        encoder_depth=2,
+        num_heads=4,
+        mlp_ratio=2.0,
+        predictor_embed_dim=16,
+        predictor_depth=2,
+        future_offsets=(1,),
+        num_refine_steps=1,
+    )
+    return TextSpanJEPA(config)
+
+
+def _named_submodule_total(model):
+    """Total, summed over the four named submodules plus everything else.
+
+    Deliberately does NOT reuse `model.parameters()`: it is an independent
+    recount of the same quantity, so it catches a `get_num_params()` that
+    forgets one of the parts rather than restating whatever the module
+    happens to walk.
+    """
+    parts = (model.encoder, model.target_encoder, model.predictor, model.decoder)
+    seen = set()
+    total = 0
+    for part in parts:
+        for p in part.parameters():
+            seen.add(id(p))
+            total += p.numel()
+    total += sum(p.numel() for p in model.parameters() if id(p) not in seen)
+    return total
+
+
+class TestParamCountReporting:
+    """`get_num_params()` must count the model that is built and checkpointed.
+
+    It used to add up encoder-minus-both-embeddings + predictor + decoder,
+    which drops the frozen target encoder entirely and so reported ~2.5x
+    less than the module holds. `src/train.py` logs that number as "Model
+    parameters", so the under-count reaches any paper that quotes the log.
+    """
+
+    def test_num_params_equals_every_parameter_in_the_module(self):
+        model = _counted_model()
+        expected = sum(p.numel() for p in model.parameters())
+        assert model.get_num_params() == expected, (
+            "get_num_params() must report the whole model: the target encoder "
+            "and both embedding tables are parameters that the trainer "
+            "allocates, optimises around and writes into the checkpoint"
+        )
+
+    def test_num_params_covers_the_frozen_target_encoder(self):
+        """The target encoder is half the model and is the part that was lost."""
+        model = _counted_model()
+        frozen = sum(p.numel() for p in model.target_encoder.parameters())
+        trainable = model.get_num_params_trainable()
+
+        assert frozen > 0, "target_encoder must own parameters for this test to mean anything"
+        assert model.get_num_params() == trainable + frozen, (
+            f"total {model.get_num_params()} != trainable {trainable} + frozen "
+            f"{frozen}: the reported count still omits the target encoder"
+        )
+        assert model.get_num_params() == _named_submodule_total(model), (
+            "get_num_params() must sum encoder + target_encoder + predictor + "
+            "decoder + mechanisms"
+        )
+
+    def test_non_embedding_variant_drops_both_embedding_tables(self):
+        """`non_embedding=True` stays available, and covers both encoders."""
+        model = _counted_model()
+        encoder = model.encoder
+        per_encoder_embeddings = (
+            encoder.token_embedding.weight.numel() + encoder.pos_embedding.numel()
+        )
+        assert per_encoder_embeddings > 0
+
+        without = model.get_num_params(non_embedding=True)
+        assert without == model.get_num_params() - 2 * per_encoder_embeddings, (
+            "non_embedding=True must subtract the token and position "
+            "embeddings of BOTH the encoder and the target encoder"
+        )
+        assert without < model.get_num_params()
+
+    def test_default_call_reports_total_not_trainable(self):
+        """`train.py` calls `get_num_params()` with no arguments.
+
+        The default is therefore the number that lands in the startup log,
+        and it must be the model's size -- not its trainable half, and not a
+        partial sum of it.
+        """
+        model = _counted_model()
+        reported = model.get_num_params()
+        trainable = model.get_num_params_trainable()
+
+        assert reported == sum(p.numel() for p in model.parameters())
+        assert reported > trainable, "the target encoder is frozen, so total > trainable"
+        assert trainable == sum(p.numel() for p in model.parameters() if p.requires_grad)
+
+
 class TestV010NewFeatures:
     def test_seed_everything(self):
         """seed_everything should produce deterministic results."""
@@ -1449,13 +1558,142 @@ class TestV010NewFeatures:
         assert torch.allclose(a, b)
 
     def test_flops_estimation(self):
-        """FLOPs estimation should return reasonable values."""
-        from src.utils.flops import estimate_training_flops, estimate_transformer_flops
+        """The FLOPs estimators must track the cost of a real training step.
 
-        result = estimate_transformer_flops(120e6, 512, batch_size=64)
-        assert result["tflops"] > 0
-        train_result = estimate_training_flops(120e6, 512, 64, 100000)
+        The previous version of this test asserted only `tflops > 0`, which is
+        true of any function that multiplies its inputs. It therefore passed
+        while `estimate_transformer_flops` was off by ~2x on a real step and
+        worsening with sequence length, and nothing caught it.
+
+        This pins the structural estimator against
+        `torch.utils.flop_counter.FlopCounterMode` -- an independent
+        measurement, not a constant -- over a sweep of sequence lengths. The
+        assertions are on the *ratio*, because that is the quantity that was
+        wrong.
+        """
+        from torch.utils.flop_counter import FlopCounterMode
+
+        from src.models.jepa import TextSpanJEPA, TextSpanJEPAConfig
+        from src.utils.flops import estimate_jepa_step_flops, estimate_training_flops
+
+        D, NE, DP, NP, HEADS, R = 64, 3, 32, 2, 4, 4.0
+        OFFSETS, REFINE, B, V, MASK_RATIO = (1, 4), 2, 2, 256, 0.25
+
+        class NoDiagnostics(torch.nn.Module):
+            """`compute_loss_with_targets` runs CollapseDiagnostics and
+            JSpaceMetrics unconditionally. They are instrumentation, not model
+            compute, and their Gram-matrix count varies with the active metric
+            set, so they are switched off here to isolate what is being pinned.
+            See the `estimate_jepa_step_flops` docstring."""
+
+            def compute(self, *args, **kwargs):
+                return {}
+
+        ratios = []
+        for seq_len in (16, 32, 64):
+            config = TextSpanJEPAConfig(
+                vocab_size=V,
+                max_seq_len=seq_len,
+                embed_dim=D,
+                encoder_depth=NE,
+                num_heads=HEADS,
+                mlp_ratio=R,
+                predictor_embed_dim=DP,
+                predictor_depth=NP,
+                future_offsets=OFFSETS,
+                num_refine_steps=REFINE,
+            )
+            torch.manual_seed(0)
+            model = TextSpanJEPA(config)
+            model.train()
+            model.diagnostics = NoDiagnostics()
+            model.jspace_metrics = NoDiagnostics()
+
+            gen = torch.Generator().manual_seed(0)
+            ids = torch.randint(0, V, (B, seq_len), generator=gen)
+            mask_positions = torch.zeros(B, seq_len, dtype=torch.long)
+            n = round(seq_len * MASK_RATIO)
+            for b in range(B):
+                mask_positions[b, 1 : 1 + n] = 1
+            masked = ids.clone()
+            masked[mask_positions.bool()] = 0
+
+            with FlopCounterMode(display=False) as counter:
+                loss, _info, _diag = model.compute_loss_with_targets(masked, ids, mask_positions)
+                loss.backward()
+            measured = counter.get_total_flops()
+
+            estimate = estimate_jepa_step_flops(
+                embed_dim=D,
+                encoder_depth=NE,
+                predictor_embed_dim=DP,
+                predictor_depth=NP,
+                seq_len=seq_len,
+                batch_size=B,
+                vocab_size=V,
+                mlp_ratio=R,
+                predictor_mlp_ratio=R,
+                num_refine_steps=REFINE,
+                future_offsets=OFFSETS,
+                mask_ratio=n / seq_len,
+            )
+            ratio = estimate["total_flops"] / measured
+            ratios.append(ratio)
+
+            # The four matmul groups must be individually positive: the
+            # target encoder and the decoder head are exactly the terms a
+            # 6*N*L*B parameter count cannot express.
+            assert estimate["target_encoder_flops"] > 0, "target encoder is 1x forward"
+            assert estimate["decoder_flops"] > 0
+            assert estimate["predictor_flops"] > 0
+
+            # Pinned against an independent measurement, at every seq_len.
+            # The old 6ND form sat at 0.83-0.91 here and degraded with T; the
+            # structural form is within 1% and does not drift.
+            assert 0.99 <= ratio <= 1.01, f"seq_len={seq_len}: est/measured = {ratio:.5f}"
+
+        # The error must not grow with sequence length. This is the property the
+        # original estimate violated: 6*N*L*B is linear in T while the true
+        # cost has an O(T^2) attention term, so its error worsened with T.
+        assert ratios[-1] <= ratios[0] + 0.005, f"error grows with T: {ratios}"
+
+        # The O(T^2) attention term is real work and is reported, not folded in.
+        def attention_at(seq_len):
+            return estimate_jepa_step_flops(
+                embed_dim=D,
+                encoder_depth=NE,
+                predictor_embed_dim=DP,
+                predictor_depth=NP,
+                seq_len=seq_len,
+                batch_size=B,
+                vocab_size=V,
+                mlp_ratio=R,
+                predictor_mlp_ratio=R,
+                num_refine_steps=REFINE,
+                future_offsets=OFFSETS,
+                mask_ratio=MASK_RATIO,
+            )["attention_flops"]
+
+        # Doubling T must grow the attention term super-linearly. The exact
+        # ratio is near 4 but not 4: the full-length passes scale as T^2 while
+        # each future-offset pass scales as (T - offset)^2, which shrinks as T
+        # grows, so the mixture sits just above 4. A linear-in-T term would
+        # give exactly 2, which is the shape of the original omission.
+        assert 3.5 < attention_at(64) / attention_at(32) < 4.5
+
+        # The encoder's attention is the dominant piece, so pin it on its own,
+        # where the T^2 law is exact: summing encoder and predictor lets either
+        # one mask a wrong exponent in the other.
+        def encoder_attention_at(seq_len):
+            from src.utils.flops import _stack_attention_flops
+
+            return _stack_attention_flops(B, seq_len, D, NE)
+
+        assert encoder_attention_at(64) == pytest.approx(4 * encoder_attention_at(32))
+
+        train_result = estimate_training_flops(1e12, 100000)
         assert train_result["pflops"] > 0
+        assert train_result["total_flops"] == pytest.approx(1e17)
 
     def test_model_size_category(self):
         """Model size categorization."""
@@ -2259,8 +2497,14 @@ class TestDeepMergeAndDefaults:
         # After update, param_k should have no grad_fn (no autograd tracking)
         assert param_k.grad_fn is None, "EMA update leaked autograd"
 
-    def test_mechanism_bundle_counts_16(self):
-        """MechanismBundle must expose all 16 mechanisms."""
+    def test_mechanism_bundle_counts_12_modules(self):
+        """MechanismBundle must expose all 12 module mechanisms.
+
+        The count is 12, not the 16 of `GWP.N_MECHANISMS`: the GWP header
+        numbers 16 *capabilities*, of which WIP, Spectral Gap, Grassmann
+        Optimization and Predictive Rank are methods of `JAWPModule` rather
+        than modules. See `proofs/README.md` for the convention.
+        """
         from src.models.mechanisms import MechanismBundle
 
         # With all mechanisms

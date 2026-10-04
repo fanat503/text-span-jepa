@@ -34,6 +34,13 @@ addopts = "-v --tb=short"
 line-length = 100
 target-version = "py39"
 lint.ignore = ["BLE001", "RUF059", "PLR0402", "S110", "S112", "RUF012", "RUF034", "B008", "I001", "F841", "RUF022"]
+# `.agent-notes/` holds campaign scratch: the throwaway probe scripts a worker
+# writes to take a measurement, plus the markdown reports. It is evidence, not
+# source. Linting it produced 175 errors on wave 3 - all of them in
+# `_probe_*.py` files that exist only to be run once - and reddened the gate for
+# a change set whose actual source was clean. The reports are the durable
+# artefact; the probes are not.
+extend-exclude = [".agent-notes"]
 
 [tool.black]
 line-length = 100

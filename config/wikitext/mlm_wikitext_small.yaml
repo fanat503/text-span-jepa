@@ -1,110 +1,52 @@
+# MLM baseline -- small-100m rung of the WikiText-103 capacity ladder.
+#
+# Dims mirror the matching rung of config/scaling/ so the comparison is
+# capacity-matched. Everything else is a genuine delta on defaults.yaml: the
+# architecture block, the BERT-style single-token masking, this column's
+# optimisation schedule, and the output folder.
+#
+# This file used to restate the entire GWP mechanism block (twelve `use_*`
+# flags and nine `lambda_*` weights) and `predictor_embed_dim`. None of that
+# reaches this baseline: `src.train.create_model` dispatches model_name=mlm /
+# data2vec to `MLMBaseline` / `Data2VecTextBaseline` and never constructs a
+# `TextSpanJEPAConfig`, so the keys were silently inert. They are gone.
+#
+# Effective batch is matched to the JEPA column at 512 sequences
+# (data.batch_size 64 x optimization.grad_accum_steps 8, both inherited).
+#
+# Schedule note: the optimisation hyper-parameters below are this column's own
+# (tuned per method, which is standard), but `epochs` differs between columns
+# (JEPA 50, MLM 30, data2vec 50). The three methods therefore do not see the
+# same token budget. That is a pre-existing protocol difference, not a config
+# defect, and reconciling it is an experiment decision rather than a schema
+# one -- see the STILL UNSOUND section of the config-system repair report.
+#
+# Guard: TestDeltaPurity, TestEveryConfigRuns
+
+_meta:
+  config: mlm_small
+  arm: baseline_mlm
+
 meta:
-  seed: 42
-  use_bfloat16: true
   model_name: mlm_small
-  load_checkpoint: false
-  dataset: wikitext103
+
 data:
-  batch_size: 128
-  max_seq_len: 512
-  tokenizer: gpt2
-  num_workers: 4
-  root_path: data/wikitext-103
   mask_ratio: 0.15
-  span_length_range:
-  - 1
-  - 1
+  span_length_range: [1, 1]
+  num_workers: 4
+
 model:
   embed_dim: 640
   encoder_depth: 10
   num_heads: 10
-  mlp_ratio: 4.0
-  qkv_bias: true
   drop_rate: 0.1
-  attn_drop_rate: 0.0
-  drop_path_rate: 0.1
-  ema_schedule: cosine
-  gradient_checkpointing: false
-  jspace_variance_threshold: 0.1
-  jspace_k_workspace: 25
-  future_warmup_steps: 5000
-  predictor_embed_dim: 320
-  lambda_predictive_rank: 0.0
-  use_cgn: false
-  cgn_n_groups: 8
-  cgn_tau_start: 1.0
-  cgn_tau_end: 0.1
-  cgn_anneal_steps: 10000
-  lambda_cgn_ortho: 0.0
-  use_swip: false
-  swip_k_workspace: null
-  swip_target_variance: 1.0
-  lambda_swip: 0.0
-  use_jawp: true
-  jawk_k_start: 1
-  jawk_k_end: null
-  jawk_curriculum_steps: 10000
-  jawk_alpha: 0.1
-  jawk_init: identity
-  use_pcr: false
-  pcr_n_levels: 3
-  pcr_level_dims: null
-  pcr_warmup_steps: 1000
-  use_spc: false
-  spc_n_bands: 8
-  spc_init: dct
-  lambda_spc: 0.0
-  use_wsd: false
-  wsd_k: null
-  wsd_sync_interval: 100
-  wsd_ema_beta: 0.99
-  lambda_wsd: 0.0
-  use_cmc: false
-  cmc_second_mask_ratio: null
-  cmc_min_overlap_ratio: 0.2
-  cmc_mode: interval
-  cmc_interval: 10
-  lambda_cmc: 0.0
-  use_gac: false
-  gac_gamma: 0.01
-  gac_tau_grad: 0.0001
-  gac_warmup_steps: 1000
-  lambda_gac: 0.0
-  use_sta: false
-  sta_eta: 0.01
-  sta_ema_beta: 0.999
-  sta_warmup_steps: 500
-  sta_update_interval: 10
-  lambda_sta: 0.0
-  use_puc: false
-  puc_eta: 0.01
-  puc_ema_beta: 0.999
-  puc_warmup_steps: 500
-  lambda_puc: 0.0
-  use_rdc: false
-  rdc_eta: 0.01
-  rdc_ema_beta: 0.999
-  rdc_warmup_steps: 500
-  rdc_k_workspace: null
-  lambda_rdc: 0.0
-  use_wsr: false
-  wsr_rho: 0.05
-  wsr_eta: 0.01
-  wsr_ema_beta: 0.999
-  wsr_warmup_steps: 500
-  wsr_mode: gradient
-  lambda_wsr: 0.0
+
 optimization:
   epochs: 30
-  ipe_scale: 1.0
   lr: 0.0005
   start_lr: 0.0001
-  final_lr: 1.0e-05
-  warmup: 10
   weight_decay: 0.01
   final_weight_decay: 0.01
-  grad_accum_steps: 2
+
 logging:
   folder: output/wikitext/mlm-small-100m/
-  log_freq: 10
-  write_tag: mlm_small_100m

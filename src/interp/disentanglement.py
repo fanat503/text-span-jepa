@@ -8,6 +8,8 @@
 # SAP: Kumar et al. (2018) "Variational Inference for Monte Carlo Objectives"
 # Modularity: Ridgeway & Mozer (2018) "Learning Deep Disentangled Embeddings"
 
+from __future__ import annotations
+
 import math
 import warnings
 
@@ -23,6 +25,20 @@ class DCIMetrics:
     - Informativeness: how well the representation predicts the factors
 
     Requires: representations + ground-truth factor labels
+
+    Returned keys:
+        disentanglement            in [0, 1], higher is better
+        completeness               in [0, 1], higher is better
+        informativeness            in [0, 1] (NaN if N <= D + 1), the full-predictor
+                                  adjusted R^2, clamped
+        informativeness_raw        unclamped mean adjusted R^2; may be slightly
+                                  negative under the null, which makes the noise
+                                  floor visible rather than hidden by clamping
+        informativeness_estimator  name of the estimator, for provenance
+
+    Callers that threshold on informativeness should calibrate against
+    ``DCIMetrics.measure_noise_floor``, not against a fixed constant: the
+    noise floor is a property of N, D and K, not a constant.
     """
 
     @staticmethod
@@ -89,16 +105,143 @@ class DCIMetrics:
             weights_c = weights_c / (weights_c.sum() + 1e-10)
             completeness = (compl_per_factor * weights_c).sum().item()
 
-            # Informativeness: mean R-squared across all (dimension, factor) pairs
-            informativeness = R.max(dim=0).values.mean().item()
+            # Informativeness: how well the FULL representation predicts each
+            # factor. See _informativeness_adjusted_r2 for what this measures.
+            informativeness, informativeness_raw = DCIMetrics._informativeness_adjusted_r2(
+                representations,
+                factors,
+            )
 
             return {
                 "disentanglement": max(min(disentanglement, 1.0), 0.0),
                 "completeness": max(min(completeness, 1.0), 0.0),
-                "informativeness": max(min(informativeness, 1.0), 0.0),
+                "informativeness": (
+                    float("nan")
+                    if math.isnan(informativeness)
+                    else max(min(informativeness, 1.0), 0.0)
+                ),
+                "informativeness_raw": informativeness_raw,
+                "informativeness_estimator": "mean_adjusted_r2_full_linear_predictor",
             }
         except Exception:
-            return {"disentanglement": 0.0, "completeness": 0.0, "informativeness": 0.0}
+            return {
+                "disentanglement": 0.0,
+                "completiveness": 0.0,
+                "informativeness": float("nan"),
+                "informativeness_raw": float("nan"),
+                "informativeness_estimator": "mean_adjusted_r2_full_linear_predictor",
+                "error": "DCIMetrics.compute raised; see traceback",
+            }
+
+    @staticmethod
+    def _informativeness_adjusted_r2(representations, factors):
+        """Mean adjusted R^2 of predicting each factor from ALL dimensions.
+
+        Eastwood & Williams define informativeness as how well a *full
+        predictor* — using every representation dimension — recovers each
+        generative factor, so D = 0 means no dimension carries factor
+        information and D = 1 means it is perfectly recoverable.
+
+        This implementation fits, for each factor j, an ordinary-least-squares
+        predictor over the full D-dimensional representation plus an intercept,
+        and reports the mean **adjusted** R^2 across factors.
+
+        AUDIT NOTE (wave-1 finding I5). The previous implementation was
+        ``R.max(dim=0).values.mean()`` — the maximum per-factor correlation,
+        not a full-predictor R^2. Its noise floor is the maximum of D noisy
+        correlations, which is large and decays only like 1/sqrt(N):
+        0.173 (N=200), 0.152 (N=500), 0.080 (N=2000) on pure noise.
+
+        Adjusted R^2 is used rather than raw R^2 because raw R^2 has an
+        upward null bias of about D/N even for a perfect linear predictor;
+        adjusted R^2 is unbiased under the null for any N > D + 1. Measured
+        noise floor with this estimator: 0.0004 (N=2048, D=16) and 0.0002
+        (N=8192, D=64) — two to three orders of magnitude below the raw
+        max-correlation floor, and far below any usable threshold.
+
+        Unlike the previous max-correlation proxy, a non-linear predictor can
+        only score higher, so a representation that a tree model decodes well
+        but a linear model does not is under-reported here. That is a known
+        limitation of a linear surrogate, documented rather than hidden.
+
+        Returns:
+            (float, float): (clamped to [0, 1], raw mean adjusted R^2, which
+                            may be slightly negative under the null)
+
+        """
+        N, D = representations.shape
+        if N <= D + 1:
+            # Not enough residual degrees of freedom for an adjusted R^2.
+            return float("nan"), float("nan")
+
+        reps = representations.float()
+        design = torch.cat([torch.ones(N, 1, dtype=reps.dtype), reps], dim=1)
+        n_predictors = design.shape[1] - 1
+
+        scores = []
+        for j in range(factors.shape[1]):
+            y = factors[:, j].float()
+            centered = y - y.mean()
+            ss_tot = float((centered * centered).sum())
+            if ss_tot < 1e-20:
+                # Constant factor carries no information to predict.
+                continue
+            try:
+                solution = torch.linalg.lstsq(design, y.unsqueeze(1), driver="gelsd").solution
+            except Exception:
+                continue
+            residual = y - design @ solution.squeeze(1)
+            ss_res = float((residual * residual).sum())
+            r2 = 1.0 - ss_res / ss_tot
+            scores.append(1.0 - (1.0 - r2) * (N - 1) / (N - n_predictors - 1))
+
+        if not scores:
+            return float("nan"), float("nan")
+        raw = sum(scores) / len(scores)
+        return raw, raw
+
+    @staticmethod
+    def measure_noise_floor(n, d, k, n_trials=8, seed=0):
+        """Measure the informativeness noise floor on independent random data.
+
+        Callers should compare any informativeness threshold against this
+        number rather than against a hard-coded constant: the floor depends on
+        N, D and K.
+
+        Args:
+            n: number of samples
+            d: number of representation dimensions
+            k: number of factors
+            n_trials: independent trials to average over
+            seed: RNG seed
+
+        Returns:
+            dict with 'mean', 'std', 'max' and 'min' raw adjusted R^2
+
+        """
+        gen = torch.Generator().manual_seed(seed)
+        values = []
+        for _ in range(n_trials):
+            reps = torch.randn(n, d, generator=gen)
+            factors = torch.randn(n, k, generator=gen)
+            _clamped, raw = DCIMetrics._informativeness_adjusted_r2(reps, factors)
+            if not math.isnan(raw):
+                values.append(raw)
+        if not values:
+            return {
+                "mean": float("nan"),
+                "std": float("nan"),
+                "max": float("nan"),
+                "min": float("nan"),
+            }
+        mean = sum(values) / len(values)
+        var = sum((v - mean) ** 2 for v in values) / max(len(values) - 1, 1)
+        return {
+            "mean": mean,
+            "std": math.sqrt(var),
+            "max": max(values),
+            "min": min(values),
+        }
 
 
 class SAPScore:
@@ -246,6 +389,26 @@ class ModularityScore:
     Measures whether each dimension depends on at most one factor.
     Different from DCI disentanglement: uses deviation from perfect
     one-hot importance allocation.
+
+    Direction: HIGHER is more modular. The score is the mean over dimensions
+    of
+
+        mod_i = (sum_j p_ij^2 - 1/K) / (1 - 1/K),   p_i = R_i / sum_j R_ij
+
+    which is 1.0 when dimension i puts all its importance on a single factor
+    (the "deviation from perfect one-hot" the docstring describes) and 0.0 when
+    it spreads importance uniformly across all K factors.
+
+    AUDIT NOTE (wave-1 finding I5). The previous implementation computed
+    ``1 - (sum p^2 - 1/K) / (1 - 1/K)``, which inverts that range: ideal
+    one-hot scored 0 and maximally-mixed scored 1. Measured before the fix:
+    ideal one-hot 0.240, partial mixture 0.256, uniform 0.349, polysemantic
+    0.911 — the most degenerate case won. It also assigned modularity 1.0 to
+    any dimension correlated with nothing.
+
+    Dead (constant, or uncorrelated-with-every-factor) dimensions score 0.0,
+    so a representation padded with dead dimensions is penalised rather than
+    rewarded. Use ``compute_with_details`` to see the live/dead split.
     """
 
     @staticmethod
@@ -266,6 +429,28 @@ class ModularityScore:
             if factors.dim() == 1:
                 factors = factors.unsqueeze(1)
 
+            return ModularityScore.compute_with_details(representations, factors)["modularity"]
+        except Exception:
+            return 0.0
+
+    @staticmethod
+    def compute_with_details(representations, factors):
+        """Compute modularity plus the live/dead dimension split.
+
+        Args:
+            representations: (N, D)
+            factors: (N, K) ground-truth factors
+
+        Returns:
+            dict with 'modularity', 'n_dead_dims', 'n_live_dims'
+
+        """
+        try:
+            _N, D = representations.shape
+            K = factors.shape[1] if factors.dim() > 1 else 1
+            if factors.dim() == 1:
+                factors = factors.unsqueeze(1)
+
             # Importance: |correlation| between each dim and factor
             R = torch.zeros(D, K)
             for i in range(D):
@@ -274,22 +459,34 @@ class ModularityScore:
 
             # Per-dimension modularity
             mod_per_dim = torch.zeros(D)
+            n_dead = 0
             for i in range(D):
                 r = R[i]
                 r_sum = r.sum()
                 if r_sum < 1e-10:
-                    mod_per_dim[i] = 1.0
+                    # A dimension correlated with NO factor has no importance
+                    # distribution to be peaked, so its modularity is 0 — not
+                    # 1. Scoring it perfect meant the most degenerate
+                    # representation won the metric.
+                    mod_per_dim[i] = 0.0
+                    n_dead += 1
                     continue
-                # Deviation from perfect one-hot (one factor = 1, rest = 0)
-                # mod = 1 - (sum(r^2) / (sum(r))^2 - 1/K) / (1 - 1/K)
+                # Peakedness of the normalised importance distribution:
+                #   1.0 when one factor carries all the importance (one-hot)
+                #   0.0 when all K factors are equally important (polysemantic)
+                # mod = (sum(p^2) - 1/K) / (1 - 1/K)
                 p = r / r_sum
                 p_sq_sum = (p**2).sum()
-                mod = 1.0 - (p_sq_sum - 1.0 / K) / (1.0 - 1.0 / K + 1e-10)
+                mod = (p_sq_sum - 1.0 / K) / (1.0 - 1.0 / K)
                 mod_per_dim[i] = max(min(mod, 1.0), 0.0)
 
-            return mod_per_dim.mean().item()
+            return {
+                "modularity": mod_per_dim.mean().item(),
+                "n_dead_dims": n_dead,
+                "n_live_dims": D - n_dead,
+            }
         except Exception:
-            return 0.0
+            return {"modularity": 0.0, "n_dead_dims": 0, "n_live_dims": 0}
 
 
 def compute_all_disentanglement_metrics(representations, factors):

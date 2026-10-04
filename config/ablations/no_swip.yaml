@@ -1,39 +1,39 @@
+# Ablation: SWIP (Selective Whitening with Information Preservation) OFF.
+#
+# Row of the leave-one-out table: the full GWP model (defaults.yaml) minus
+# exactly one mechanism. Everything else -- architecture, schedule, effective
+# batch, the other eleven mechanisms -- is inherited, so this file changes
+# nothing but this mechanism and the row cannot drift out of comparability.
+#
+# Pair with swip_on.yaml, which is the full model. The pair therefore differs
+# by exactly one mechanism.
+#
+# DEPENDENCY: SWIP (Selective Whitening with Information Preservation) reads the JAWP workspace, and
+# `TextSpanJEPA.__init__` builds it only when `use_jawp` is also true. A row
+# that turns use_swip off while JAWP is off is not a one-mechanism ablation,
+# and a row that turns use_swip on while JAWP is off trains with it silently
+# disabled. The leave-one-out grid never does either.
+#
+# `lambda_swip` is zeroed as well as the flag: any config that names a
+# mechanism must name its weight (tests/test_swip.py asserts this for
+# SWIP; the other mechanisms have no such test yet). With the flag off
+# the module is never constructed and the weight is never read, so this
+# is belt-and-braces -- it stops a later edit that flips the flag back
+# from silently switching the mechanism on at the grid weight.
+#
+# Guards, all in tests/test_config_system.py:
+#   TestLeaveOneOut::test_no_arm_is_full_set_minus_exactly_what_its_flag_removes
+#   TestLeaveOneOut::test_off_on_pair_differs_by_exactly_the_downstream_set
+#   TestLeaveOneOut::test_no_arm_never_collapses_to_the_none_baseline
+#   TestLeaveOneOut::test_no_arm_differs_from_the_full_model_only_in_its_keys
+
+_meta:
+  ablation: no_swip
+  description: "Leave-one-out: SWIP (Selective Whitening with Information Preservation) disabled, the other eleven enabled"
+
 model:
   use_swip: false
   lambda_swip: 0.0
-  use_gac: false
-  gac_gamma: 0.01
-  gac_tau_grad: 0.0001
-  gac_warmup_steps: 1000
-  lambda_gac: 0.0
-  use_sta: false
-  sta_eta: 0.01
-  sta_ema_beta: 0.999
-  sta_warmup_steps: 500
-  sta_update_interval: 10
-  lambda_sta: 0.0
-  use_rdc: false
-  rdc_eta: 0.01
-  rdc_ema_beta: 0.999
-  rdc_warmup_steps: 500
-  rdc_k_workspace: null
-  lambda_rdc: 0.0
-  use_wsr: false
-  wsr_rho: 0.05
-  wsr_eta: 0.01
-  wsr_ema_beta: 0.999
-  wsr_warmup_steps: 500
-  wsr_mode: gradient
-  lambda_wsr: 0.0
-  lambda_spc: 0.0
-  lambda_wsd: 0.0
-  lambda_cmc: 0.0
-  lambda_puc: 0.0
-  use_jawp: false
-  use_cgn: false
-  lambda_cgn_ortho: 0.0
-  use_pcr: false
-  use_spc: false
-  use_wsd: false
-  use_cmc: false
-  use_puc: false
+
+logging:
+  folder: output/ablations/no_swip/

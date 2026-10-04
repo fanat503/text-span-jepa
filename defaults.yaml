@@ -1,17 +1,120 @@
-# Text-Span JEPA defaults
-# All configs inherit from these values — override in per-experiment YAML files
-# Structure follows NextLat (Microsoft Research, 2025)
-# C-JEPA best practice: explicit comments for every mechanism
+# Text-Span JEPA — reference configuration
+#
+# ══════════════════════════════════════════════════════════════════════
+#  THIS FILE IS THE REFERENCE.  Read it before editing any config.
+# ══════════════════════════════════════════════════════════════════════
+#
+# `config/**/*.yaml` is deep-merged over this file by `src.train._deep_merge`
+# (override wins; dicts merge recursively; lists and scalars replace). There is
+# NO include mechanism, so anything that more than one experiment needs has to
+# live here or be restated by every file that needs it. This file therefore
+# carries three things, once:
+#
+#   1. THE REFERENCE MODEL.  ViT-Base shape: 768d / 12 layers / 12 heads with
+#      a 384d / 6-layer predictor. Chosen because 29 of the 57 shipped
+#      configs already train it and it is the widest shape the reference
+#      hardware runs; the 640/10/10 shape is a *rung of the scaling ladder*,
+#      not an independent architecture, so it is not a second table model.
+#      Every ablation under config/ablations/ inherits it. See
+#      config/ablations/README.md.
+#
+#   2. THE REFERENCE MECHANISM SET.  All 12 mechanisms in
+#      `MechanismBundle.ALL_MECHANISMS` are ON with a uniform loss weight of
+#      0.01. This is the "full model" arm of the leave-one-out table, so a
+#      leave-one-out row is literally one line: `model: {use_<mech>: false}`.
+#      A config that wants the plain-JEPA arm instead says so explicitly
+#      (11 `use_*: false` lines); see config/ablations/none.yaml.
+#
+#   3. THE REFERENCE SCHEDULE.  50 epochs, lr 1e-3, and an effective batch of
+#      512 sequences (64 x 8 accumulation) = 262,144 tokens per optimizer
+#      step. The scaling ladder and the whole ablation table inherit this, so
+#      neither varies the schedule while varying something else.
+#
+# Two keys were REMOVED from this file and must not come back:
+#   * `optimization.ema`   — read by nothing; the trainer uses
+#                            model.ema_tau_start / model.ema_tau_end.
+#   * `logging.write_tag`  — read by nothing; output paths come from
+#                            `logging.folder`.
+#
+# A third pair is deliberately ABSENT and must not be added until the trainer
+# actually reads it: `meta.deterministic` and `meta.num_threads`. Declaring an
+# unread key stops the startup typo warning, which converts "this key did
+# nothing" from a log line into a silent no-op. The full reasoning, the
+# environment variables that work today, and the exact call-site change that
+# would make the keys live are in the `meta:` block below.
+#
+# Structure follows NextLat (Microsoft Research, 2025).
+# C-JEPA best practice: explicit comments for every mechanism.
 
+# Legacy fallback only. `src.train.main` prefers `meta.seed` and falls back to
+# this; `meta.seed` is the declared key.
 seed: 42
 
 meta:
+  seed: 42
+  # Provenance only. The corpus is actually selected by `data.root_path`;
+  # nothing in src/ reads this key. Declared so the key is at least checkable.
+  dataset: wikitext103
   use_bfloat16: true
   load_checkpoint: false
   read_checkpoint: null
   model_name: text_span_jepa
 
+  # ── Reproducibility: TWO KEYS ARE DELIBERATELY NOT DECLARED HERE ───────
+  #
+  # `meta.deterministic` and `meta.num_threads` are the keys a run should use
+  # to request bitwise reproducibility. They are NOT in this file, and that is
+  # a decision, not an oversight. Declaring a key that `src/train.py` never
+  # reads would make `_warn_unknown_config_keys` stop warning about it, so a
+  # run asking for determinism would get silence and no determinism — the
+  # silent-no-op failure mode, which is worse than the typo warning a user
+  # gets today.
+  #
+  # Until the trainer reads them, request determinism from the ENVIRONMENT,
+  # which reaches the seeder through `src/utils/seed.py` with no call-site
+  # change and works today:
+  #
+  #   Windows (PowerShell):
+  #     $env:TEXT_SPAN_JEPA_DETERMINISTIC="1"; python -m src.train --fname <cfg>
+  #   POSIX:
+  #     TEXT_SPAN_JEPA_DETERMINISTIC=1 python -m src.train --fname <cfg>
+  #
+  # `TEXT_SPAN_JEPA_NUM_THREADS=<int>` pins the intra-op thread pool on its own
+  # (repeatable at a fixed N, still not portable across different CPUs).
+  # `TEXT_SPAN_JEPA_DETERMINISTIC=1` implies one thread plus
+  # `torch.use_deterministic_algorithms(warn_only=True)`, cudnn flags, and
+  # CUBLAS_WORKSPACE_CONFIG.
+  #
+  # THE ONE-LINE CHANGE THAT CLOSES THE CONFIG PATH (needs `src/train.py`'s
+  # owner; `src/train.py` is not this file's to edit). At
+  # `src/train.py:1148`, replace
+  #
+  #     seed_everything(seed)
+  #
+  # with
+  #
+  #     seed_everything(
+  #         seed,
+  #         deterministic=args.get("meta", {}).get("deterministic"),
+  #         num_threads=args.get("meta", {}).get("num_threads"),
+  #     )
+  #
+  # ...and then declare `meta.deterministic: false` / `meta.num_threads: null`
+  # in the block above. `null` means "leave torch's own thread count alone", so
+  # the default costs nothing. Log `reproducibility_state()` next to the seed
+  # so a run records what it pinned: a checkpoint carries weights, not a thread
+  # count, so this is the only place the answer survives.
+  #
+  # Measured cost of not doing this: 1 vs 2 intra-op threads, same seed, same
+  # data, 10 steps -> steps 0-2 bitwise equal, steps 3-9 differ by
+  # |d| = 1.19e-07 ... 2.38e-07, final `qkv` weight not bitwise equal. With
+  # determinism on, the same two launches agree bitwise. See
+  # `.agent-notes/task-24.md`.
+
 data:
+  # Per-device micro-batch. 64 x grad_accum_steps 8 = 512 = the reference
+  # effective batch. `config/scaling/dist/` sweeps the micro-batch with
+  # accumulation pinned, holding the global batch at 512.
   batch_size: 64
   max_seq_len: 512
   tokenizer: gpt2
@@ -21,6 +124,7 @@ data:
   span_length_range: [3, 10]
 
 model:
+  # ── Encoder: the reference shape (ViT-Base) ───────────────────────
   embed_dim: 768
   encoder_depth: 12
   num_heads: 12
@@ -28,8 +132,12 @@ model:
   qkv_bias: true
   drop_rate: 0.0
   attn_drop_rate: 0.0
+  # Fixed across the scaling ladder. drop-path is a regulariser; letting it
+  # track model size makes a capacity curve uninterpretable.
   drop_path_rate: 0.1
   gradient_checkpointing: false
+
+  # ── Predictor ─────────────────────────────────────────────────────
   predictor_embed_dim: 384
   predictor_depth: 6
   future_offsets: [1, 4, 16]
@@ -38,135 +146,163 @@ model:
   decoder_bias: false
   variance_margin: 1.0
   centering_momentum: 0.9
-  # EMA target encoder — cosine schedule from I-JEPA (Assran et al., 2023)
+
+  # ── EMA target encoder ────────────────────────────────────────────
+  # I-JEPA (Assran et al., 2023) cosine tau ramp. `ema_tau_end` MUST be
+  # < 1.0: at tau == 1.0 `update_target_encoder` becomes
+  # mul_(1.0).add_(q, alpha=0.0) and the target encoder freezes, which in
+  # self-distillation removes the training signal entirely.
+  # `ema_schedule` is read by `TextSpanJEPAConfig.validate()` but the trainer
+  # currently only ever calls `EMATauSchedule.step()` (linear); see
+  # tests/test_config_system.py::TestNoDeadKeys.
   ema_tau_start: 0.996
   ema_tau_end: 0.9999
   ema_schedule: cosine
-  # Loss weights
+
+  # ── Loss weights ──────────────────────────────────────────────────
   lambda_span: 1.0
   lambda_future: 0.5
   lambda_decoder: 0.1
   # VICReg-style collapse prevention (C-JEPA, NeurIPS 2024 Spotlight)
   lambda_variance: 0.1
   lambda_covariance: 0.04
-  # Mask curriculum
+
+  # ── Mask curriculum ───────────────────────────────────────────────
   mask_ratio_start: 0.15
   mask_ratio_end: 0.35
   future_warmup_steps: 5000
 
-  # ═══════════════════════════════════════════════════════════════
-  #  Novel Mechanisms (all unified under WCP — proofs/unifying_principle.md)
-  # ═══════════════════════════════════════════════════════════════
+  # ══════════════════════════════════════════════════════════════════
+  #  GWP mechanisms — the full set. All unified under WCP,
+  #  proofs/unifying_principle.md. Groups (MechanismBundle.GROUPS):
+  #    core     : jawp
+  #    routing  : cgn, swip, pcr, spc
+  #    stability: wsd, cmc, gac, sta, puc, rdc, wsr
+  #  Every loss weight below is the uniform grid weight 0.01 so that the
+  #  leave-one-out table varies exactly one flag per row.
+  # ══════════════════════════════════════════════════════════════════
 
-  # JAWP: Jacobian-Aligned Workspace Prediction (mechanism #1)
-  # Courant-Fischer optimality — predicts in most-predictable subspace
+  # JAWP: Jacobian-Aligned Workspace Prediction (core)
+  # Courant-Fischer optimality — predicts in most-predictable subspace.
+  # ROOT of the dependency DAG: WSD, SWIP, RDC and WSR all need a workspace,
+  # so `TextSpanJEPA.__init__` only builds `wsd` when `use_jawp` is also true.
   use_jawp: true
   jawk_k_start: 1
-  jawk_k_end: null
+  jawk_k_end: null          # null -> D // 10 at module construction
   jawk_curriculum_steps: 10000
   jawk_alpha: 0.1
   jawk_init: identity
-  # Predictive Rank Regularization (prevents workspace rank collapse)
+
+  # Predictive Rank Regularization (prevents workspace rank collapse).
+  # Off in the full model; config/ablations/predictive_rank_on.yaml turns it on.
   lambda_predictive_rank: 0.0
 
-  # CGN: Contextual Gating Network (mechanism #6)
-  # Partition of unity — routes information differently at masked/visible positions
-  use_cgn: false
+  # CGN: Contextual Gating Network (routing)
+  # Partition of unity — routes information differently at masked/visible
+  # positions. Orthogonality is part of CGN's own loss, hence the separate
+  # weight rather than the mechanism's.
+  use_cgn: true
   cgn_n_groups: 8
   cgn_tau_start: 1.0
   cgn_tau_end: 0.1
   cgn_anneal_steps: 10000
-  lambda_cgn_ortho: 0.0
+  lambda_cgn_ortho: 0.01
 
-  # SWIP: Selective Whitening with Information Preservation (mechanism #7)
-  # Log-eigenvalue matching — VICReg = SWIP(k=0), SIGReg = SWIP(Gaussian target)
-  use_swip: false
+  # SWIP: Selective Whitening with Information Preservation (routing)
+  # Log-eigenvalue matching — VICReg = SWIP(k=0), SIGReg = SWIP(Gaussian).
+  # Needs a workspace, so it is inert without JAWP.
+  use_swip: true
   swip_k_workspace: null
   swip_target_variance: 1.0
-  lambda_swip: 0.0
+  lambda_swip: 0.01
 
-  # PCR: Predictive Cascade Refinement (mechanism #8)
-  # Cascade Capacity theorem — recovers info lost through bottleneck
-  use_pcr: false
+  # PCR: Predictive Cascade Refinement (routing)
+  # Cascade Capacity theorem — recovers info lost through the bottleneck.
+  use_pcr: true
   pcr_n_levels: 3
   pcr_level_dims: null
   pcr_warmup_steps: 1000
 
-  # SPC: Spectral Predictive Coding (mechanism #9)
-  # Info-proportional capacity — allocates capacity per frequency band
-  use_spc: false
+  # SPC: Spectral Predictive Coding (routing)
+  # Info-proportional capacity — allocates capacity per frequency band.
+  use_spc: true
   spc_n_bands: 8
   spc_init: dct
-  lambda_spc: 0.0
+  lambda_spc: 0.01
 
-  # WSD: Workspace-Target Synchronization Drift (mechanism #10)
-  # Drift Bound theorem — prevents workspace-target desynchronization
-  use_wsd: false
+  # WSD: Workspace-Target Synchronization Drift (stability)
+  # Drift Bound theorem. DEPENDS ON JAWP: `TextSpanJEPA.__init__` builds it
+  # only when `use_wsd and use_jawp`, so `use_wsd: true` with `use_jawp:
+  # false` silently trains with WSD off. The grid never does that.
+  use_wsd: true
   wsd_k: null
   wsd_sync_interval: 100
   wsd_ema_beta: 0.99
-  lambda_wsd: 0.0
+  lambda_wsd: 0.01
 
-  # CMC: Cross-Mask Consistency Regularization (mechanism #11)
-  # Stability theorem (Cauchy-Schwarz) — predictions agree across masks
-  use_cmc: false
+  # CMC: Cross-Mask Consistency Regularization (stability)
+  # Stability theorem (Cauchy-Schwarz) — predictions agree across masks.
+  use_cmc: true
   cmc_second_mask_ratio: null
   cmc_min_overlap_ratio: 0.2
   cmc_mode: interval
   cmc_interval: 10
-  lambda_cmc: 0.0
+  lambda_cmc: 0.01
 
-  # GAC: Gradient-Allocated Capacity (mechanism #12)
-  # No Dead Zones theorem — prevents gradient starvation
-  use_gac: false
+  # GAC: Gradient-Allocated Capacity (stability)
+  # No Dead Zones theorem — prevents gradient starvation.
+  use_gac: true
   gac_gamma: 0.01
   gac_tau_grad: 0.0001
   gac_warmup_steps: 1000
-  lambda_gac: 0.0
+  lambda_gac: 0.01
 
-  # STA: Spectral Transport Alignment (mechanism #13)
-  # Davis-Kahan + Wasserstein-1 — stabilizes workspace spectral evolution
-  use_sta: false
+  # STA: Spectral Transport Alignment (stability)
+  # Davis-Kahan + Wasserstein-1 — stabilises workspace spectral evolution.
+  use_sta: true
   sta_eta: 0.01
   sta_ema_beta: 0.999
   sta_warmup_steps: 500
   sta_update_interval: 10
-  lambda_sta: 0.0
+  lambda_sta: 0.01
 
-  # PUC: Prediction Uncertainty Calibration (mechanism #14)
-  # Minimax optimality (Jaynes + Donsker-Varadhan) — prevents overconfidence
-  use_puc: false
+  # PUC: Prediction Uncertainty Calibration (stability)
+  # Minimax optimality (Jaynes + Donsker-Varadhan) — prevents overconfidence.
+  use_puc: true
   puc_eta: 0.01
   puc_ema_beta: 0.999
   puc_warmup_steps: 500
-  lambda_puc: 0.0
+  lambda_puc: 0.01
 
-  # RDC: Representation Drift Compensation (mechanism #15)
-  # Drift Compensation Bound — prevents loss of exogenous features (Pendharkar 2026)
-  use_rdc: false
+  # RDC: Representation Drift Compensation (stability)
+  # Drift Compensation Bound — prevents loss of exogenous features.
+  # Needs a workspace, so it is inert without JAWP.
+  use_rdc: true
   rdc_eta: 0.01
   rdc_ema_beta: 0.999
   rdc_warmup_steps: 500
   rdc_k_workspace: null
-  lambda_rdc: 0.0
+  lambda_rdc: 0.01
 
-  # WSR: Workspace Sharpness Regularization (mechanism #16)
-  # Generalization Bound — prevents sharp workspace minima under distribution shift
-  # PAC-Bayes + Grassmann Sharpness Decomposition: ρ_Q = ρ_spectral + ρ_directional
-  use_wsr: false
+  # WSR: Workspace Sharpness Regularization (stability)
+  # Generalization Bound — prevents sharp workspace minima under shift.
+  # PAC-Bayes + Grassmann Sharpness Decomposition:
+  #   rho_Q = rho_spectral + rho_directional
+  # Needs a workspace, so it is inert without JAWP.
+  use_wsr: true
   wsr_rho: 0.05
   wsr_eta: 0.01
   wsr_ema_beta: 0.999
   wsr_warmup_steps: 500
   wsr_mode: gradient
-  lambda_wsr: 0.0
+  lambda_wsr: 0.01
 
-  # ═══════════════════════════════════════════════════════════════
-  #  Collapse Prevention (from prior art, integrated into WCP)
-  # ═══════════════════════════════════════════════════════════════
+  # ══════════════════════════════════════════════════════════════════
+  #  Collapse prevention (prior art, integrated into WCP)
+  # ══════════════════════════════════════════════════════════════════
 
   # SIGReg: Sketched Isotropic Gaussian Regularization (LeJEPA, 2025)
-  # Optimal embedding distribution — single hyperparameter
+  # Optimal embedding distribution — single hyperparameter.
   lambda_sigreg: 0.0
   sigreg_n_sketches: 64
   sigreg_n_integration_points: 17
@@ -176,8 +312,23 @@ model:
   jspace_variance_threshold: 0.10
   jspace_k_workspace: 25
 
+  # ══════════════════════════════════════════════════════════════════
+  #  data2vec baseline knobs.
+  #  `src.train.create_model` reads these for model_name=data2vec* only; they
+  #  are declared here so the path check in tests/test_config_system.py covers
+  #  them like every other key. They are inert for the JEPA and MLM arms.
+  # ══════════════════════════════════════════════════════════════════
+  average_top_k_layers: 8
+  head_layers: 2
+  loss_beta: 0.0
+  loss_scale: null
+  ema_decay: 0.999
+  ema_end_decay: 0.9999
+  ema_anneal_end_step: 100000
+
 optimization:
-  ema: [0.996, 0.9999]
+  # Reference schedule. `ema` used to live here as a [start, end] pair and was
+  # read by nothing; the trainer uses model.ema_tau_start / model.ema_tau_end.
   epochs: 50
   ipe_scale: 1.0
   lr: 0.001
@@ -186,10 +337,10 @@ optimization:
   warmup: 10
   weight_decay: 0.04
   final_weight_decay: 0.4
-  grad_accum_steps: 1
+  # 64 x 8 = 512 sequences = 262,144 tokens per optimizer step.
+  grad_accum_steps: 8
 
 logging:
   folder: output/
   log_freq: 10
-  write_tag: text_span_jepa
   keep_last_epoch_ckpts: null  # int K: prune older checkpoint-ep{N} files

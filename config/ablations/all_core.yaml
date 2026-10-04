@@ -1,31 +1,23 @@
-# Ablation: ALL core mechanisms ON
-# This is the full model — all 16 mechanisms active
-# Compare against sigreg_only and individual ablations
-model:
-  use_jawp: true
-  use_cgn: true
-  lambda_cgn_ortho: 0.01
-  use_swip: true
-  use_pcr: true
-  use_spc: true
-  use_wsd: true
-  use_cmc: true
-  use_gac: true
-  use_sta: true
-  use_puc: true
-  use_rdc: true
-  use_wsr: true
-  lambda_swip: 0.01
-  lambda_spc: 0.01
-  lambda_wsd: 0.01
-  lambda_cmc: 0.01
-  lambda_gac: 0.01
-  lambda_sta: 0.01
-  lambda_puc: 0.01
-  lambda_rdc: 0.01
-  lambda_wsr: 0.01
-  wsr_rho: 0.05
-  wsr_eta: 0.01
-  wsr_ema_beta: 0.999
-  wsr_warmup_steps: 500
-  wsr_mode: gradient
+# Ablation: the full GWP model — all twelve mechanisms ON.
+#
+# The reference row of every table in the paper. `defaults.yaml` already
+# enables every mechanism in `MechanismBundle.ALL_MECHANISMS` with the uniform
+# grid loss weight of 0.01, so this file carries no model delta at all: it
+# exists to name the row, attach the provenance, and give the run its own
+# output folder. Copying the twelve flags here would create a second place to
+# update when the mechanism set changes, which is exactly the failure mode
+# that made the pre-fix `all_core.yaml` a near-verbatim copy of defaults.yaml.
+#
+# For the mechanism-level table use the leave-one-out pair instead:
+#   no_<mech>.yaml  -- the full model minus one mechanism
+#   <mech>_on.yaml  -- the full model (this row, under a per-mechanism name)
+#
+# Guards: TestLeaveOneOut::test_on_arm_is_the_full_model,
+#         TestDeltaPurity::test_no_unnecessary_restatements
+
+_meta:
+  ablation: all_core
+  description: "Full GWP model: all twelve mechanisms at the reference grid weight (inherited from defaults.yaml)"
+
+logging:
+  folder: output/ablations/all_core/
