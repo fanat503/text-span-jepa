@@ -342,7 +342,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 - verify: `python tools/rt.py tests/test_interp.py`
 - report: `.agent-notes/task-17.md`
 
-### TASK-18 | group: G-COVER | status: todo | mode: arena
+### TASK-18 | group: G-COVER | status: done | mode: arena
 - goal: fix `src/interp/workspace_validation.py`.
 - why: `validate_workspace_claim` with `sae=None` builds a **random untrained**
   `TopKSAE` (L352-357) and still returns a verdict. Measured end to end:
@@ -368,7 +368,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 
 ---
 
-### TASK-19 | group: G-PERF | status: todo | mode: arena
+### TASK-19 | group: G-PERF | status: done | mode: arena
 - goal: stop `CollapseDiagnostics.compute` from running every training step.
 - why: measured **67% of the entire forward pass**. It performs 13
   `torch.linalg.svdvals` plus 4 full `torch.linalg.svd` on the full `(B·T, D)`
@@ -413,7 +413,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   detaches the Stiefel-projection gradient. That is a correctness issue, not a
   perf one, and `mechanisms.py` is not yours — report it.
 
-### TASK-21 | group: G-PERF | status: todo | mode: arena
+### TASK-21 | group: G-PERF | status: done | mode: arena
 - goal: halve peak activation memory under gradient accumulation.
 - why: after `backward()` returns, `self._gac_z` (`jepa.py:650`) and
   `self._cmc_pass["slots"]` (`jepa.py:767`) still hold **live autograd graphs**
@@ -659,7 +659,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   unless the caching holds.
 - report: `.agent-notes/task-34.md`
 
-### TASK-35 | group: G-FIX | status: todo | mode: solo
+### TASK-35 | group: G-FIX | status: done | mode: solo
 - LOST, NOT CLOSED. The orchestrator's own error destroyed the work; read this
   before re-dispatching it.
 - what happened: the worker's session was interrupted after it had staged a
