@@ -1,0 +1,383 @@
+{
+  "_meta": {
+    "what": "Measured parameter counts for every shipped config.",
+    "how": "sum(p.numel() for p in model.parameters()) over the model that src.train.create_model builds from the deep-merged config, with vocab_size=50304 (the tests/test_config_system.py:72 convention).",
+    "method_field": "'meta' = built on meta tensors, no allocation. 'cpu' = built for real, because a config with all twelve mechanisms on calls Tensor.item() which meta cannot service. The count is identical either way.",
+    "regenerate": "python scripts/results_apparatus.py table --recompute-params",
+    "invalidation": "keyed by sha256(defaults.yaml + this config); editing either invalidates that row automatically."
+  },
+  "configs": {
+    "config/ablations/all_core.yaml": {
+      "fingerprint": "2b04483149340b9f",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/cgn_on.yaml": {
+      "fingerprint": "fa88ce85d4fae857",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/cgn_spc.yaml": {
+      "fingerprint": "a44542f3623bcafe",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/cmc_on.yaml": {
+      "fingerprint": "5e1469370bf10e8c",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/gac_on.yaml": {
+      "fingerprint": "c08e01056439fbf7",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/jawp_alpha_0.yaml": {
+      "fingerprint": "7fc97e9ac42f1fc3",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/jawp_high_alpha.yaml": {
+      "fingerprint": "06fa3e62a4475515",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/jawp_k_fixed.yaml": {
+      "fingerprint": "eb3c814d5a726812",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/jawp_on.yaml": {
+      "fingerprint": "dbbf89af5edb1381",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/jawp_pcr.yaml": {
+      "fingerprint": "0bcc11c3635b9ef2",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/jawp_random_init.yaml": {
+      "fingerprint": "6b1c2137fe66f18b",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/jawp_swip.yaml": {
+      "fingerprint": "4d8abcaed2bfb3c3",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/no_cgn.yaml": {
+      "fingerprint": "a921d7ae88a7dfd5",
+      "total": 263129052,
+      "trainable": 139046364,
+      "method": "cpu"
+    },
+    "config/ablations/no_cmc.yaml": {
+      "fingerprint": "d927c03596bc5f53",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/no_decoder_loss.yaml": {
+      "fingerprint": "7db7cb67a120159f",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/no_future_loss.yaml": {
+      "fingerprint": "4e885f72c58f9dda",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/no_gac.yaml": {
+      "fingerprint": "635a5a11845ba16e",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/no_jawp.yaml": {
+      "fingerprint": "299fbbf3e6e8885b",
+      "total": 263076852,
+      "trainable": 138994164,
+      "method": "cpu"
+    },
+    "config/ablations/no_pcr.yaml": {
+      "fingerprint": "278186047fa6c1b1",
+      "total": 262617633,
+      "trainable": 138534945,
+      "method": "cpu"
+    },
+    "config/ablations/no_puc.yaml": {
+      "fingerprint": "fe6a7e6305212d74",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "meta"
+    },
+    "config/ablations/no_rdc.yaml": {
+      "fingerprint": "c878f436629c4d92",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/no_spc.yaml": {
+      "fingerprint": "c422fabe67e417c8",
+      "total": 262545388,
+      "trainable": 138462700,
+      "method": "cpu"
+    },
+    "config/ablations/no_sta.yaml": {
+      "fingerprint": "6df07c864dbee6fb",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/no_swip.yaml": {
+      "fingerprint": "d6136c4bffb73b62",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/no_wsd.yaml": {
+      "fingerprint": "20d3f1dbe1ffc440",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/no_wsr.yaml": {
+      "fingerprint": "b32003961d5501ba",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/none.yaml": {
+      "fingerprint": "238573b1de866a02",
+      "total": 261963265,
+      "trainable": 137880577,
+      "method": "meta"
+    },
+    "config/ablations/pcr_on.yaml": {
+      "fingerprint": "7763cbe41fbdcf7d",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/predictive_rank_on.yaml": {
+      "fingerprint": "173a624305b6e6c5",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/puc_on.yaml": {
+      "fingerprint": "baecacf876ef49ce",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/puc_rdc.yaml": {
+      "fingerprint": "7cababb68da6b024",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/rdc_on.yaml": {
+      "fingerprint": "344e6166dacba9a6",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/sigreg_only.yaml": {
+      "fingerprint": "afb0a19bda58afa3",
+      "total": 262021633,
+      "trainable": 137938945,
+      "method": "meta"
+    },
+    "config/ablations/spc_on.yaml": {
+      "fingerprint": "f3c1fbb2b38f718d",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/sta_gac.yaml": {
+      "fingerprint": "e3e75a07564dce12",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/sta_on.yaml": {
+      "fingerprint": "d6f9719e6d2131ae",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/sta_wsr.yaml": {
+      "fingerprint": "2b8b0fc8fccaaeb3",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/swip_on.yaml": {
+      "fingerprint": "ef31abe269036754",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/wsd_on.yaml": {
+      "fingerprint": "528c29d0518a327b",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/ablations/wsr_on.yaml": {
+      "fingerprint": "e4ae08845a63cd09",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/kaggle/data2vec_kaggle.yaml": {
+      "fingerprint": "d184ca3672636f70",
+      "total": 250526976,
+      "trainable": 126444288,
+      "method": "meta"
+    },
+    "config/kaggle/mlm_kaggle.yaml": {
+      "fingerprint": "b4d27aa057a0ff48",
+      "total": 162716160,
+      "trainable": 162716160,
+      "method": "meta"
+    },
+    "config/kaggle/textspanjepa_kaggle.yaml": {
+      "fingerprint": "8b63b2f0c799c0cf",
+      "total": 262021633,
+      "trainable": 137938945,
+      "method": "meta"
+    },
+    "config/scaling/base_140m.yaml": {
+      "fingerprint": "54389d0f0a8a72ba",
+      "total": 262021633,
+      "trainable": 137938945,
+      "method": "meta"
+    },
+    "config/scaling/devices/dev1_bs512.yaml": {
+      "fingerprint": "35d28002ef3c7cbc",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/scaling/devices/dev2_bs256.yaml": {
+      "fingerprint": "43cd8cfab036ac47",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/scaling/devices/dev4_bs128.yaml": {
+      "fingerprint": "aaf02cb78414d4de",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/scaling/devices/dev8_bs64.yaml": {
+      "fingerprint": "27f794d28a9d94c1",
+      "total": 263135220,
+      "trainable": 139052532,
+      "method": "cpu"
+    },
+    "config/scaling/large_300m.yaml": {
+      "fingerprint": "cf9119242c761046",
+      "total": 537990145,
+      "trainable": 284412929,
+      "method": "meta"
+    },
+    "config/scaling/small_100m.yaml": {
+      "fingerprint": "b24e9557481cc175",
+      "total": 170706561,
+      "trainable": 88947841,
+      "method": "meta"
+    },
+    "config/scaling/xsmall_30m.yaml": {
+      "fingerprint": "3ec4918edb50b8ed",
+      "total": 62509249,
+      "trainable": 32348353,
+      "method": "meta"
+    },
+    "config/tinystories/textspanjepa_tinystories.yaml": {
+      "fingerprint": "b134bed56fe31bea",
+      "total": 170706561,
+      "trainable": 88947841,
+      "method": "meta"
+    },
+    "config/wikitext/data2vec_wikitext_large.yaml": {
+      "fingerprint": "f540caf7d03e330e",
+      "total": 511351808,
+      "trainable": 257774592,
+      "method": "meta"
+    },
+    "config/wikitext/data2vec_wikitext_small.yaml": {
+      "fingerprint": "691f55706e01ce7d",
+      "total": 165157760,
+      "trainable": 83399040,
+      "method": "meta"
+    },
+    "config/wikitext/data2vec_wikitext_train.yaml": {
+      "fingerprint": "a9185fac475ac442",
+      "total": 250526976,
+      "trainable": 126444288,
+      "method": "meta"
+    },
+    "config/wikitext/data2vec_wikitext_xsmall.yaml": {
+      "fingerprint": "aeb7b8691162dda8",
+      "total": 60912768,
+      "trainable": 30751872,
+      "method": "meta"
+    },
+    "config/wikitext/mlm_wikitext_base.yaml": {
+      "fingerprint": "d13dcc234a83845c",
+      "total": 162716160,
+      "trainable": 162716160,
+      "method": "meta"
+    },
+    "config/wikitext/mlm_wikitext_large.yaml": {
+      "fingerprint": "94da90a3c8642bcc",
+      "total": 305088512,
+      "trainable": 305088512,
+      "method": "meta"
+    },
+    "config/wikitext/mlm_wikitext_small.yaml": {
+      "fingerprint": "1e574613d0a98d1a",
+      "total": 113953280,
+      "trainable": 113953280,
+      "method": "meta"
+    },
+    "config/wikitext/mlm_wikitext_xsmall.yaml": {
+      "fingerprint": "efd8e856442bd7e8",
+      "total": 49477632,
+      "trainable": 49477632,
+      "method": "meta"
+    },
+    "config/wikitext/textspanjepa_wikitext_base.yaml": {
+      "fingerprint": "177d08568e70dfa0",
+      "total": 262021633,
+      "trainable": 137938945,
+      "method": "meta"
+    },
+    "config/wikitext/textspanjepa_wikitext_small.yaml": {
+      "fingerprint": "76826f7c2626b890",
+      "total": 170706561,
+      "trainable": 88947841,
+      "method": "meta"
+    }
+  }
+}
