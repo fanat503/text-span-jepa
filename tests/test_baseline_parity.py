@@ -37,6 +37,9 @@ that an architecture change of any size registers as a failure.
 
 from __future__ import annotations
 
+import contextlib
+import re
+
 import pytest
 import torch
 
@@ -390,3 +393,316 @@ class TestFalseGuaranteeIsGone:
             text = fh.read()
         for figure in ("81,758,720", "32,194,560", "113,953,280", "88,947,841", "1.281"):
             assert figure in text, f"header lost the measured figure {figure}"
+
+
+# ═══════════════════════════════════════════════════════════════════
+# All three arms must log the same KIND of parameter count
+# ═══════════════════════════════════════════════════════════════════
+
+
+@contextlib.contextmanager
+def _meta_device():
+    """Build on meta tensors: exact parameter shapes, zero allocation.
+
+    Same trick as `tests/test_config_system.py::_meta_device`. The encoder calls
+    `torch.linspace(...).item()`, which meta tensors cannot service, so
+    `linspace` is pinned to CPU for the duration. Meta is what makes the second
+    and third shapes below affordable at all -- the wide one is a 0.5GB
+    allocation per arm otherwise, on a shared box.
+    """
+    original = torch.linspace
+
+    def cpu_linspace(*a, **k):
+        k = dict(k)
+        k.setdefault("device", "cpu")
+        return original(*a, **k)
+
+    torch.linspace = cpu_linspace
+    try:
+        with torch.device("meta"):
+            yield
+    finally:
+        torch.linspace = original
+
+
+#: The three arms `src/train.py` knows how to build. This is the whole comparison
+#: surface: `create_model` returns one of exactly these, into one log directory.
+ARMS = ("text_span_jepa", "mlm", "data2vec")
+
+#: (vocab_size, max_seq_len, embed_dim, encoder_depth, num_heads). Three shapes,
+#: deliberately unlike each other, because one shape can be an accident:
+#:
+#:   tiny  -- vocab dominated by the head, depth 2, so mechanisms are a rounding
+#:            error and the arms nearly agree;
+#:   mid   -- the shipped mini config's proportions with a small vocab, so the
+#:            MLM head stops dominating;
+#:   wide  -- V=50304 / D=768 / depth 12, the shape where the three logged
+#:            numbers were 262,021,633 / 123,689,472 / 85,646,592, i.e. 3.1x
+#:            apart while all three were 2x-3x wrong about the same quantity.
+SHAPES = [
+    (200, 16, 32, 2, 4),
+    (2000, 64, 96, 3, 6),
+    (50304, 512, 768, 12, 12),
+]
+SHAPE_IDS = ["tiny", "mid", "wide"]
+
+
+def _model_cfg(dim, depth, heads):
+    """A model config that is valid for all three arms.
+
+    Keys the baselines ignore are absorbed by their `**kwargs`, so one dict
+    builds any arm. `create_model` is the production path: it is what
+    `src/train.py` calls, so going through it tests the wiring and not just the
+    classes.
+    """
+    return {
+        "embed_dim": dim,
+        "encoder_depth": depth,
+        "num_heads": heads,
+        "mlp_ratio": 2.0,
+        "predictor_embed_dim": dim // 2,
+        "predictor_depth": 2,
+        "future_offsets": (1, 2),
+        "num_refine_steps": 1,
+        "jspace_k_workspace": 2,
+    }
+
+
+def _build_arm(arm, vocab, seq, dim, depth, heads):
+    """One arm at one shape, on meta tensors."""
+    from src.train import create_model
+
+    with _meta_device():
+        return create_model(arm, _model_cfg(dim, depth, heads), vocab, seq, device="meta")
+
+
+def _build_all(vocab, seq, dim, depth, heads):
+    return {arm: _build_arm(arm, vocab, seq, dim, depth, heads) for arm in ARMS}
+
+
+def _independent_total(mod) -> int:
+    """Recount the module's parameters without `mod.parameters()`.
+
+    An independent walk, so an assertion built on it can catch a
+    `get_num_params()` that reflects whatever its author happened to walk
+    rather than the model. `nn.Module.parameters()` deduplicates shared tensors;
+    so does this, via `id()`.
+    """
+    seen: set = set()
+    total = 0
+    for _, child in mod.named_modules():
+        for p in child.parameters(recurse=False):
+            if id(p) not in seen:
+                seen.add(id(p))
+                total += p.numel()
+    return total
+
+
+def _independent_trainable(mod) -> int:
+    return _independent_total(mod) - sum(
+        p.numel() for m in mod.modules() for p in m.parameters(recurse=False) if not p.requires_grad
+    )
+
+
+class TestLoggedQuantityIsOneKind:
+    """The three arms must log the same KIND of number: the model's size.
+
+    What broke
+    ----------
+    `src/train.py` logs one line, `Model parameters (get_num_params())`, for
+    whichever arm it built. `TextSpanJEPA.get_num_params()` defaults to the
+    whole model. `MLMBaseline` and `Data2VecTextBaseline` defaulted to
+    `non_embedding=True`, each returning its encoder-minus-embeddings plus its
+    own head -- and data2vec's version also dropped the target encoder, the
+    single largest tensor in that arm. Three arms in one comparison directory
+    therefore logged three different quantities, 3.1x apart at the wide shape.
+
+    Before that, all three were wrong in the same direction, so a comparison was
+    at least consistently wrong. Inconsistently wrong is the harder state to
+    catch and the easier one to publish, which is why this is a guard and not a
+    comment.
+
+    What KIND means here
+    -------------------
+    The quantity is *the number of scalar parameter tensors the module owns* --
+    what is allocated, optimised around and written to the checkpoint. That is
+    one definition, written down once, here. Every arm must satisfy it.
+
+    What this class deliberately does NOT assert
+    --------------------------------------------
+    It asserts nothing about the three numbers being close, or ordered, or
+    within any factor of each other. They are three different architectures; a
+    closeness assertion would be the wrong test, it would be red for a legitimate
+    refactor, and it would still pass under a mutation that shifted all three by
+    the same wrong amount. `test_the_numbers_really_do_differ` below is what
+    keeps this honest in the other direction: if a future change made the three
+    counts coincide, that is a change of architecture, and this class should
+    fail loudly rather than pass silently.
+
+    At three shapes, not one
+    -----------------------
+    A single shape can be satisfied by accident: the defect it exists to catch
+    depends on which tensors dominate, and the wide shape is the one where the
+    three counts spread out. `tiny` has the head dominating, `mid` sits between.
+    One of the three is a coincidence; a property that holds at all three is a
+    property of the definitions.
+    """
+
+    # ---- the KIND itself, per arm, at every shape ----
+
+    @pytest.mark.parametrize("shape", SHAPES, ids=SHAPE_IDS)
+    def test_logged_count_is_the_models_own_parameter_tally(self, shape):
+        """Each arm's bare `get_num_params()` is the sum over its parameters.
+
+        Recounted independently of the method body. For data2vec this is also
+        the test that the frozen target encoder is inside the number: it is the
+        arm's largest tensor, and dropping it is exactly what the old default
+        did.
+        """
+        for arm, mod in _build_all(*shape).items():
+            reported = mod.get_num_params()
+            assert reported == _independent_total(mod), (
+                f"{arm}.get_num_params() returned {reported}, but the module holds "
+                f"{_independent_total(mod)} parameters. train.py logs this number "
+                f"as 'Model parameters', so it must be the whole model."
+            )
+
+    @pytest.mark.parametrize("shape", SHAPES, ids=SHAPE_IDS)
+    def test_all_three_arms_satisfy_one_definition_at_one_shape(self, shape):
+        """The headline case, stated as the card states it.
+
+        One shape, all three arms, one definition. Printed as a table on failure
+        because the failure mode is exactly a reader comparing three numbers and
+        seeing three different meanings.
+        """
+        arms = _build_all(*shape)
+        kinds = {arm: (mod.get_num_params(), _independent_total(mod)) for arm, mod in arms.items()}
+        mismatched = {a: (r, t) for a, (r, t) in kinds.items() if r != t}
+        assert not mismatched, (
+            "these arms log a quantity that is not the model's parameter count "
+            f"(logged, actual): {mismatched}. Three different architectures may "
+            "legitimately have different counts; they may not report different "
+            "KINDINGS of count."
+        )
+        assert len(ARMS) == 3
+
+    # ---- what KIND is not, so the flag cannot quietly redefine the default ----
+
+    @pytest.mark.parametrize("shape", SHAPES, ids=SHAPE_IDS)
+    def test_logged_count_is_not_the_non_embedding_variant(self, shape):
+        """The bare call must not be the `non_embedding=True` subtraction.
+
+        Every arm owns at least one embedding table here, so this separates the
+        two conventions. It is the assertion that fails if a default flips back
+        to `True` -- the shape of the original defect -- while leaving a module
+        that correctly reports the total untouched.
+        """
+        for arm, mod in _build_all(*shape).items():
+            assert mod.get_num_params() > mod.get_num_params(non_embedding=True), (
+                f"{arm}.get_num_params() equals its non_embedding count, so the "
+                "default is reporting the convention, not the model"
+            )
+
+    @pytest.mark.parametrize("shape", SHAPES, ids=SHAPE_IDS)
+    def test_non_embedding_variant_is_the_total_minus_the_embedding_tables(self, shape):
+        """The flag stays available and keeps its documented meaning.
+
+        Both encoders' tables for the arms that hold a frozen copy, one for MLM
+        (it has no second encoder). Mirrors
+        `TestParamCountReporting::test_non_embedding_variant_drops_both_embedding_tables`
+        for JEPA, which this file cannot see.
+        """
+        for arm, mod in _build_all(*shape).items():
+            # One encoder for the MLM arm, two for the arms that keep a frozen
+            # copy. Counted rather than assumed, so adding or removing a teacher
+            # does not silently move the expected subtraction.
+            encoders = [mod.encoder]
+            target = getattr(mod, "target_encoder", None)
+            if target is not None:
+                encoders.append(target)
+            per_enc = sum(
+                enc.token_embedding.weight.numel() + enc.pos_embedding.numel() for enc in encoders
+            )
+            assert per_enc > 0
+            total = mod.get_num_params()
+            assert mod.get_num_params(non_embedding=True) == total - per_enc, (
+                f"{arm}: non_embedding=True must drop the token and position "
+                f"embeddings of all {len(encoders)} encoder(s) it holds"
+            )
+
+    # ---- the API the trainer's second log line depends on ----
+
+    def test_every_arm_exposes_the_trainable_count(self):
+        """`Data2VecTextBaseline` had no `get_num_params_trainable()` at all.
+
+        So of the three arms, one reported trainable capacity and two did not:
+        the startup log's second line was not available for every arm it prints
+        beside. All three now answer the same question the same way, which is
+        what a comparison needs -- different architectures, same definition.
+        """
+        shape = SHAPES[0]
+        for arm, mod in _build_all(*shape).items():
+            assert hasattr(mod, "get_num_params_trainable"), (
+                f"{arm} has no get_num_params_trainable(); train.py prints the "
+                "trainable line for every arm, so every arm must be able to "
+                "report it"
+            )
+            assert mod.get_num_params_trainable() == _independent_trainable(mod), (
+                f"{arm}.get_num_params_trainable() is not the parameter count of "
+                "the module's gradient-carrying parameters"
+            )
+
+    def test_trainable_count_is_below_the_logged_count_where_a_teacher_is_frozen(self):
+        """The two lines mean different things, on purpose.
+
+        JEPA and data2vec both hold a frozen copy, so trainable < total there.
+        MLM has no frozen tensor, so the two coincide for it -- and that
+        coincidence is exactly why the counts must not be compared blind.
+        """
+        shape = SHAPES[1]
+        arms = _build_all(*shape)
+        for arm in ("text_span_jepa", "data2vec"):
+            mod = arms[arm]
+            assert mod.get_num_params_trainable() < mod.get_num_params()
+        assert arms["mlm"].get_num_params_trainable() == arms["mlm"].get_num_params()
+
+    # ---- the coupling that actually put the number in the log ----
+
+    def test_train_py_logs_the_bare_call(self):
+        """Why the SIGNATURE default is what this card is about.
+
+        `src/train.py` is not editable here, so the coupling is pinned from this
+        side: it calls `model.get_num_params()` with no arguments. That is what
+        makes the default the logged quantity, and it is why "just flip the
+        default" is a real fix rather than a cosmetic one.
+        """
+        from src.train import __file__ as train_path
+
+        with open(train_path, encoding="utf-8") as fh:
+            src = fh.read()
+        bare = re.search(r"=\s*model\.get_num_params\(\s*\)", src)
+        assert bare, (
+            "src/train.py no longer calls model.get_num_params() with no "
+            "arguments; if it now passes a flag, the logged quantity and the "
+            "KIND pinned here are different numbers"
+        )
+
+    # ---- the counterweight: KIND is not closeness ----
+
+    def test_the_numbers_really_do_differ(self):
+        """Guard the guard.
+
+        If a future refactor made all three counts coincide, "same KIND" would
+        pass without saying anything. They must remain distinct -- three
+        architectures do not have equal parameter counts -- and this is the test
+        that says so, so the KIND assertions cannot be satisfied by making the
+        number the same instead of the meaning.
+        """
+        shape = SHAPES[2]
+        logged = {arm: mod.get_num_params() for arm, mod in _build_all(*shape).items()}
+        assert len(set(logged.values())) == 3, (
+            f"all three arms reported the same count {logged}; either the arms "
+            "became the same architecture or the count stopped measuring them"
+        )
+        # And they are allowed to be far apart: no upper bound on the spread is
+        # asserted, because none is defensible.

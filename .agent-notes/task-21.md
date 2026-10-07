@@ -1,281 +1,341 @@
-# TASK-21 — cut the per-step device syncs in jawp / spc / pcr
+# TASK-21 — halve peak activation memory under gradient accumulation
 
-**status: done.** Branch `agent/task-21`, worktree `C:\dev\wt-21`, base
-`agent/wave-4` (8dbbb37). Commit `aa77896`. Not pushed.
+**status: done, and the card's goal is NOT met. It is not reachable inside
+`files_allowed`.** Branch `agent/task-21b`, worktree `C:\dev\wt-21`, base
+`main` @ `11bcbd0`. Commit `5197554`. Not pushed.
 
----
+**The card's premise is wrong, and I can prove it.** `self._gac_z` and
+`self._cmc_pass["slots"]` are *not* what pins a micro-batch's activations, so
+releasing them cannot halve anything. Measured attribution, 4-micro-batch
+gradient accumulation, B=4 T=64 D=128, `lambda_gac=lambda_cmc=0.01` (repo
+defaults):
 
-## 0. Card-numbering discrepancy — read this first
+| | peak live-graph |
+|---|---|
+| A. today's `train.py` shape | **110.21 MB** |
+| B. A + `model._gac_z`/`_cmc_pass` also dropped at step end | **110.21 MB** |
+| C. no cross-step references at all | **74.62 MB** |
+| | |
+| **attributable to `model._gac_z` + `model._cmc_pass`** | **+0.00 MB** |
+| **attributable to `src/train.py`'s locals** | **+35.59 MB** |
 
-The card I was given says "read card `### TASK-21` in TASKS.md", but that card
-in `TASKS.md` is a **different task**: it is about halving peak activation
-memory under gradient accumulation by dropping live autograd graphs from
-`jepa._gac_z` / `jepa._cmc_pass["slots"]`, its `files_allowed` is
-`src/models/jepa.py`, and it explicitly notes `jepa.py` collides with TASK-08.
-
-The goal and file list in my spawn prompt ("cut the device syncs in the
-per-step path, in `src/models/jawp.py`, `src/models/spc.py`, `src/models/pcr.py`")
-are a **verbatim match for `### TASK-20`** in `TASKS.md` — same goal, same
-three files, same forbidden list, and the same note about
-`mechanisms.py:461,475,499`.
-
-I did **not** do the TASKS.md TASK-21 (gac/cmc graph retention), because that
-work is in `src/models/jepa.py`, which my prompt forbids and which another
-worker is expected to own this tick. I did the card I was actually handed:
-the sync work on the three files I own. **The real TASK-21 (jepa.py memory) is
-still todo and still needs an owner who may touch `jepa.py`.** Flagging rather
-than improvising, per the "out of bounds means stop" rule.
-
----
-
-## 1. Syncs removed per step
-
-Method: the card's own — patch `torch.Tensor.item` / `.tolist` / `.__bool__`
-and record the calling frame's file, then run one step through
-`jawp.compute_loss` + `spc.forward` + `pcr.forward` + backward + all three
-retractions + `project_tangent_gradient`, on tiny tensors (D=64, N=8, B=8,
-n_bands=8, n_levels=3).
-
-| | host reads / step | over the 3-step loop | in my 3 files |
-|---|---|---|---|
-| **before** | **62** | 189 | 186 |
-| **after**  | **8**  |  24 |  21 |
-
-**Net: 54 host reads removed per step** (62 → 8), and — the more useful
-property — **the count no longer scales with the loop bounds.** Before, it grew
-linearly with `n_bands` (3 reads/band) and `n_levels` (4 reads/level); after,
-it is constant. Measured directly: the SPC mutant count was
-`{4 bands: 11, 8: 19, 16: 35}` before batching and `4 == 8 == 16` after; the PCR
-mutant count was `{1 level: 5, 2: 9, 3: 13}` and is `1 == 2 == 3` after.
-
-Per file, per step:
-
-| file | before | after | what the syncs were |
-|---|---|---|---|
-| `spc.py` | 31 | 7 | 3 per band (`band_residuals`, `band_losses`, target var) + 5 scalars + 2 `.tolist()` |
-| `pcr.py` | 21 | 1 | 4 per level (correction norm, gate, r_energy, total energy) + 3 overall + 3 `level_offsets[level].item()` |
-| `jawp.py` | 13 | 1 | 9 `.item()` in `compute_loss`, 2 `bool(tensor)` guards, 2 `active_k.item()` in the retraction path |
-
-The surviving 8 reads are **batched vector reads** — one `.tolist()` per module
-(`jawp:476`, `pcr:419`, `spc:429,430,477,486,489`), plus one outside my files
-(the probe's own `total.item()`, standing in for `train.py:1506`).
-
-**The wall-clock claim is UNVERIFIED on this host.** There is no CUDA here, so
-a synchronisation cannot be observed or timed. The sync count above is a real,
-exactly-reproducible number; "this makes training faster" is an inference, not
-a measurement. I did not time anything and do not claim a speedup.
+`src/train.py` snapshots both attributes into `_gac_primary` (`:1321`),
+`_cmc_primary` (`:1326`) and `_cmc_secondary` (`:1364`), and rebinds them only
+*after* the next pass has already built its graph. Those locals are the last
+reference; the model attributes never are. Clearing them is a no-op — I shipped
+it and measured exactly zero.
 
 ---
 
-## 2. Bit-identity — how the info dict types changed, and every consumer
+## 1. Peak memory before / after, and the measurement method
 
-### The rule I used
-`torch.stack([...]).tolist()[i]` is bit-identical to that element's own
-`.item()`. I verified this rather than assuming it: 3000 random 0-dim tensors
-each in fp32 / fp64 / bf16 / fp16, **0 mismatches**, and a `torch.stack` of
-mixed dtypes promotes to the *widest* input (a widening, so lossless). This
-is why the batched reads are value-preserving and why I added **no dtype
-casts** — an explicit `.to(torch.float32)` would have *narrowed* an fp64
-module.
+### Method (and a trap I fell into first)
 
-### Type changes in `info`
-
-**None of the reported values changed type.** Every key that was a Python
-`float`/`int`/`list[float]` still is. That was a deliberate choice: the card
-warned that a float may become a 0-dim tensor and that consumers must be found
-first. I found them, and then did not need to change any type — which removes
-the whole class of consumer risk (JSON serialisation, `math.isfinite`,
-`f"{v:.3f}" all keep working unchanged).
-
-The two exceptions, both deliberate:
-
-| value | before | after | why |
-|---|---|---|---|
-| `jawp._compute_pca_alignment` **return** | `float` | 0-dim tensor | private staticmethod, one caller. The `math.isfinite` + `min/max` policy moved to the host in `compute_loss`, on the same value, so `info["pca_alignment"]` is still a float. |
-| `spc._update_running_statistics` **arg** | `list[float]` | `(n_bands,)` tensor | private, one caller. The buffer values are unchanged (`torch.equal`, see §3). |
-
-### Consumers checked
-
-| consumer | what it does | impact |
-|---|---|---|
-| `mechanisms.py:451,470,445` | `info.update({f"jawp_{k}": v …})` | none — pass-through |
-| `jepa.py:865,871,887` | `loss_dict.update({f"jawk_{k}": v …})` | none — pass-through |
-| `train.py:1540-1543` | `f'{loss_dict.get("jawk_workspace_utilization",0):.3f}'` | none — still a float. **This is where a sync belongs**: logging runs every `log_freq` steps, not every step, so deferring the read here is correct, not hidden. I did not move it. |
-| `train.py:1556-1569` `CSVLogger.log` | `tv[0] % tv[1]` | none — the logged keys (`loss_span`, …) are untouched by this card |
-| `interp/ablation.py:368` | `loss = loss - weight * info[key]` | none — `LOSS_TERM_ABLATIONS` covers only `loss_span/future/decoder/variance/covariance` |
-| `tests/test_jawp.py:159,166-169,178` | `<`, chained compare, `math.isfinite(v)` over every info value | none — values are still floats |
-| `tests/test_pcr.py:45,338` | `>= 0` | none |
-| `tests/test_spc.py:476` | `"spc_band_weights" in info` | none — still `list[float]` |
-| `visualization.py:984` `plot_spc_band_analysis` | takes arrays | none — fed by the smoke test, not by `info` |
-
-**Where the sync legitimately belongs:** `train.py:1506` (`total_loss.item()`
-for the meter) and the `:.3f` log formats. Both run at logging cadence, not per
-step. I did not touch them — `train.py` is forbidden — and I am not claiming
-they are optimal, only that they are not the per-step path.
-
-### The one that would have moved a number
-
-`spc_uniform_loss` was `sum(<python floats>) / n_bands`. My first version used
-`band_residuals_t.sum() / n_bands`. **Measured divergence: up to 1.1e-6 (fp32)
-and 2.7e-2 (bf16)** — Python's `sum` accumulates in float64 left-to-right,
-torch's `.sum()` reduces in the tensor dtype in a different order. Reverted to
-the Python `sum` over the already-materialised list, which costs **zero extra
-syncs** (that list comes from the batched read anyway). Same reasoning kept
-jawp's `1.0 - x`, `max(0.0, x)` and pcr's `+ 1e-10` and fraction division on
-the host, and spc's `max(tv, eps)` as `clamp` (verified equivalent on an
-exhaustive bf16 grid and an fp32 log grid: 0 mismatches, and both propagate
-NaN the way `max(nan, eps)` does).
-
----
-
-## 3. Verify (full paste)
+**Do not measure this with `torch.autograd.graph.saved_tensors_hooks`.** My
+first four probes used it and reported ~54 MB retained *per micro-batch*,
+growing without bound. That was the instrument, not the model. Pure-torch
+control, 400 iterations of `y = relu(x@w) @ w.T .sum()` with
+`saved_tensors_hooks` installed:
 
 ```
-$ & $PY tools\rt.py tests/test_sterility.py tests/test_mechanism_wiring.py tests/test_host_reads.py tests/test_spc.py tests/test_pcr.py tests/test_jawp.py
-rt.py: C:\Users\...\python.exe -m pytest -q --no-header -p no:cacheprovider tests/test_sterility.py tests/test_mechanism_wiring.py tests/test_host_reads.py tests/test_spc.py tests/test_pcr.py tests/test_jawp.py
-rt.py: threads=1  total_budget=90s  slow_ok=False
-============================= test session starts =============================
-collected 178 items
+  retain_graph=False: rss   188.2 ->   188.2MB (+   0.2MB)   HOOK METER says      0.0MB
+  retain_graph=True : rss   188.2 ->  1790.4MB (+1602.1MB)   HOOK METER says    800.0MB
+```
 
-tests\test_sterility.py ................................                 [ 56%]
-tests\test_mechanism_wiring.py ......                                    [ 66%]
-tests\test_host_reads.py ...................                             [100%]
-tests\test_spc.py ................................                       [100%]
-tests\test_pcr.py ................................                       [100%]
-tests\test_jawp.py .....................................................  [100%]
+and the same 400 iterations with **no hooks at all**:
+
+```
+  retain_graph=False: rss 178.7 -> 188.1MB (+ 9.4MB over 400 iters)
+  retain_graph=True : rss 188.1 -> 188.1MB (+ 0.0MB over 400 iters)
+```
+
+`retain_graph=True` leaks nothing on its own (+0.0 MB), and the hooks
+manufactured 1.6 GB. Every "retained MB" number from probes 1–4 was void;
+I discarded them and re-measured.
+
+**What I use instead.** A census of live autograd-graph tensors, which is
+undistorted because it only *reads*:
+
+```python
+gc.collect()                      # required: reference cycles defer collection,
+                                  # and without it the numbers are uncollected
+                                  # garbage rather than retention
+n = b = 0
+for o in gc.get_objects():
+    if type(o) is torch.Tensor and o.grad_fn is not None:
+        n += 1; b += o.numel() * o.element_size()
+```
+
+Sampled at three points per micro-batch (after the primary forward, after the
+CMC secondary forward, at end of step) and maximised. The harness
+(`.agent-notes/_probe_task21s.py`) mirrors `src/train.py:1311-1420` line for
+line, **including the named `scaled_loss` local at `:1382`** — an earlier
+version of my harness inlined it and under-reported the "today" arm by 16.3 MB,
+which is itself the lesson: peak here is set by which references the *caller*
+keeps, so a harness that drops one is measuring a different program. All
+numbers below reproduced bit-for-bit across 3 consecutive runs.
+
+### Before / after
+
+`after` for my change is `+0.00 MB` on the main path, by the attribution above.
+The two rows that show real movement are the empty-batch path (mine) and the
+`train.py` patch (not mine):
+
+| config | today | after my change | after the `train.py` patch |
+|---|---|---|---|
+| `lambda_gac=0.01, lambda_cmc=0.01` (defaults) | 110.21 MB | 110.21 MB (**+0.00**) | 74.62 MB (−35.59, −32%) |
+| `lambda_cmc=0` (no CMC) | 71.50 MB | 71.50 MB (**+0.00**) | **35.90 MB (−35.60, −50%)** |
+| `lambda_gac=0` (no GAC) | 55.22 MB | 55.22 MB (+0.00) | 55.22 MB (+0.00) |
+| both 0 (floor: one micro-batch) | 35.94 MB | — | 35.90 MB |
+
+The `lambda_cmc=0` row is the clean 2× → 1× the card asked for, and it lands
+exactly on the floor. It is a **one-line `train.py` change**, not a `jepa.py` one.
+
+### What my change actually buys: the empty-batch path
+
+`compute_loss_with_targets` returns at `if masked_input_ids.size(0) == 0:`
+*before* the stash is rewritten, so base code pinned the entire previous pass
+across the boundary. Measured, with the model attributes as the only reference:
+
+```
+BASE :  after EMPTY batch, stashes are: gac='live-graph-tensor' cmc='dict'
+        after empty batch, live-graph census: (124, 19.31MB)
+FIXED:  after EMPTY batch, stashes are: gac=None cmc=None
+        after empty batch, live-graph census: (0, 0.00MB)
+```
+
+Narrow (it needs a zero-row batch — reachable under `DistributedSampler` with
+uneven ranks) but real, and it is the only retention `jepa.py` owns.
+
+---
+
+## 2. Gradient correctness — which of the two is used in a backward
+
+**Both. Neither may be detached.** The card's warning was well aimed: a
+`.detach()` here saves memory and silently deletes a gradient, raising nothing.
+
+### `_gac_z` — consumed by a real backward
+
+`src/models/gac.py:162,197,200` builds the bonus as
+`gamma * warmup * (relu(tau - gn) * (z_flat**2).mean(0) * starved).sum()`. The
+`z_flat**2` is **not** detached, so `loss_gac.requires_grad` is True and
+`src/train.py:1412` runs `loss_gac.backward()`, which re-enters the predictor and
+the online encoder through these slots. That is also why `:1393-1395` passes
+`retain_graph=gac_wiring`. The exploration gradient is not optional — it is the
+mechanism (`proofs/gac.md`, "No Gradient Dead Zones").
+
+Proven by asserting **gradients move**, not shapes: snapshot every
+`p.grad`, run only `loss_gac.backward()`, and require that parameters changed.
+Counterfactual asserted too: `model.gac(z_ref.detach(), gn, step)` yields
+`requires_grad=False`.
+
+```
+MUTATION 2: self._gac_z = span_preds.detach()   ->  5 failed, 5 passed
+  FAILED TestStashesStayLive::test_gac_z_is_graph_attached_after_the_forward
+  FAILED TestGacExplorationGradient::test_exploration_backward_reaches_the_encoder
+  FAILED TestGacExplorationGradient::test_detaching_the_stash_silently_deletes_that_gradient
+  FAILED TestEarlyRelease::test_empty_batch_does_not_pin_the_previous_pass
+  FAILED TestEarlyRelease::test_release_does_not_cost_the_current_pass_its_stash
+```
+
+### `_cmc_pass["slots"]` — consumed by a real backward
+
+`compute_cmc_between_passes` (which *is* in my file, `jepa.py:978-979`)
+deliberately takes the primary detached (`slots_det`) and the secondary **live**:
+`z2 = _scatter(secondary_pass, live=True)`. `z2` enters `total_loss` at
+`train.py:1370`, so the gradient reaches the encoder through the second mask.
+Detaching the secondary's slots deletes that path.
+
+```
+MUTATION 3: "slots": span_preds.detach()        ->  4 failed, 6 passed
+  FAILED TestStashesStayLive::test_cmc_slots_are_graph_attached_after_the_forward
+  FAILED TestCmcSecondaryGradient::test_secondary_path_moves_encoder_gradients
+  FAILED TestCmcSecondaryGradient::test_detaching_secondary_slots_silently_deletes_that_gradient
+  FAILED TestEarlyRelease::test_release_does_not_cost_the_current_pass_its_stash
+```
+
+My first version of `test_secondary_path_moves_encoder_gradients` backpropped
+`total1 + lambda_cmc * loss_cmc` together, so encoder gradients stayed non-zero
+even with the secondary detached and the test **survived mutation 3**. Fixed by
+backpropping the CMC term alone; re-run against the same mutant, it went red.
+
+---
+
+## 3. The out-of-scope fix, for whoever owns `src/train.py`
+
+`src/train.py` is forbidden for this card. The patch is at the **end** of the
+loop body, after the GAC exploration backward at `:1412-1418` and before the next
+iteration's forward at `:1311`:
+
+```python
+# train.py, after the `if gac_wiring:` block
+_gac_primary = _cmc_primary = _cmc_secondary = None
+```
+
+Measured effect (same harness): `lambda_cmc=0` 71.50 → **35.90 MB, −50%, exactly
+on the floor**; defaults 110.21 → 74.62 MB (−32%).
+
+I also tested a second candidate — demoting the primary dict's live twin right
+after `:1326`, since the bridge only ever reads `primary["slots_det"]`:
+
+```python
+if _cmc_primary is not None:
+    _cmc_primary = {**_cmc_primary, "slots": _cmc_primary["slots_det"]}
+```
+
+**It buys −0.04 MB — nothing.** So the primary's live `slots` entry is not the
+cost; the cost is that the primary *graph* must stay alive while the secondary
+forward builds, which is structural to CMC's two-pass design and not fixable by
+demoting one key.
+
+---
+
+## 4. Verify (full paste)
+
+Card's verify command:
+
+```
+$ & $PY tools\rt.py tests\test_activation_release.py tests\test_mechanism_wiring.py tests\test_gac.py tests\test_cmc.py --slow
+rt.py: C:\Users\...\python.exe -m pytest -q --no-header -p no:cacheprovider tests\test_activation_release.py tests\test_mechanism_wiring.py tests\test_gac.py tests\test_cmc.py
+rt.py: threads=1  total_budget=90s  slow_ok=True
+============================= test session starts =============================
+collected 67 items
+
+tests\test_activation_release.py ..........                              [ 14%]
+tests\test_mechanism_wiring.py ......                                    [ 23%]
+tests\test_gac.py ..................                                     [ 50%]
+tests\test_cmc.py .................................                      [100%]
 
 ============================== warnings summary ===============================
-tests/test_mechanism_wiring.py::TestGACHook::test_stashed_slots_receive_grads
-tests/test_mechanism_wiring.py::TestLiveWorkspaceViews::test_regularizers_give_workspace_grads
-tests/test_mechanism_wiring.py::TestLiveWorkspaceViews::test_retraction_projects_grad_inplace_and_keeps_orthogonal
-  src\models\wsr.py:285: UserWarning: WSR mode='gradient': no dL/dQ is available (Q.is_leaf=False,
-  Q.grad=n/a (non-leaf), set_lagged_gradient() never called). ... Call wsr.set_lagged_gradient(...)
+tests\test_mechanism_wiring.py::TestGACHook::test_stashed_slots_receive_grads
+tests\test_mechanism_wiring.py::TestLiveWorkspaceViews::test_regularizers_give_workspace_grads
+tests\test_mechanism_wiring.py::TestLiveWorkspaceViews::test_retraction_projects_grad_inplace_and_keeps_orthogonal
+  C:\dev\wt-21\src\models\wsr.py:285: UserWarning: WSR mode='gradient': no dL/dQ is available (Q.is_leaf=False, ...)  [pre-existing]
 
-====================== 178 passed, 3 warnings in 10.64s =======================
+======================= 67 passed, 3 warnings in 0.99s ========================
 ```
 
-`tests/test_sterility.py` (38 → included above) **passes**; the sterility
-property is untouched. The 3 warnings are pre-existing `wsr.py` warnings, not
-mine. `black --check` and `ruff check` on all four files: clean.
-
-Downstream consumers of these `info` dicts, run separately:
-`test_wsd/test_wsr/test_swip/test_cgn` → **95 passed**;
-`test_ablation_module/test_run_comparison/test_determinism/test_training_state_guards`
-→ **111 passed, 1 xfailed** (the xfail is pre-existing).
-
-### Independent bit-identity probe (scratch, gitignored)
-
-Comparing the new code against a verbatim transcription of the pre-change logic:
+My prompt's verify command, run **before** any edit as a baseline and again
+after — identical, 187 passed both times:
 
 ```
-JAWP: info dict, new vs original (exact float equality)
-  jawp mismatches: 0
-  zero-input branch (pred==target==0):
-   workspace_cosine: 0.0 == 0.0 -> True
-   predictive_relevance: 1.0 == 1.0 -> True
-   pca_alignment: 0.0 == 0.0 -> True
-SPC:  spc info mismatches: 0
-SPC running-statistics buffers: vars equal=True predab equal=True   (3 configs)
-PCR:  pcr mismatches: 0   (and the refined tensor is torch.equal in every case)
-level_offsets host mirror == buffer, for every construction: match=True
+$ & $PY tools\rt.py tests\test_model.py --slow tests\test_sterility.py
+============================= test session starts =============================
+collected 187 items
+
+tests\test_model.py ....................................................  [ 27%]
+........................................................................  [ 66%]
+...............................                                          [ 82%]
+tests\test_sterility.py ................................                 [100%]
+
+====================== 187 passed, 4 warnings in 24.74s =======================   (baseline, before edit)
+====================== 187 passed, 4 warnings in 22.89s =======================   (after edit)
 ```
+
+Downstream consumers of the stash, run separately:
+
+```
+$ & $PY tools\rt.py tests\test_activation_release.py tests\test_baseline_parity.py tests\test_target_centering_state.py tests\test_seed.py
+collected 80 items
+tests\test_activation_release.py ..........                              [ 12%]
+tests\test_baseline_parity.py .......................                    [ 41%]
+tests\test_target_centering_state.py ..........                          [ 53%]
+tests\test_seed.py .....................................                 [100%]
+============================ 80 passed in 25.97s =============================
+
+$ & $PY tools\rt.py tests\test_cgn.py tests\test_swip.py tests\test_jawp.py tests\test_pcr.py
+collected 138 items
+============================ 138 passed in 7.28s ==============================
+
+$ & $PY tools\rt.py tests\test_v025_integration.py --slow tests\test_training_state_guards.py
+collected 104 items
+======================= 103 passed, 1 xfailed in 3.50s ========================
+```
+
+The 1 `xfail` is pre-existing and untouched by this diff (it is in
+`test_training_state_guards.py`, which this change cannot reach; an introduced
+regression would surface as `xpass`). `test_sterility.py` passes.
+
+`ruff check` and `black --check` on both files: clean.
 
 ---
 
-## 4. Diff-stat
+## 5. Diff-stat
 
 ```
- src/models/jawp.py       | 196 ++++++++++++-----
- src/models/pcr.py        |  96 ++++++---
- src/models/spc.py        | 108 +++++++---
- tests/test_host_reads.py | 545 ++++++++++++++++++++++++++++++++++++++++++++++++
- 4 files changed, 837 insertions(+), 108 deletions(-)
+ src/models/jepa.py               |  35 +++-
+ tests/test_activation_release.py | 352 +++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 385 insertions(+), 2 deletions(-)
 ```
 
-Commit `aa77896`, no `--no-verify`, no skip, no xfail, no deleted or weakened
-test. Files touched: exactly the three I own, plus the new test file. The eight
-`.agent-notes/_probe_*.py` scratch files are covered by `.gitignore` and are
-**not** in the commit.
+`jepa.py` is `+33 / -2`: the two `= None` assignments moved from mid-forward to
+the top, plus 31 lines of comment. No behaviour outside `compute_loss_with_targets`
+touched. No skip, no `xfail`, no `--no-verify`, no test deleted or weakened. The
+`.agent-notes/_probe_*.py` scratch files are covered by `.gitignore` (`:73`) and
+are not in the commit.
 
 ---
 
-## 5. Mutation verdict
+## 6. Mutation verdict
 
-Four mutations, each reverted. Two of them found real holes in my own tests,
-which is the point of doing this.
+Four mutations, each reverted. Three were the card's own suggestions; one found
+a hole in my own test.
 
 | # | mutation | result |
 |---|---|---|
-| 1 | SPC: restore the per-band `.item()` loop for `band_residuals`/`band_losses` | **RED** ×2 — `host reads scale with n_bands …: {4: 11, 8: 19, 16: 35}`; and `a host-read site runs 8x per step: [('spc.py:405', 8), ('spc.py:408', 8)]` |
-| 2 | SPC: restore `.item()` in `_update_running_statistics` | **RED** ×2 — `{4: 15, 8: 27, 16: 51}`, `spc.py:360` runs 8× |
-| 3 | JAWP: restore the `if pred_norm > 1e-10 and target_norm > 1e-10:` guard | **GREEN on the first attempt — my test was broken.** The counter tagged sites as `"jawp.py:416"` with no kind, so `"bool" in s` never matched. Fixed the counter to record the kind, then **RED**: `a tensor was converted to bool in the step path: ['jawp.py:416 [bool]', 'jawp.py:416 [bool]']` |
-| 4 | JAWP: `active_k_value()` → `int(self.active_k.item())` | **GREEN — a real gap.** Correct value, so both mirror-agreement tests passed, but it reintroduces a sync on every retraction. Added `test_active_k_width_is_not_read_back_from_the_buffer`; re-ran against the still-mutant code → **RED**: `['jawp.py:240 [item]', 'jawp.py:240 [item]']`. Then reverted. |
-| 5 | PCR: per-level reads present but discarded (values unchanged) | **RED** on the count test only, `{1: 5, 2: 9, 3: 13}`, with the value tests staying green — the intended separation: a mutation that is value-neutral must still be caught by the count test. |
+| 1 | revert to base (stashes reset mid-forward; empty batch pins the previous pass) | **RED** ×2 — `test_empty_batch_does_not_pin_the_previous_pass` (`assert ... ._gac_z is None`, got a `grad_fn=<IndexPutBackward0>` tensor) and `test_release_happens_before_the_new_graph_is_built` |
+| 2 | `self._gac_z = span_preds.detach()` | **RED** ×5 — the detach the card warned about is caught by five tests |
+| 3 | `"slots": span_preds.detach()` | **RED** ×3 on first run — and one test **survived**: `test_secondary_path_moves_encoder_gradients`, because it backpropped the primary loss together with the CMC term, leaving encoder gradients non-zero. Strengthened to backprop the CMC term alone; re-run against the same mutant → **RED** ×4 |
+| 4 | inline `scaled_loss = total / grad_accum` in the measurement harness instead of naming it | not a source mutation, but the important one: it made the "today" arm read **93.89 MB instead of 110.21 MB**. The harness has to mirror `train.py`'s locals or it measures a different program. Corrected before any number was reported. |
 
-**Load-bearing claims, each with the mutation that killed it:** the batching
-(mutations 1, 2, 5), the absence of `bool(tensor)` in the step path
-(mutation 3, after fixing the counter), and the `active_k` mirror *not* reading
-the buffer (mutation 4, after adding the test it revealed was missing).
-
-The 10 value-equality tests in `TestBatchedReadsReturnTheSameFloat` were never
-the thing catching the regressions — they compare against the pre-change code
-and would pass any value-preserving implementation, synchronising or not. That
-is deliberate: they pin the "bit-identical" requirement, and the count tests
-pin the perf requirement. Neither alone is sufficient, which is why both exist.
+**Load-bearing claims, each with the mutation that killed it:** the early
+release (1), `_gac_z` must stay live (2), the secondary CMC slots must stay live
+(3, after fixing the test that mutation 3 exposed). I make no claim without one.
 
 ---
 
-## 6. не_сделано / риски
+## 7. не_сделано / риски
 
 **не_сделано**
 
-- **The real `### TASK-21` card (jepa.py gac/cmc graph retention) is not done.**
-  See §0. It needs `src/models/jepa.py`, which I was forbidden to touch.
-- **The other syncs in the step path are not mine.** `mechanisms.py:460,474,498`
-  and `jepa.py:1024,1054,1075,1082` each do `int(self.jawp.active_k.item())` —
-  7 more per forward — and `train.py:1455` an 8th. `mechanisms.py` and
-  `jepa.py` are forbidden, and `train.py` is forbidden. I exposed
-  `JAWPModule.active_k_value()` precisely so those call sites are a one-line
-  change for whoever owns them: **`int(model.jawp.active_k.item())` →
-  `model.jawp.active_k_value()`**. Recommend the same for `mechanisms.py:461,475,499`
-  (6 redundant `workspace_Q[:, :k_active]` slices) — the note in the real
-  TASK-20 card, reported as asked, not fixed.
-- **Wall-clock speedup is unmeasured** (no CUDA on this host). Sync count is the
-  number; please re-measure on a GPU box before quoting a speedup.
+- **Peak activation memory is NOT halved.** +0.00 MB on the main accumulation
+  path, measured. The card's premise — that `_gac_z` and `_cmc_pass["slots"]`
+  hold the previous micro-batch's graphs — is false; `src/train.py`'s locals
+  hold them. §3 has the patch and its measured value. `src/train.py` is
+  forbidden for this card, so I did not apply it.
+- **No change to `src/models/gac.py` or `src/models/cmc.py`**, both forbidden.
+  Note `gac.py:162`'s docstring claims `z_pred` is "detached from graph" and it
+  is **not** — `z_flat = z_pred.reshape(-1, D)` then `(z_flat**2).mean(dim=0)`.
+  The code is right (the exploration gradient is the mechanism); the docstring
+  is wrong and contradicts it. Reported, not fixed.
 - I did not run the full suite (`tools/rt.py` refuses it by design) and did not
-  train. Per-file runs above cover every mechanism suite and every consumer I
-  identified.
+  train. The files above cover `jepa.py`'s own consumers: grep for
+  `compute_loss_with_targets` returns 9 test files, 8 of which I ran plus
+  `test_layer_analysis.py`, which does not call it.
 
 **риски**
 
-- **`_active_k` mirror vs. `state_dict`.** A host mirror can desync from a
-  buffer that travels in checkpoints. Mitigated by `_load_from_state_dict`
-  re-reading it, and pinned by `test_active_k_mirror_resyncs_on_checkpoint_load`.
-  **Residual risk:** a direct `jawp.active_k.fill_(3)` from outside the class
-  would desync the mirror silently. Grep shows no such caller
-  (`train.py:278`, `jepa.py`, `mechanisms.py`, `tests/` all only *read*
-  `.item()`), and `_set_active_k` is the sanctioned writer, but nothing
-  *enforces* that. If someone later writes the buffer directly, the mirror
-  must be updated too — this is a real invariant, not an enforced one.
-- **Same shape for `pcr._level_offsets_py`**, with one difference that makes it
-  safer: it is a pure function of `level_dims`, a plain Python list fixed at
-  construction and never mutated, whereas the `level_offsets` buffer *is* in
-  the state_dict. If a checkpoint ever carried a `level_offsets` inconsistent
-  with its own `level_dims`, the mirror would silently win. No such checkpoint
-  can exist today (the mirror is the cumsum of `level_dims` by construction),
-  and `test_level_offsets_mirror_matches_the_buffer` asserts it for five
-  configurations. Flagging because the buffer is checkpoint-visible and the
-  mirror is not.
-- **`torch.stack` promotion is load-bearing for bit-identity.** If a future
-  edit mixes a *narrower* dtype into one of the batched lists in a way that
-  demotes a value (e.g. a bfloat16 scalar into an all-bf16 stack alongside an
-  fp32 one is a widening — fine — but an explicit `.to(float32)` on an fp64
-  value would not be), the reported numbers would shift. The value tests
-  against the old code would catch it; the count tests would not.
-- **`significant` is an int64 band count promoted into a float dtype.** Exact
-  for any realistic `n_bands` (far below 2²⁴). At an absurd `n_bands` ≥ 2²⁴ the
-  promoted float could round — noted rather than defended.
-- The three `info` dicts are consumed by `mechanisms.py`/`jepa.py`/`train.py`,
-  which I could not run as a unit beyond the suites above. If a future consumer
-  needs a Python scalar and finds a tensor, that is a *new* consumer, not a
-  break I introduced — no existing consumer's type changed.
+- **My change's benefit is narrow and its cost is a comment that could be
+  misread.** The comment block in `jepa.py` is 31 lines on a file eight other
+  workers are editing. I wrote the measured scope into it explicitly
+  ("MEASURED SCOPE, read before assuming this halves peak memory: it does not")
+  because a future reader who skips it would otherwise assume it does. If the
+  maintainer would rather not carry a comment on a no-op line, the honest
+  alternative is to drop the whole commit and keep only the test file — the
+  tests are the part that has value regardless.
+- **The census metric counts Python-visible tensors, not saved buffers.** It is
+  undistorted (it never installs a hook) and it reproduces bit-for-bit, but a
+  tensor held only inside a C++ `SavedVariable` is not gc-tracked the same way,
+  so the absolute MB is a lower bound on the true figure. The *deltas* are what
+  the conclusions rest on, and the deltas are consistent across three
+  independent harnesses.
+- **The census needs `gc.collect()` before it is read.** Reference cycles in the
+  autograd graph defer collection; without the collect, "retention" and
+  "uncollected garbage" are indistinguishable, and I reported the wrong number
+  twice before catching it.
+- **`weakref.ref(tensor)` is used in one test** to assert collectability. That is
+  a CPython/PyTensor lifetime detail, not a language guarantee. It passed on
+  torch 2.13.0+cpu; it is the most fragile assertion in the new file.
+- **`test_training_state_guards.py` has 1 pre-existing xfail.** If a future
+  change makes it `xpass`, that is a real finding, not noise — I did not
+  investigate it.

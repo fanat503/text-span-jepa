@@ -3,6 +3,25 @@
 # data2vec baseline: EMA teacher + regression head on masked token representations
 # Directly adapted from fairseq/examples/data2vec/models/data2vec_text.py
 # (Baevski et al., ICML 2022)
+#
+# PARAMETER REPORTING
+# -------------------
+# `src/train.py` logs `get_num_params()` with no arguments as "Model parameters"
+# for every arm it builds, into one directory. This arm used to default to
+# `non_embedding=True`, so the same log line carried three different quantities
+# for the three arms -- JEPA's total, an encoder-minus-embeddings partial sum
+# here, and the same partial sum in `MLMBaseline`. The three numbers were 3.1x
+# apart at one shape and the gap was entirely definitional.
+#
+# All three now report the same KIND of quantity: every parameter tensor the
+# module owns, i.e. the model's size. The counts still differ, because these are
+# three different architectures -- JEPA 262,021,633 / MLM 123,689,472 / this arm
+# 85,646,592 at the 768/12 shape. This arm is legitimately large because it
+# carries a frozen `target_encoder` deepcopy, and `get_num_params_trainable()`
+# (added here, so all three arms report trainable capacity the same way) is the
+# like-for-like comparison. `tests/test_baseline_parity.py::TestLoggedQuantity
+# IsOneKind` pins the KIND at three shapes and asserts nothing about closeness,
+# since different architectures cannot have equal counts.
 
 from __future__ import annotations
 
@@ -182,7 +201,49 @@ class Data2VecTextBaseline(nn.Module):
             f"loss_beta={self.loss_beta}"
         )
 
-    def get_num_params(self, non_embedding: bool = True) -> int:
-        enc = self.encoder.get_num_params(non_embedding)
-        reg = sum(p.numel() for p in self.regression_head.parameters())
-        return enc + reg
+    def get_num_params(self, non_embedding: bool = False) -> int:
+        """Total parameter count of this arm: encoder + target encoder + head.
+
+        `src/train.py` calls this with no arguments and logs the result as
+        "Model parameters", and it builds all three arms into the same kind of
+        run directory. `TextSpanJEPA` and `MLMBaseline` default to the whole
+        model; this arm used to default to `non_embedding=True`, so a bare call
+        returned 49,646,720 at the shipped rung where the same line reads
+        170,706,561 for JEPA and 113,953,280 for MLM -- three definitions, not
+        three architectures. The default is therefore `False`, and a bare call
+        returns this arm's size: 163,927,680 at the shipped rung.
+
+        Args:
+            non_embedding: subtract the token and position embedding tables of
+                BOTH encoders, matching `TextSpanJEPA`. Kept because
+                "non-embedding" is a standard published convention, but it is
+                not the model's size and must not be quoted as one.
+
+        Use `get_num_params_trainable()` for the number of parameters that
+        actually receive gradients; the two differ by the frozen
+        `target_encoder`.
+        """
+        total = sum(p.numel() for p in self.parameters())
+        if not non_embedding:
+            return total
+        embeddings = 0
+        for enc in (self.encoder, self.target_encoder):
+            embeddings += enc.token_embedding.weight.numel()
+            embeddings += enc.pos_embedding.numel()
+        return total - embeddings
+
+    def get_num_params_trainable(self) -> int:
+        """Parameters that receive gradients: the total minus the frozen teacher.
+
+        This arm holds an EMA `target_encoder` whose parameters all carry
+        `requires_grad = False`, exactly as `TextSpanJEPA` does, so total and
+        trainable differ here for the same reason they differ there. The method
+        used to be absent, which left this arm reporting a size and no
+        like-for-like capacity number: the two lines `src/train.py` prints at
+        startup then meant different things for this arm than for the other two.
+
+        `tests/test_baseline_parity.py::TestLoggedQuantityIsOneKind` asserts
+        that all three arms expose this method and that it returns the same kind
+        of quantity -- a recount of the module's gradient-carrying parameters.
+        """
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)

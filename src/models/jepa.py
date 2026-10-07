@@ -605,6 +605,37 @@ class TextSpanJEPA(TrainingStateGuard):
         current_step=0,
         total_steps=1,
     ):
+        # Drop the PREVIOUS pass's retained autograd graphs before this pass
+        # builds its own. Both attributes deliberately hold LIVE (graph-attached)
+        # tensors because their consumers backward THROUGH them, so they must
+        # never be detached:
+        #   * `_gac_z` is read after `total_loss.backward(retain_graph=True)`;
+        #     GAC's bonus `gamma * relu(tau - |g|) * mean(z**2)` does not detach
+        #     `z_flat`, so `loss_gac.backward()` re-enters the predictor and the
+        #     online encoder through these slots.
+        #   * `_cmc_pass["slots"]` of the SECONDARY pass is scattered live by
+        #     `compute_cmc_between_passes` and enters `total_loss`, so its
+        #     gradient reaches the encoder through the second mask.
+        # What they must not do is outlive the pass that produced them. Every
+        # consumer reads them between this forward and the backward ending the
+        # same step, so clearing here -- before `self.encoder(...)`, the first
+        # allocation of the new graph -- is the earliest provably-safe point.
+        #
+        # MEASURED SCOPE, read before assuming this halves peak memory: it does
+        # not, on the main accumulation path. `src/train.py` snapshots these
+        # into `_gac_primary` / `_cmc_primary` / `_cmc_secondary` (lines 1321,
+        # 1326, 1364) and rebinds them only AFTER the next pass has built its
+        # graph, so those locals -- not these attributes -- are the last
+        # reference. Measured peak live-graph bytes over a 4-micro-batch
+        # gradient-accumulation loop, B=4 T=64 D=128: dropping these attributes
+        # as well moves 110.25MB -> 110.25MB, i.e. +0.00MB. The fix that does
+        # halve it is in `train.py` and is out of this file's scope.
+        # What this line buys is the empty-batch early return below, which
+        # returns BEFORE the stash is rewritten and so used to pin the whole
+        # previous pass: 19.31MB / 124 live graph tensors -> 0.00MB.
+        self._gac_z = None
+        self._cmc_pass = None
+
         if masked_input_ids.size(0) == 0:
             zero = torch.tensor(0.0, device=masked_input_ids.device)
             return (
@@ -656,7 +687,7 @@ class TextSpanJEPA(TrainingStateGuard):
 
         # GAC: expose live slot predictions so the training loop can read
         # per-dimension gradient norms after backward (only when weighted).
-        self._gac_z = None
+        # Cleared at the top of this method, before the graph is built.
         if (
             self.gac is not None
             and self.training
@@ -774,7 +805,7 @@ class TextSpanJEPA(TrainingStateGuard):
         # compute_cmc_between_passes(); stash what that bridge needs. Primary
         # slots are detached (module default stop_grad_primary=True keeps them
         # out of the gradient path anyway); validity uses predictor-side slots.
-        self._cmc_pass = None
+        # Cleared at the top of this method, before the graph is built.
         if self.cmc is not None:
             _idx = self._slot_indices(mask_positions, span_preds.size(1))
             _valid_slots = torch.zeros_like(_idx, dtype=torch.bool)

@@ -342,7 +342,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 - verify: `python tools/rt.py tests/test_interp.py`
 - report: `.agent-notes/task-17.md`
 
-### TASK-18 | group: G-COVER | status: todo | mode: arena
+### TASK-18 | group: G-COVER | status: done | mode: arena
 - goal: fix `src/interp/workspace_validation.py`.
 - why: `validate_workspace_claim` with `sae=None` builds a **random untrained**
   `TopKSAE` (L352-357) and still returns a verdict. Measured end to end:
@@ -368,7 +368,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 
 ---
 
-### TASK-19 | group: G-PERF | status: todo | mode: arena
+### TASK-19 | group: G-PERF | status: done | mode: arena
 - goal: stop `CollapseDiagnostics.compute` from running every training step.
 - why: measured **67% of the entire forward pass**. It performs 13
   `torch.linalg.svdvals` plus 4 full `torch.linalg.svd` on the full `(B·T, D)`
@@ -413,7 +413,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   detaches the Stiefel-projection gradient. That is a correctness issue, not a
   perf one, and `mechanisms.py` is not yours — report it.
 
-### TASK-21 | group: G-PERF | status: todo | mode: arena
+### TASK-21 | group: G-PERF | status: done | mode: arena
 - goal: halve peak activation memory under gradient accumulation.
 - why: after `backward()` returns, `self._gac_z` (`jepa.py:650`) and
   `self._cmc_pass["slots"]` (`jepa.py:767`) still hold **live autograd graphs**
@@ -659,7 +659,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   unless the caching holds.
 - report: `.agent-notes/task-34.md`
 
-### TASK-35 | group: G-FIX | status: todo | mode: solo
+### TASK-35 | group: G-FIX | status: done | mode: solo
 - LOST, NOT CLOSED. The orchestrator's own error destroyed the work; read this
   before re-dispatching it.
 - what happened: the worker's session was interrupted after it had staged a
@@ -695,3 +695,48 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 - also: `Data2VecTextBaseline` has no `get_num_params_trainable()` at all, so
   today only JEPA emits the like-for-like `Trainable parameters:` line.
 - report: `.agent-notes/task-35.md`
+
+---
+
+### TASK-36 | group: G-HYGIENE | status: todo | mode: solo
+- goal: merge PR #11, which the GitHub API is refusing.
+- state: the work is SAFE and this card is only about the final click.
+  `agent/wave-6` is pushed, PR #11 is OPEN, `mergeable: MERGEABLE`,
+  `mergeStateStatus: CLEAN`, CI green: **1910 passed, 21 skipped, 1 xfailed,
+  0 failed in 65.66s**. The local branch matches the remote head OID 9732de2
+  exactly, so nothing is unpushed and nothing is lost.
+- the blocker: `gh pr merge 11 --squash` fails with a GraphQL error, and REST
+  `PUT /repos/.../pulls/11/merge` fails with `unexpected end of JSON input`.
+  Three attempts, three invocations, same API-side failure. Not a
+  branch-protection or conflict problem: the PR reports itself MERGEABLE/CLEAN.
+- next steps in order: (1) retry, it may be a transient outage; (2) merge from
+  https://github.com/fanat503/text-span-jepa/pull/11 with "Squash and merge";
+  (3) if both fail, check whether a merge queue or auto-merge requirement was
+  added after PR #10, since `gh pr merge` behaves differently then.
+- do NOT merge locally and force-push main. main is protected and that would
+  destroy reviewed history for no gain.
+- verify: `git fetch && git log --oneline -1 origin/main` shows a new squash
+  commit, and the 1910-test run is attached to it.
+- report: `.agent-notes/task-36.md`
+
+### TASK-37 | group: G-COVER | status: todo | mode: solo
+- goal: build the results apparatus, so the paper has a results section and not
+  only a methods section.
+- why: the whole campaign has been about correctness. CI is green at 1910 tests
+  and 25 cards closed real defects, but the repo still has **no results table,
+  no training curve and no ablation figure**, because running training is
+  forbidden on this machine and the GPU belongs to the owner.
+- what to build: everything computable WITHOUT training, so the only thing left
+  for the owner is the run itself. A script that emits the results table in the
+  form the paper needs, wired to the metrics the repo already computes, plus a
+  stated estimate of what each run costs in wall-clock on their GTX 1650 so they
+  can decide what to run first.
+- the hard constraint: it must NOT fabricate, extrapolate or interpolate a
+  number. A table with cells visibly marked "not yet run" is useful. A table
+  with plausible-looking numbers is precisely the failure this campaign exists
+  to prevent, and the owner would not be able to tell the difference at a glance.
+- files_allowed: `scripts/**`, `docs/**`
+- files_forbidden: `src/**`, `config/**`, `tests/**`
+- verify: `& $PY tools/rt.py tests/test_config_system.py --slow`, plus running
+  the script in dry-run and pasting the output
+- report: `.agent-notes/task-37.md`

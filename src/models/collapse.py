@@ -16,12 +16,93 @@
 #   Ansuini et al. (NeurIPS 2019) — intrinsic dimensionality
 #   Roy & Vetterli (2007) — participation ratio
 
+from __future__ import annotations
+
 import math
 
 import torch
 import torch.nn.functional as F
 from torch import nn
 from src.utils.cka_metrics import linear_cka, rbf_cka
+
+#  ───────────────────────────────────────────────────────────────────────────
+#  Subsampling RNG — kept off the process-global stream, on purpose
+#  ───────────────────────────────────────────────────────────────────────────
+#
+#  Four metrics subsample the (B·T, D) activation matrix down to at most
+#  `_SUBSAMPLE_LIMIT` rows before doing an O(N²) or O(N·D²) computation:
+#  `_intrinsic_dim_score`, `_mean_pairwise_cosine`, `_uniformity` and
+#  `_alignment`. They used to draw the row indices with
+#  `torch.randperm(N, device=flat.device)`, i.e. from the **training device's
+#  global generator**.
+#
+#  That is a correctness bug, not just untidiness. The global generator is the
+#  same one `DropPath` (and any other stochastic depth/schedule draw) consumes,
+#  so *how many* draws the diagnostics make perturbs the model's own randomness:
+#  adding a diagnostic, changing `B`, or gating the diagnostics would each move
+#  the training trajectory. A diagnostic that is supposed to be a read-only
+#  observer of the model cannot be allowed to steer it.
+#
+#  The fix is the pattern `src/models/cmc.py` already uses for its second-mask
+#  draw (`_MASK_RNG_SALT`, `_derive_mask_rng`): a private `torch.Generator`,
+#  seeded from the master seed, so nothing global moves.
+#
+#  Two consequences, both stated rather than hidden:
+#
+#  * The selected rows are a different draw than before, so the four affected
+#    metric VALUES change (by one sample of the same estimator — the estimator
+#    is untouched, only which 256 rows it sees). No other metric moves, and
+#    `seed_everything` still reproduces the run exactly.
+#  * The seed is derived from a process-level counter, so it is NOT
+#    resume-exact: a resume restarts the counter. That is the same limitation
+#    `cmc._convenience_mask_rng` documents, and it is the right trade here
+#    because these four values are diagnostics, not state the checkpoint needs.
+#    Training's own randomness is unaffected either way, which is the property
+#    that actually mattered.
+#
+#  A `save`/`restore` of the global generator state around the draw would have
+#  kept the values bit-identical, but `torch.get_rng_state` is CPU-only: there
+#  is no Python API to rewind the CUDA generator, so the DrawPath perturbation
+#  would survive on the hardware where DropPath actually runs.
+
+_SUBSAMPLE_RNG_SALT = 0x5EEDA17E
+_SUBSAMPLE_SEED_MODULUS = 2**31 - 1
+
+#: Row cap shared by the four subsampling metrics. Unchanged from the literal
+#: ``256`` those sites used before; named so the cost of a diagnostic is
+#: visible at the definition rather than at four call sites.
+_SUBSAMPLE_LIMIT = 256
+
+_subsample_draw_counter = 0
+
+
+def _derive_subsample_rng(draw: int) -> torch.Generator:
+    """CPU generator for one subsample draw, a pure function of `draw`.
+
+    `torch.initial_seed()` is a query, not a draw: it reports the seed the
+    process was given without moving any global stream. Mixing in `draw` makes
+    each draw independent of every other, so the sequence is reproducible from
+    the master seed and the call order alone -- no state to checkpoint.
+    """
+    base = int(torch.initial_seed()) + _SUBSAMPLE_RNG_SALT
+    derived = (base * 1_000_003 + int(draw) * 2_654_435_761) % _SUBSAMPLE_SEED_MODULUS
+    gen = torch.Generator(device="cpu")
+    gen.manual_seed(derived)
+    return gen
+
+
+def _next_subsample_rng() -> torch.Generator:
+    """Generator for the next subsample draw. Process state, so NOT resume-exact.
+
+    The counter is what makes two successive calls pick different rows, which is
+    the entire point of subsampling. It is process state, so a resume rewinds it.
+    See the note above for why that is acceptable here and where the
+    resume-exact alternative lives (`cmc._derive_mask_rng`).
+    """
+    global _subsample_draw_counter
+    gen = _derive_subsample_rng(_subsample_draw_counter)
+    _subsample_draw_counter += 1
+    return gen
 
 
 class VarianceRegularization(nn.Module):
@@ -93,6 +174,99 @@ class TargetCentering(nn.Module):
     def forward(self, target_representations):
         self.update_center(target_representations)
         return target_representations - self.center
+
+
+class _SharedSpectral:
+    """Decompositions of one `compute`'s two activation matrices, computed once.
+
+    `compute` needs the singular spectrum of `online_h` for seven metrics and of
+    `target_h` for the same seven, and needs the *same two* full SVDs twice each
+    (`_svcca` and `_subspace_overlap` both decompose both tensors). Before this
+    class existed every metric decomposed what it wanted itself: 13
+    `torch.linalg.svdvals` + 2 `torch.linalg.matrix_rank` (an SVD each) + 4
+    `torch.linalg.svd` + 4 `torch.linalg.eigvalsh`, i.e. **19 SVD-bearing calls
+    per training step** on the same two `(B·T, D)` matrices. Measured at B=8,
+    T=256, D=384, that was 2.16 s of a 4.38 s xsmall forward pass.
+
+    Deduplicating them is bit-identical, because every one of those calls was
+    already a pure function of the matrix it was handed and LAPACK is
+    deterministic for a fixed shape, dtype and thread count on this build. The
+    per-metric calls are still there, behind the ``svals=`` / ``svd=`` /
+    ``eigvals=`` keywords, for the callers that only want one metric
+    (`src/interp/run_comparison.py:278-279` reaches into `_svcca` and
+    `_subspace_overlap` directly, and the tests call the helpers individually).
+
+    Failure contract, unchanged: every attribute is computed inside a
+    `try`/`except` that yields `None`. `None` means "not available", which is
+    exactly what every metric already handled by computing its own
+    decomposition, failing the same way and returning its own sentinel. A
+    LAPACK failure therefore still produces a full metrics dict of sentinels and
+    still cannot raise — the "never crash the training loop" promise above.
+    """
+
+    def __init__(self, online_flat: torch.Tensor, target_flat: torch.Tensor):
+        self._online_flat = online_flat
+        self._target_flat = target_flat
+        self._cache: dict = {}
+
+    def _once(self, key, fn):
+        if key not in self._cache:
+            try:
+                self._cache[key] = fn()
+            except Exception:
+                # Deliberately swallowed. See the class docstring: the caller
+                # falls back to its own decomposition and reports its own
+                # sentinel, which is what happened before this cache existed.
+                self._cache[key] = None
+        return self._cache[key]
+
+    @property
+    def online_svals(self) -> torch.Tensor | None:
+        """Singular values of `online_flat`, no `.float()` (matches the
+        `svdvals`-based metrics, which take the raw tensor)."""
+        return self._once("os", lambda: torch.linalg.svdvals(self._online_flat))
+
+    @property
+    def target_svals(self) -> torch.Tensor | None:
+        return self._once("ts", lambda: torch.linalg.svdvals(self._target_flat))
+
+    @property
+    def online_svd(self):
+        """`(U, S, Vh)` of `online_flat.float()`, as `_svcca` and
+        `_subspace_overlap` both call it."""
+        return self._once(
+            "oS", lambda: torch.linalg.svd(self._online_flat.float(), full_matrices=False)
+        )
+
+    @property
+    def target_svd(self):
+        return self._once(
+            "tS", lambda: torch.linalg.svd(self._target_flat.float(), full_matrices=False)
+        )
+
+    @property
+    def online_eigvals(self) -> torch.Tensor | None:
+        """Ascending eigenvalues of `online_flat`'s covariance.
+
+        Computed in one place and handed to both `_eigenvalue_spread` and
+        `_spectral_clustering_coeff`, which were each building the identical
+        `(centered.T @ centered) / (N-1)` and each calling `eigvalsh` on it.
+        """
+        return self._once("oe", lambda: self._eigvals(self._online_flat))
+
+    @property
+    def target_eigvals(self) -> torch.Tensor | None:
+        return self._once("te", lambda: self._eigvals(self._target_flat))
+
+    @staticmethod
+    def _eigvals(flat: torch.Tensor) -> torch.Tensor:
+        flat = flat.reshape(-1, flat.size(-1)).float()
+        centered = flat - flat.mean(dim=0)
+        n = centered.size(0)
+        if n <= 1:
+            return None
+        cov = (centered.T @ centered) / max(n - 1, 1)
+        return torch.linalg.eigvalsh(cov)
 
 
 class CollapseDiagnostics(nn.Module):
@@ -178,15 +352,32 @@ class CollapseDiagnostics(nn.Module):
                 F.cosine_similarity(online_flat[:-1], online_flat[1:], dim=-1).mean().item()
             )
 
+        # Every SVD / eigen-decomposition below is reached through `shared`, so
+        # each distinct matrix is factorised once per `compute` instead of once
+        # per metric that wants it. See `_SharedSpectral`.
+        shared = _SharedSpectral(online_flat, target_flat)
+
         # --- SVD-based rank metrics (NextLat) ---
-        metrics["effective_rank_online"] = max(self._effective_rank(online_h), 0.0)
-        metrics["effective_rank_target"] = max(self._effective_rank(target_h), 0.0)
-        metrics["participation_ratio_online"] = max(self._participation_ratio(online_h), 0.0)
-        metrics["participation_ratio_target"] = max(self._participation_ratio(target_h), 0.0)
-        metrics["condition_number_online"] = self._condition_number(online_h)
-        metrics["condition_number_target"] = self._condition_number(target_h)
-        metrics["numerical_rank_online"] = self._numerical_rank(online_h)
-        metrics["numerical_rank_target"] = self._numerical_rank(target_h)
+        metrics["effective_rank_online"] = max(
+            self._effective_rank(online_h, svals=shared.online_svals), 0.0
+        )
+        metrics["effective_rank_target"] = max(
+            self._effective_rank(target_h, svals=shared.target_svals), 0.0
+        )
+        metrics["participation_ratio_online"] = max(
+            self._participation_ratio(online_h, svals=shared.online_svals), 0.0
+        )
+        metrics["participation_ratio_target"] = max(
+            self._participation_ratio(target_h, svals=shared.target_svals), 0.0
+        )
+        metrics["condition_number_online"] = self._condition_number(
+            online_h, svals=shared.online_svals
+        )
+        metrics["condition_number_target"] = self._condition_number(
+            target_h, svals=shared.target_svals
+        )
+        metrics["numerical_rank_online"] = self._numerical_rank(online_h, svals=shared.online_svals)
+        metrics["numerical_rank_target"] = self._numerical_rank(target_h, svals=shared.target_svals)
         metrics["coherence_online"] = self._coherence(online_h)
         metrics["coherence_target"] = self._coherence(target_h)
 
@@ -206,16 +397,20 @@ class CollapseDiagnostics(nn.Module):
         metrics["collapsed_dim_ratio_target"] = self._collapsed_dim_ratio(target_h)
 
         # --- Singular value entropy (I-JEPA detailed version) ---
-        metrics["sv_entropy_online"] = self._singular_value_entropy(online_h)
-        metrics["sv_entropy_target"] = self._singular_value_entropy(target_h)
+        metrics["sv_entropy_online"] = self._singular_value_entropy(
+            online_h, svals=shared.online_svals
+        )
+        metrics["sv_entropy_target"] = self._singular_value_entropy(
+            target_h, svals=shared.target_svals
+        )
 
         # --- SVD sharpness (C-JEPA / BYOL) ---
-        metrics["svd_sharpness_online"] = self._svd_sharpness(online_h)
-        metrics["svd_sharpness_target"] = self._svd_sharpness(target_h)
+        metrics["svd_sharpness_online"] = self._svd_sharpness(online_h, svals=shared.online_svals)
+        metrics["svd_sharpness_target"] = self._svd_sharpness(target_h, svals=shared.target_svals)
 
         # --- Alpha norm (LeCun 2022: power-law decay of singular values) ---
-        metrics["alpha_norm_online"] = self._alpha_norm(online_h)
-        metrics["alpha_norm_target"] = self._alpha_norm(target_h)
+        metrics["alpha_norm_online"] = self._alpha_norm(online_h, svals=shared.online_svals)
+        metrics["alpha_norm_target"] = self._alpha_norm(target_h, svals=shared.target_svals)
 
         # --- Intrinsic dimensionality (Ansuini et al., NeurIPS 2019) ---
         metrics["intrinsic_dim_online"] = self._intrinsic_dim_score(online_h)
@@ -250,21 +445,33 @@ class CollapseDiagnostics(nn.Module):
         metrics["cov_trace_target"] = self._feature_covariance_trace(target_h)
 
         # --- SVCCA (Raghu et al., ICLR 2017) ---
-        metrics["svcca_online_target"] = self._svcca(online_h, target_h)
+        metrics["svcca_online_target"] = self._svcca(
+            online_h, target_h, svd_x=shared.online_svd, svd_y=shared.target_svd
+        )
 
         # --- Alignment (Wang & Isola, ICLR 2022) ---
         metrics["alignment"] = self._alignment(online_flat, target_flat)
 
         # --- Eigenvalue spread ---
-        metrics["eigenvalue_spread_online"] = self._eigenvalue_spread(online_h)
-        metrics["eigenvalue_spread_target"] = self._eigenvalue_spread(target_h)
+        metrics["eigenvalue_spread_online"] = self._eigenvalue_spread(
+            online_h, eigvals=shared.online_eigvals
+        )
+        metrics["eigenvalue_spread_target"] = self._eigenvalue_spread(
+            target_h, eigvals=shared.target_eigvals
+        )
 
         # --- Subspace overlap ---
-        metrics["subspace_overlap"] = self._subspace_overlap(online_h, target_h)
+        metrics["subspace_overlap"] = self._subspace_overlap(
+            online_h, target_h, svd_x=shared.online_svd, svd_y=shared.target_svd
+        )
 
         # --- Spectral clustering coefficient ---
-        metrics["spectral_clustering_coeff_online"] = self._spectral_clustering_coeff(online_h)
-        metrics["spectral_clustering_coeff_target"] = self._spectral_clustering_coeff(target_h)
+        metrics["spectral_clustering_coeff_online"] = self._spectral_clustering_coeff(
+            online_h, eigvals=shared.online_eigvals
+        )
+        metrics["spectral_clustering_coeff_target"] = self._spectral_clustering_coeff(
+            target_h, eigvals=shared.target_eigvals
+        )
 
         return metrics
 
@@ -273,15 +480,20 @@ class CollapseDiagnostics(nn.Module):
     # ═══════════════════════════════════════════════════════════════
 
     @staticmethod
-    def _effective_rank(x):
+    def _effective_rank(x, svals=None):
         """Shannon entropy of normalized singular values (NextLat / I-JEPA).
 
         NextLat model_base pattern: catches SVD failures, returns 0.0.
         Also handles all-zero input (sum=0 → NaN) by returning 0.0.
+
+        `svals` is a precomputed `svdvals` of `x.reshape(-1, x.size(-1))`,
+        supplied by `_SharedSpectral` so seven metrics can share one
+        decomposition. `None` (the default, and what every direct caller gets)
+        means "compute your own", so this helper is still usable alone.
         """
         flat = x.reshape(-1, x.size(-1))
         try:
-            S = torch.linalg.svdvals(flat)
+            S = torch.linalg.svdvals(flat) if svals is None else svals
             total = S.sum()
             if total == 0 or not torch.isfinite(total):
                 return 0.0
@@ -296,14 +508,15 @@ class CollapseDiagnostics(nn.Module):
             return 0.0
 
     @staticmethod
-    def _participation_ratio(x):
+    def _participation_ratio(x, svals=None):
         """(sum S)^2 / sum(S^2). PR=1 means 1D collapse.
 
         Roy & Vetterli (2007). NextLat pattern: exception → 0.0.
+        See `_effective_rank` for what `svals` is.
         """
         flat = x.reshape(-1, x.size(-1))
         try:
-            S = torch.linalg.svdvals(flat)
+            S = torch.linalg.svdvals(flat) if svals is None else svals
             sum_sq = (S**2).sum()
             if sum_sq == 0 or not torch.isfinite(sum_sq):
                 return 0.0
@@ -315,11 +528,11 @@ class CollapseDiagnostics(nn.Module):
             return 0.0
 
     @staticmethod
-    def _condition_number(x):
+    def _condition_number(x, svals=None):
         """Condition number S[0]/S[-1]. NextLat: inf for degenerate."""
         flat = x.reshape(-1, x.size(-1))
         try:
-            S = torch.linalg.svdvals(flat)
+            S = torch.linalg.svdvals(flat) if svals is None else svals
             if S[-1] == 0 or not torch.isfinite(S[-1]):
                 return float("inf")
             if S[0] == 0 or not torch.isfinite(S[0]):
@@ -329,10 +542,26 @@ class CollapseDiagnostics(nn.Module):
             return float("inf")
 
     @staticmethod
-    def _numerical_rank(x):
+    def _numerical_rank(x, atol=1e-3, rtol=1e-3, svals=None):
+        """Count of singular values above `max(atol, rtol * S[0])`.
+
+        Reproduces `torch.linalg.matrix_rank(x, atol=..., rtol=...)` from the
+        spectrum rather than by decomposing again: `matrix_rank` is an SVD in
+        disguise, and it was one of the 19 per-step decompositions. The
+        tolerance rule is torch's own -- `rtol` scales the LARGEST singular
+        value -- and is pinned against `torch.linalg.matrix_rank` by
+        `TestNumericalRankMatchesTorch` in `tests/test_collapse_dedup.py`,
+        which checks it on the degenerate shapes where a plausible-looking
+        reimplementation would disagree (all-zero, rank-deficient, tiny, huge,
+        wide, and column-rescaled). `svals` is supplied by `_SharedSpectral`;
+        `None` defers to `torch.linalg.matrix_rank` itself.
+        """
         flat = x.reshape(-1, x.size(-1))
         try:
-            return torch.linalg.matrix_rank(flat, atol=1e-3, rtol=1e-3).item()
+            if svals is None:
+                return torch.linalg.matrix_rank(flat, atol=atol, rtol=rtol).item()
+            tol = max(atol, rtol * svals[0].item())
+            return float((svals > tol).sum().item())
         except Exception:
             return 0
 
@@ -380,16 +609,17 @@ class CollapseDiagnostics(nn.Module):
             return 1.0
 
     @staticmethod
-    def _singular_value_entropy(x):
+    def _singular_value_entropy(x, svals=None):
         """Raw entropy of singular value distribution (bits).
 
         I-JEPA detailed diagnostic. Unlike effective_rank (which exponentiates),
         this returns the entropy directly. Higher = more spread spectrum.
         Normalized by log(D) for comparability across dimensions.
+        See `_effective_rank` for what `svals` is.
         """
         flat = x.reshape(-1, x.size(-1))
         try:
-            S = torch.linalg.svdvals(flat)
+            S = torch.linalg.svdvals(flat) if svals is None else svals
             total = S.sum()
             if total == 0 or not torch.isfinite(total):
                 return 0.0
@@ -434,16 +664,17 @@ class CollapseDiagnostics(nn.Module):
     # ═══════════════════════════════════════════════════════════════
 
     @staticmethod
-    def _svd_sharpness(x):
+    def _svd_sharpness(x, svals=None):
         """Spectral sharpness: ratio S[0]^2 / sum(S^2).
 
         C-JEPA / BYOL metric. Sharp (dominant singular value) = high sharpness →
         potential collapse. Low sharpness = distributed representation.
         In [0, 1], where 1 = rank-1 collapse.
+        See `_effective_rank` for what `svals` is.
         """
         flat = x.reshape(-1, x.size(-1))
         try:
-            S = torch.linalg.svdvals(flat)
+            S = torch.linalg.svdvals(flat) if svals is None else svals
             sum_sq = (S**2).sum()
             if sum_sq == 0 or not torch.isfinite(sum_sq):
                 return 1.0
@@ -459,7 +690,7 @@ class CollapseDiagnostics(nn.Module):
     # ═══════════════════════════════════════════════════════════════
 
     @staticmethod
-    def _alpha_norm(x):
+    def _alpha_norm(x, svals=None):
         """Power-law exponent of singular value spectrum.
 
         LeCun (2022): healthy representations have SVD spectrum that
@@ -468,10 +699,11 @@ class CollapseDiagnostics(nn.Module):
 
         alpha > 1: rapid decay (concentrated information)
         alpha ~ 0: flat spectrum (all components equal)
+        See `_effective_rank` for what `svals` is.
         """
         flat = x.reshape(-1, x.size(-1))
         try:
-            S = torch.linalg.svdvals(flat)
+            S = torch.linalg.svdvals(flat) if svals is None else svals
             # Take top 80% of singular values (avoid tail noise)
             n_keep = max(int(len(S) * 0.8), 2)
             S = S[:n_keep]
@@ -501,7 +733,21 @@ class CollapseDiagnostics(nn.Module):
     # ═══════════════════════════════════════════════════════════════
 
     @staticmethod
-    def _intrinsic_dim_score(x):
+    def _subsample_index(n, limit, device, rng=None):
+        """Row indices for the `limit`-row subsample, or ``None`` if not needed.
+
+        Draws from a private generator (`_next_subsample_rng` unless the caller
+        passes one) rather than the training device's global RNG, so a
+        diagnostic cannot perturb DropPath. See the module-level note on why the
+        generator is CPU-side even when `device` is CUDA.
+        """
+        if n <= limit:
+            return None
+        gen = _next_subsample_rng() if rng is None else rng
+        return torch.randperm(n, generator=gen)[:limit].to(device)
+
+    @staticmethod
+    def _intrinsic_dim_score(x, rng=None):
         """Intrinsic dimensionality estimate via two-nearest-neighbor method.
 
         Ansuini et al. (NeurIPS 2019): "Intrinsic dimension of data
@@ -514,10 +760,10 @@ class CollapseDiagnostics(nn.Module):
         try:
             N, D = flat.shape
             # Subsample for efficiency
-            if N > 256:
-                idx = torch.randperm(N, device=flat.device)[:256]
+            idx = CollapseDiagnostics._subsample_index(N, _SUBSAMPLE_LIMIT, flat.device, rng)
+            if idx is not None:
                 flat = flat[idx]
-                N = 256
+                N = _SUBSAMPLE_LIMIT
             if N < 5:
                 return 0.0
             # Pairwise distances
@@ -564,23 +810,24 @@ class CollapseDiagnostics(nn.Module):
     # ═══════════════════════════════════════════════════════════════
 
     @staticmethod
-    def _mean_pairwise_cosine(flat):
+    def _mean_pairwise_cosine(flat, rng=None):
         """Mean pairwise cosine similarity across representations.
 
         DINOv2 (Oquab et al., 2024): this metric detects collapse by
         measuring whether representations cluster together. High mean
         cosine → collapse. Healthy: low mean cosine (diverse representations).
-        Subsampled for efficiency.
+        Subsampled for efficiency, from a private generator (see
+        `_subsample_index`).
         """
         try:
             N = flat.size(0)
             if N < 2:
                 return 1.0
             # Subsample for efficiency
-            if N > 256:
-                idx = torch.randperm(N, device=flat.device)[:256]
+            idx = CollapseDiagnostics._subsample_index(N, _SUBSAMPLE_LIMIT, flat.device, rng)
+            if idx is not None:
                 flat = flat[idx]
-                N = 256
+                N = _SUBSAMPLE_LIMIT
             # Normalize
             flat_norm = F.normalize(flat, dim=-1)
             # Pairwise cosine matrix
@@ -641,7 +888,7 @@ class CollapseDiagnostics(nn.Module):
     # ═══════════════════════════════════════════════════════════════
 
     @staticmethod
-    def _uniformity(flat, t=2.0):
+    def _uniformity(flat, t=2.0, rng=None):
         """Uniformity of representations on the unit hypersphere.
 
         Wang & Isola, "Understanding Contrastive Representation Learning
@@ -659,10 +906,10 @@ class CollapseDiagnostics(nn.Module):
             if N < 2:
                 return 0.0
             # Subsample for efficiency
-            if N > 256:
-                idx = torch.randperm(N, device=flat.device)[:256]
+            idx = CollapseDiagnostics._subsample_index(N, _SUBSAMPLE_LIMIT, flat.device, rng)
+            if idx is not None:
                 flat = flat[idx]
-                N = 256
+                N = _SUBSAMPLE_LIMIT
             # Normalize to unit sphere
             flat = F.normalize(flat, dim=-1)
             # Pairwise squared distances
@@ -713,7 +960,7 @@ class CollapseDiagnostics(nn.Module):
     # ═══════════════════════════════════════════════════════════════
 
     @staticmethod
-    def _svcca(x, y, threshold=0.99):
+    def _svcca(x, y, threshold=0.99, svd_x=None, svd_y=None):
         """Singular Value CCA between two representations.
 
         Raghu et al., "SVCCA: Singular Vector Canonical Correlation
@@ -727,6 +974,12 @@ class CollapseDiagnostics(nn.Module):
 
         FIX: Use right singular vectors (V = Vh.T), NOT left (U).
         Using U was a bug that always returned 0.0.
+
+        `svd_x`/`svd_y` are precomputed `(U, S, Vh)` triples for the `.float()`
+        reshapes of `x`/`y`, shared with `_subspace_overlap` by `_SharedSpectral`
+        -- two full SVDs of the same two matrices, done once. `None` computes
+        them here, which is what `src/interp/run_comparison.py:278` and the
+        tests do.
         """
         try:
             x_flat = x.reshape(-1, x.size(-1)).float()
@@ -738,8 +991,8 @@ class CollapseDiagnostics(nn.Module):
                 return 0.0
 
             # SVD, keep right singular vectors (V)
-            _Ux, Sx, Vhx = torch.linalg.svd(x_flat, full_matrices=False)
-            _Uy, Sy, Vhy = torch.linalg.svd(y_flat, full_matrices=False)
+            _Ux, Sx, Vhx = torch.linalg.svd(x_flat, full_matrices=False) if svd_x is None else svd_x
+            _Uy, Sy, Vhy = torch.linalg.svd(y_flat, full_matrices=False) if svd_y is None else svd_y
 
             Vx = Vhx.T  # (Dx, Dx) — right singular vectors
             Vy = Vhy.T  # (Dy, Dy)
@@ -796,13 +1049,15 @@ class CollapseDiagnostics(nn.Module):
     # ═══════════════════════════════════════════════════════════════
 
     @staticmethod
-    def _alignment(x, y, alpha=2.0):
+    def _alignment(x, y, alpha=2.0, rng=None):
         """Alignment between paired representations.
 
         Wang & Isola, "Understanding Contrastive Representation Learning",
         ICLR 2022. Measures average distance between paired representations.
 
         Lower = better aligned. Computed as mean ||x_i - y_i||^alpha.
+        Subsampled from a private generator (see `_subsample_index`); x and y
+        are indexed together so a pair stays a pair.
         """
         try:
             if x.shape != y.shape:
@@ -811,11 +1066,11 @@ class CollapseDiagnostics(nn.Module):
             if N == 0:
                 return float("inf")
             # Subsample for efficiency
-            if N > 256:
-                idx = torch.randperm(N, device=x.device)[:256]
+            idx = CollapseDiagnostics._subsample_index(N, _SUBSAMPLE_LIMIT, x.device, rng)
+            if idx is not None:
                 x = x[idx]
                 y = y[idx]
-                N = 256
+                N = _SUBSAMPLE_LIMIT
             dists = (x - y).norm(dim=-1).pow(alpha)
             val = dists.mean().item()
             if not math.isfinite(val):
@@ -829,21 +1084,26 @@ class CollapseDiagnostics(nn.Module):
     # ═══════════════════════════════════════════════════════════════
 
     @staticmethod
-    def _eigenvalue_spread(x):
+    def _eigenvalue_spread(x, eigvals=None):
         """Spread of eigenvalue spectrum: std(eigenvalues) / mean(eigenvalues).
 
         High spread = some dimensions dominate = anisotropic.
         Low spread = eigenvalues are similar = isotropic.
+
+        `eigvals` is the ascending `eigvalsh` of this tensor's covariance,
+        supplied by `_SharedSpectral` because `_spectral_clustering_coeff` wants
+        the identical decomposition. `None` computes it here.
         """
         try:
-            flat = x.reshape(-1, x.size(-1)).float()
-            centered = flat - flat.mean(dim=0)
-            N, _D = centered.shape
-            if N <= 1:
-                return 0.0
-            cov = (centered.T @ centered) / max(N - 1, 1)
-            eigenvalues = torch.linalg.eigvalsh(cov)
-            eigenvalues = eigenvalues[eigenvalues > 1e-10]
+            if eigvals is None:
+                flat = x.reshape(-1, x.size(-1)).float()
+                centered = flat - flat.mean(dim=0)
+                N, _D = centered.shape
+                if N <= 1:
+                    return 0.0
+                cov = (centered.T @ centered) / max(N - 1, 1)
+                eigvals = torch.linalg.eigvalsh(cov)
+            eigenvalues = eigvals[eigvals > 1e-10]
             if eigenvalues.numel() == 0:
                 return 0.0
             spread = eigenvalues.std().item() / max(eigenvalues.mean().item(), 1e-10)
@@ -858,7 +1118,7 @@ class CollapseDiagnostics(nn.Module):
     # ═══════════════════════════════════════════════════════════════
 
     @staticmethod
-    def _subspace_overlap(x, y, k=50):
+    def _subspace_overlap(x, y, k=50, svd_x=None, svd_y=None):
         """Subspace overlap between two representation matrices.
 
         Ghojogh et al., "Subspace Learning and Feature Extraction",
@@ -866,6 +1126,9 @@ class CollapseDiagnostics(nn.Module):
 
         FIX: Use right singular vectors (V = Vh.T), NOT left (U).
         Using U was a bug that always returned 0.0.
+
+        `svd_x`/`svd_y` are precomputed `(U, S, Vh)` triples, shared with
+        `_svcca` by `_SharedSpectral`. `None` computes them here.
         """
         try:
             x_flat = x.reshape(-1, x.size(-1)).float()
@@ -878,8 +1141,8 @@ class CollapseDiagnostics(nn.Module):
                 return 0.0
 
             # SVD, get right singular vectors
-            _, _, Vhx = torch.linalg.svd(x_flat, full_matrices=False)
-            _, _, Vhy = torch.linalg.svd(y_flat, full_matrices=False)
+            _, _, Vhx = torch.linalg.svd(x_flat, full_matrices=False) if svd_x is None else svd_x
+            _, _, Vhy = torch.linalg.svd(y_flat, full_matrices=False) if svd_y is None else svd_y
 
             Vx = Vhx.T[:, :k]  # (Dx, k) — top-k right singular vectors
             Vy = Vhy.T[:, :k]  # (Dy, k)
@@ -902,7 +1165,7 @@ class CollapseDiagnostics(nn.Module):
     # ═══════════════════════════════════════════════════════════════
 
     @staticmethod
-    def _spectral_clustering_coeff(x):
+    def _spectral_clustering_coeff(x, eigvals=None):
         """Spectral clustering coefficient from eigenvalue gaps.
 
         Measures the gap between consecutive eigenvalues of the
@@ -910,16 +1173,22 @@ class CollapseDiagnostics(nn.Module):
         eigenvalues suggests k natural clusters in the representation.
 
         Returns the normalized spectral gap: max(eigenvalue[i] - eigenvalue[i+1]) / eigenvalue[0]
+
+        `eigvals` is the ascending `eigvalsh` of this tensor's covariance, shared
+        with `_eigenvalue_spread`. `None` computes it here.
         """
         try:
-            flat = x.reshape(-1, x.size(-1)).float()
-            centered = flat - flat.mean(dim=0)
-            N, D = centered.shape
-            if N <= 1 or D < 2:
+            if eigvals is None:
+                flat = x.reshape(-1, x.size(-1)).float()
+                centered = flat - flat.mean(dim=0)
+                N, D = centered.shape
+                if N <= 1 or D < 2:
+                    return 0.0
+                cov = (centered.T @ centered) / max(N - 1, 1)
+                eigvals = torch.linalg.eigvalsh(cov)
+            elif x.reshape(-1, x.size(-1)).size(-1) < 2:
                 return 0.0
-            cov = (centered.T @ centered) / max(N - 1, 1)
-            eigenvalues = torch.linalg.eigvalsh(cov)
-            eigenvalues = eigenvalues.flip(0)  # Descending order
+            eigenvalues = eigvals.flip(0)  # Descending order
 
             if eigenvalues[0] <= 1e-10:
                 return 0.0

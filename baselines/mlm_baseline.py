@@ -32,6 +32,28 @@
 # 81,758,720 of its 170,706,561 is a `target_encoder` deepcopy with
 # requires_grad=False, so it carries no gradient path.
 #
+# WHAT THE THREE ARMS LOG, AND WHY THE THREE NUMBERS ARE NOT A COMPARISON
+# -----------------------------------------------------------------------
+# "Model parameters (get_num_params())" is one line of one log directory, and a
+# reader takes the three numbers in it as a capacity comparison. They were not
+# one quantity. JEPA reported its total; this arm reported total-minus-both-
+# embeddings (81,431,040); the data2vec arm reported its own encoder-minus-
+# embeddings plus its head (49,646,720) -- 170,706,561 / 81,431,040 /
+# 49,646,720, a 3.4x spread that was pure definitional drift. Consistently
+# wrong would have been survivable; inconsistently wrong is what makes a wrong
+# number hard to notice and easy to publish. All three arms now default to the
+# total, so a logged figure is an arm's size:
+#
+#   TextSpanJEPA          170,706,561   (total)
+#   MLMBaseline           113,953,280   (total)
+#   Data2VecTextBaseline  163,927,680   (total)
+#
+# Those still differ, and must: three different architectures. What a comparison
+# can rely on is the KIND -- every parameter tensor the module owns, reachable
+# through a bare `get_num_params()`. `tests/test_baseline_parity.py::TestLogged
+# QuantityIsOneKind` pins that at three shapes, and deliberately asserts nothing
+# about the numbers being close.
+#
 # Compute is not matched either, and cannot be. Beyond the head, JEPA runs a
 # second encoder forward plus a predictor where this arm runs one encoder. And
 # `compute_loss` below projects all B*T positions before gathering, so at the
@@ -180,11 +202,37 @@ class MLMBaseline(nn.Module):
         # Type-safe: ensure info dict values are plain Python floats (not torch scalars)
         return loss, {"loss_mlm": float(loss.item()), "mlm_accuracy": float(accuracy.item())}
 
-    def get_num_params(self, non_embedding: bool = True) -> int:
-        """Count model parameters."""
-        enc = self.encoder.get_num_params(non_embedding)
-        head = sum(p.numel() for p in self.mlm_head.parameters())
-        return enc + head
+    def get_num_params(self, non_embedding: bool = False) -> int:
+        """Total parameter count of this arm: every parameter the module owns.
+
+        `src/train.py` calls this with no arguments and logs the result as
+        "Model parameters", so the signature default decides what this arm's
+        startup log *means*. `TextSpanJEPA` already defaults to the whole model;
+        this arm used to default to `non_embedding=True`, so the three arms in
+        one logging directory reported three different quantities -- at the
+        shipped rung 81,431,040 here against 170,706,561 for JEPA, a 2.10x gap
+        that was purely a difference of definition, not of architecture. The
+        default is therefore `False`, and a bare call returns this arm's size:
+        113,953,280 at the shipped rung, matching the kind of number the other
+        two arms log.
+
+        Args:
+            non_embedding: subtract the token and position embedding tables.
+                Kept because "non-embedding" is a standard published convention,
+                and it is genuinely the honest answer to a different question --
+                but it is not the model's size and must not be quoted as one.
+
+        Use `get_num_params_trainable()` for the number of parameters that
+        actually receive gradients. Here the two coincide, since this arm holds
+        no frozen copy; see that method for why that makes trainable the number
+        a capacity comparison should use.
+        """
+        total = sum(p.numel() for p in self.parameters())
+        if not non_embedding:
+            return total
+        return total - (
+            self.encoder.token_embedding.weight.numel() + self.encoder.pos_embedding.numel()
+        )
 
     def get_num_params_trainable(self) -> int:
         """Count parameters that receive a gradient.
