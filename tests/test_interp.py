@@ -1350,6 +1350,78 @@ class TestHeldOutProbeMetrics:
         assert a["selectivity"] == b["selectivity"]
         assert a["control_task_accuracy"] == b["control_task_accuracy"]
 
+    def test_selectivity_every_fit_receives_the_same_partition(self):
+        """The direct statement of the fix, by observing the fits themselves.
+
+        `compute_selectivity` fits the real task and then one probe per
+        control. All of those fits must be handed the same partition, so that
+        a difference between the real task and a control is a difference
+        between label assignments and nothing else. Before the fix each
+        control drew its own split from the global RNG.
+        """
+        from src.interp.probe_generalization import ProbeSelectivityTest
+
+        g = torch.Generator().manual_seed(17)
+        reps = torch.randn(150, 12, generator=g)
+        reps[:, 0] = torch.randn(150, generator=g) * 4
+        labels = (reps[:, 0] > 0).long()
+
+        pst = ProbeSelectivityTest(embed_dim=12, max_epochs=30, lr=0.1, seed=1)
+        seen = []
+        original = pst._train_probe
+
+        def _recording(reps_, labels_, split, generator):
+            seen.append(tuple(t.clone() for t in split))
+            return original(reps_, labels_, split, generator)
+
+        pst._train_probe = _recording
+        pst.compute_selectivity(reps, labels, n_control=3)
+
+        assert len(seen) == 4, "one fit for the real task and one per control"
+        first = seen[0]
+        for later in seen[1:]:
+            for a_idx, b_idx in zip(first, later):
+                assert torch.equal(a_idx, b_idx)
+
+    def test_selectivity_control_weights_match_the_real_task(self):
+        """Controls must differ from the real task in labels only.
+
+        Same partition, so also same starting weights: otherwise the reported
+        selectivity carries an initialisation difference on top of the label
+        difference it is supposed to measure.
+        """
+        from src.interp.probe_generalization import ProbeSelectivityTest
+
+        g = torch.Generator().manual_seed(18)
+        reps = torch.randn(150, 12, generator=g)
+        reps[:, 0] = torch.randn(150, generator=g) * 4
+        labels = (reps[:, 0] > 0).long()
+
+        pst = ProbeSelectivityTest(embed_dim=12, max_epochs=30, lr=0.1, seed=1)
+        states = []
+        original = pst._train_probe
+
+        def _recording(reps_, labels_, split, generator):
+            states.append(
+                {
+                    "seed": generator.initial_seed(),
+                    "next": generator.get_state().clone(),
+                    "labels": labels_.clone(),
+                }
+            )
+            return original(reps_, labels_, split, generator)
+
+        pst._train_probe = _recording
+        pst.compute_selectivity(reps, labels, n_control=2)
+
+        assert len(states) == 3
+        for later in states[1:]:
+            assert later["seed"] == states[0]["seed"]
+            assert torch.equal(later["next"], states[0]["next"])
+            # ... and the labels really are different, or the control is a
+            # duplicate of the real task and the test above is vacuous.
+            assert not torch.equal(later["labels"], states[0]["labels"])
+
     # ── the fourth sibling, already fixed elsewhere: do not regress ──────
 
     def test_workspace_validation_still_reports_a_heldout_probe_accuracy(self):
