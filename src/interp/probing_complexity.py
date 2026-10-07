@@ -15,11 +15,63 @@
 # - Alain & Bengio (2017): understanding intermediate layers
 # - Pimentel et al. (2023): probing pareto frontier
 # - Conneau et al. (2018): probing linguistic features across layers
-
+#
+# ── WHAT IS HELD OUT HERE ────────────────────────────────────────────────────
+# `min_extracting_depth`, which the header above calls "THE KEY METRIC FOR THE
+# PAPER'S CENTRAL CLAIM", used to be decided by `max over epochs of validation
+# accuracy` on the only partition that existed. There was no test set, so the
+# number that decided a depth was the maximum of a noisy quantity rather than
+# the accuracy of the probe that depth actually selected.
+#
+# The partition was also redrawn for EVERY depth and EVERY model, from the
+# process-global RNG, so a JEPA-vs-MLM comparison compared two unrelated
+# experiments. Measured on byte-identical data and a fixed global seed, two
+# consecutive `evaluate` calls returned different numbers; and
+# `compare_models(reps, reps.clone())` -- the same representations in both
+# arms -- reported a per-depth advantage of up to 0.625. A comparison whose
+# two arms are the same array must return exactly zero.
+#
+# Now: one partition per `evaluate()` call, drawn from a private generator and
+# shared by every depth; the same partition and the same per-depth initial
+# weights handed to both arms of `compare_models`; the epoch selected on a
+# validation third; and the reported accuracy computed once on a test third the
+# optimiser never saw. `compare_models(reps, reps.clone())` is now exactly
+# 0.0, and two `evaluate` calls at a fixed seed are identical.
+#
+# KNOWN CONFOUND, reported not fixed. `min_extracting_depth` is still set by
+# the early-stopping budget, not only by the representation. `patience` counts
+# non-improvements of a validation accuracy measured on `n_val` rows, so with
+# the shipped defaults (patience 5, max_epochs 30) the probe stops before it
+# converges. Measured on linearly separable data where a linear probe reaches
+# 0.925 held out: patience 5 / max_epochs 30 gives 0.700 and
+# `min_extracting_depth` = 3 (i.e. "not extractable at any depth"); patience 25
+# / max_epochs 400 gives 0.875 and `min_extracting_depth` = 1. Raising
+# max_epochs alone changes nothing, because patience fires first. The
+# threshold crossing is therefore a statement about the selection budget as
+# well as about the representation. Raising the budget is a science decision
+# and is not made here; `val_depths` and `max_val_accuracy` are reported so the
+# selection score is visible next to the reported one.
+#
+# Also unfixed, and reported in .agent-notes/task-11.md: the threshold
+# comparison is `test_accuracy >= min_accuracy`, where the accuracy is a float32
+# mean and the threshold is a Python float. An accuracy that is exactly 0.7 in
+# exact arithmetic comes out of that mean as 0.69999998, so it fails a
+# `min_accuracy=0.7` threshold. `min_extracting_depth` can therefore flip on a
+# one-ulp difference.
 
 import torch
 import torch.nn.functional as F
 from torch import nn
+
+#: Offset added to the seed to derive the probe-weight stream. Kept clear of
+#: the split stream's seeds so changing one partition cannot move the other.
+#: Mirrors `layer_analysis.LayerwiseProbe`.
+WEIGHT_STREAM_OFFSET = 1
+
+#: Fractions of the rows given to training, epoch selection, and the reported
+#: test score, in that order. The two tail fractions are equal so neither the
+#: epoch choice nor the reported number gets the larger share.
+DEFAULT_SPLIT_FRACTIONS = (0.6, 0.2, 0.2)
 
 
 class ProbingComplexityCurve:
@@ -36,7 +88,11 @@ class ProbingComplexityCurve:
 
     Key output: ProbingComplexityGap = min_depth(JEPA) - min_depth(MLM)
     Positive = JEPA needs deeper probe (bad)
-    Negative = JEPA needs shallower probe (good — evidence for hypothesis)
+    Negative = JEPA needs shallower probe (good - evidence for hypothesis)
+
+    The reported per-depth accuracies are TEST accuracies, on rows the probe
+    was neither trained nor epoch-selected on. See the module header for what
+    that replaces and for the measurement of the split-resampling noise.
     """
 
     def __init__(
@@ -50,6 +106,8 @@ class ProbingComplexityCurve:
         patience=5,
         min_accuracy=0.7,
         device="cpu",
+        seed=0,
+        split_fractions=DEFAULT_SPLIT_FRACTIONS,
     ):
         """
         Args:
@@ -62,6 +120,10 @@ class ProbingComplexityCurve:
             patience: early stopping patience
             min_accuracy: minimum accuracy threshold for "extractable"
             device: compute device
+            seed: seeds both the row partition and the probe weights, each
+                from its own private stream, so the whole curve is
+                reproducible without consuming the caller's global RNG
+            split_fractions: (train, validation, test) row fractions
 
         """
         self.embed_dim = embed_dim
@@ -73,6 +135,90 @@ class ProbingComplexityCurve:
         self.patience = patience
         self.min_accuracy = min_accuracy
         self.device = device
+        self.seed = int(seed)
+        self.split_fractions = tuple(split_fractions)
+
+    def train_val_test_split(self, n, seed=None):
+        """Draw ONE (train, val, test) row partition.
+
+        Public and deterministic so the partition behind a reported curve can
+        be reproduced, and reused, without retraining the probes.
+
+        Args:
+            n: number of rows to partition
+            seed: overrides ``self.seed``; pass it when the partition should
+                be pinned independently of the instance
+
+        Returns:
+            ``(train_idx, val_idx, test_idx)``, disjoint 1-D int64 tensors
+            whose union is ``range(n)``.
+
+        Raises:
+            ValueError: if any of the three sides would be empty. An empty
+                test side has no accuracy to report and an empty validation
+                side leaves the epoch choice arbitrary, so both are refused
+                rather than silently collapsed.
+
+        """
+        fr = tuple(float(f) for f in self.split_fractions)
+        if len(fr) != 3 or any(f <= 0.0 for f in fr) or sum(fr) > 1.0:
+            raise ValueError(
+                f"split_fractions must be three positive shares summing to at "
+                f"most 1, got {self.split_fractions!r}"
+            )
+        n = int(n)
+        n_train = round(fr[0] * n)
+        n_val = round(fr[1] * n)
+        n_test = n - n_train - n_val
+        if min(n_train, n_val, n_test) < 1:
+            raise ValueError(
+                f"split_fractions={self.split_fractions!r} on n={n} leave "
+                f"{n_train} train / {n_val} validation / {n_test} test rows; "
+                f"every side must be non-empty. Use more samples, or coarser "
+                f"fractions."
+            )
+        gen = torch.Generator().manual_seed(self.seed if seed is None else int(seed))
+        idx = torch.randperm(n, generator=gen)
+        return idx[:n_train], idx[n_train : n_train + n_val], idx[n_train + n_val :]
+
+    def weight_generator(self, depth):
+        """Private generator for one depth's probe weights.
+
+        Keyed on depth rather than advanced in a loop, so the initialisation
+        a given depth gets does not depend on which other depths were
+        evaluated, and so the two arms of `compare_models` receive identical
+        initial weights at every depth.
+
+        """
+        return torch.Generator().manual_seed(self.seed + WEIGHT_STREAM_OFFSET + int(depth))
+
+    def seeded_probe(self, depth, num_classes, generator=None):
+        """Build the depth-`depth` probe with weights from `generator`.
+
+        `_build_probe` constructs stock `nn.Linear` layers, which draw their
+        initialisation from the process-global RNG. The two arms of
+        `compare_models` therefore started from different points, which is a
+        second noise channel on top of the redrawn split. This reseeds the
+        layers in place, in order, reproducing torch's own law from a private
+        generator.
+
+        """
+        probe = self._build_probe(depth, num_classes)
+        if generator is None:
+            return probe
+        for module in probe.modules():
+            if not isinstance(module, nn.Linear):
+                continue
+            bound = module.in_features**-0.5
+            with torch.no_grad():
+                module.weight.copy_(
+                    torch.empty_like(module.weight).uniform_(-bound, bound, generator=generator)
+                )
+                if module.bias is not None:
+                    module.bias.copy_(
+                        torch.empty_like(module.bias).uniform_(-bound, bound, generator=generator)
+                    )
+        return probe
 
     def _build_probe(self, depth, num_classes):
         """Build a probe at the given depth.
@@ -92,21 +238,35 @@ class ProbingComplexityCurve:
         layers.append(nn.Linear(in_dim, num_classes))
         return nn.Sequential(*layers)
 
-    def _train_probe(self, probe, representations, labels):
-        """Train a single probe with early stopping.
+    def _train_probe(self, probe, representations, labels, split):
+        """Train one probe with early stopping on a validation partition.
+
+        The epoch and the weights are selected on the validation split. The
+        test split is scored exactly once, afterwards, on the restored best
+        state, so the returned ``test_accuracy`` is not the maximum of
+        anything and neither the optimiser nor the model selection has seen
+        it.
 
         Args:
-            probe: nn.Module probe
+            probe: nn.Module probe, already carrying its final weights
             representations: (N, D)
             labels: (N,) class indices
+            split: ``(train_idx, val_idx, test_idx)``, from
+                :meth:`train_val_test_split`. **Supply this whenever you
+                compare two or more representations**; omitting it draws a
+                fresh partition, which is only correct for a standalone
+                probe.
 
         Returns:
-            best_accuracy on validation set
+            dict with ``test_accuracy``, ``val_accuracy`` (the best-epoch
+            selection score), and ``train_accuracy``.
 
         """
         N = representations.size(0)
         if N < 10:
-            return 0.0
+            return {"test_accuracy": 0.0, "val_accuracy": 0.0, "train_accuracy": 0.0}
+
+        train_idx, val_idx, test_idx = split
 
         # Ensure representations are float and require_grad compatible
         representations = representations.detach().float()
@@ -114,26 +274,25 @@ class ProbingComplexityCurve:
         probe = probe.to(self.device)
         probe.train()
 
-        # Split 80/20
-        n_train = int(0.8 * N)
-        idx = torch.randperm(N)
-        train_idx = idx[:n_train]
-        val_idx = idx[n_train:]
-
         train_reps = representations[train_idx].to(self.device)
         train_labels = labels[train_idx].to(self.device)
         val_reps = representations[val_idx].to(self.device)
         val_labels = labels[val_idx].to(self.device)
+        test_reps = representations[test_idx].to(self.device)
+        test_labels = labels[test_idx].to(self.device)
 
-        probe = probe.to(self.device)
         optimizer = torch.optim.Adam(probe.parameters(), lr=self.lr, weight_decay=0.01)
         scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=self.max_epochs)
+
+        def _acc(x, y):
+            with torch.no_grad():
+                return (probe(x).argmax(dim=-1) == y).float().mean().item()
 
         best_acc = 0.0
         best_state = None
         no_improve = 0
 
-        for epoch in range(self.max_epochs):
+        for _epoch in range(self.max_epochs):
             # Train
             probe.train()
             logits = probe(train_reps)
@@ -145,9 +304,7 @@ class ProbingComplexityCurve:
 
             # Validate
             probe.eval()
-            with torch.no_grad():
-                logits = probe(val_reps)
-                acc = (logits.argmax(dim=-1) == val_labels).float().mean().item()
+            acc = _acc(val_reps, val_labels)
 
             if acc > best_acc:
                 best_acc = acc
@@ -162,38 +319,64 @@ class ProbingComplexityCurve:
         if best_state is not None:
             probe.load_state_dict(best_state)
 
-        return best_acc
+        probe.eval()
+        return {
+            "test_accuracy": _acc(test_reps, test_labels),
+            "val_accuracy": best_acc,
+            "train_accuracy": _acc(train_reps, train_labels),
+        }
 
-    def evaluate(self, representations, labels, task_name="default"):
+    def evaluate(self, representations, labels, task_name="default", split=None):
         """Evaluate probing complexity for a single task.
+
+        All depths are trained and scored on ONE partition, drawn here unless
+        the caller supplies it. The accuracies are therefore comparable to
+        each other, which is the entire point of a complexity curve:
+        ``min_extracting_depth`` is a threshold crossing over them, and a
+        threshold crossing over measurements taken on different partitions is
+        a statistic of the partitions.
 
         Args:
             representations: (N, D) representation vectors
             labels: (N,) integer class labels
             task_name: name of the linguistic task
+            split: optional ``(train_idx, val_idx, test_idx)`` from
+                :meth:`train_val_test_split`
 
         Returns:
-            dict with per-depth accuracy and minimum extracting depth
+            dict with per-depth TEST accuracy, the best-epoch validation
+            score alongside it, the minimum extracting depth, and the
+            partition's provenance
 
         """
         num_classes = self.num_classes or labels.max().item() + 1
         num_classes = max(int(num_classes), 2)
 
+        if split is None:
+            split = self.train_val_test_split(representations.size(0))
+        train_idx, val_idx, test_idx = split
+
         results = {
             "task": task_name,
+            # The number the module exists to produce. Now a held-out score.
             "depths": {},
+            "val_depths": {},
             "min_extracting_depth": None,
         }
 
         for depth in self.depths:
-            probe = self._build_probe(depth, num_classes)
-            # _train_probe needs gradients — use enable_grad context
+            probe = self.seeded_probe(depth, num_classes, self.weight_generator(depth))
+            # _train_probe needs gradients - use enable_grad context
             with torch.enable_grad():
-                acc = self._train_probe(probe, representations, labels)
-            results["depths"][depth] = acc
+                scores = self._train_probe(probe, representations, labels, split)
+            results["depths"][depth] = scores["test_accuracy"]
+            results["val_depths"][depth] = scores["val_accuracy"]
 
-            # First depth that exceeds threshold
-            if acc >= self.min_accuracy and results["min_extracting_depth"] is None:
+            # First depth whose HELD-OUT accuracy exceeds the threshold
+            if (
+                scores["test_accuracy"] >= self.min_accuracy
+                and results["min_extracting_depth"] is None
+            ):
                 results["min_extracting_depth"] = depth
 
         # If no depth reached threshold, set to max + 1
@@ -201,6 +384,15 @@ class ProbingComplexityCurve:
             results["min_extracting_depth"] = max(self.depths) + 1
 
         results["max_accuracy"] = max(results["depths"].values())
+        # The same statistic as `max_accuracy` was before this module had a
+        # test split: the best-epoch validation score. Reported next to it
+        # because the gap between the two IS the optimism the old number
+        # carried, and it is the size of that optimism a reader needs.
+        results["max_val_accuracy"] = max(results["val_depths"].values())
+        results["n_train"] = int(train_idx.numel())
+        results["n_val"] = int(val_idx.numel())
+        results["n_test"] = int(test_idx.numel())
+        results["split_seed"] = self.seed
 
         return results
 
@@ -209,6 +401,12 @@ class ProbingComplexityCurve:
 
         THE CORE COMPARISON for the paper.
 
+        Both arms are evaluated on the SAME partition and with the SAME
+        per-depth initial weights, because they carry the same row count and
+        the same architecture at each depth; the only thing that differs is
+        the representation. Previously each arm drew its own split per depth,
+        so this returned two unrelated experiments.
+
         Args:
             jepa_reps: (N, D) JEPA representations
             baseline_reps: (N, D) baseline representations
@@ -216,11 +414,14 @@ class ProbingComplexityCurve:
             task_name: name of linguistic task
 
         Returns:
-            dict with complexity gap and per-depth comparison
+            dict with complexity gap, per-depth comparison, and the shared
+            partition's provenance
 
         """
-        jepa_result = self.evaluate(jepa_reps, labels, f"{task_name}_jepa")
-        baseline_result = self.evaluate(baseline_reps, labels, f"{task_name}_baseline")
+        split = self.train_val_test_split(jepa_reps.size(0))
+
+        jepa_result = self.evaluate(jepa_reps, labels, f"{task_name}_jepa", split=split)
+        baseline_result = self.evaluate(baseline_reps, labels, f"{task_name}_baseline", split=split)
 
         # Probing Complexity Gap: negative = JEPA is more accessible
         complexity_gap = (
@@ -247,6 +448,12 @@ class ProbingComplexityCurve:
             "depth_comparison": depth_comparison,
             "jepa_max_acc": jepa_result["max_accuracy"],
             "baseline_max_acc": baseline_result["max_accuracy"],
+            "jepa_max_val_acc": jepa_result["max_val_accuracy"],
+            "baseline_max_val_acc": baseline_result["max_val_accuracy"],
+            "n_train": jepa_result["n_train"],
+            "n_val": jepa_result["n_val"],
+            "n_test": jepa_result["n_test"],
+            "split_seed": self.seed,
         }
 
     def multi_task_comparison(self, jepa_reps_dict, baseline_reps_dict, labels_dict):

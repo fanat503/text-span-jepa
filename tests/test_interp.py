@@ -906,7 +906,7 @@ class TestProbeGeneralization:
                 tgt_labels,
                 "test",
             )
-        assert "source_accuracy" in result
+        assert "source_accuracy_heldout" in result
         assert "target_accuracy" in result
         assert result["generalization_ratio"] > 0
 
@@ -924,6 +924,447 @@ class TestProbeSelectivity:
         assert "selectivity" in result
         assert "real_task_accuracy" in result
         assert "control_task_accuracy" in result
+
+
+# ═══════════════════════════════════════════════════════════════════
+# Held-out splits for the sibling probe metrics
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestHeldOutProbeMetrics:
+    """The four sibling probe metrics must not report a training-set score.
+
+    One leakage construction per module, because the modules differ in kind:
+    a row-level classifier, a row-level probe curve, and a probe whose unit of
+    generalisation is the sentence. Each test below makes the data say
+    something different on the training partition than on the partition that
+    gets reported, so a number read from the wrong one cannot pass.
+
+    `lr` is raised from the 1e-3 default throughout. At 1e-3 with
+    full-batch Adam the total weight displacement a probe can undergo is
+    `lr * max_epochs` = 0.03 at the shipped budgets, so the probes cannot fit
+    anything and every assertion below would be vacuous. That is itself a
+    finding, reported in .agent-notes/task-11.md; the defaults are not changed
+    here because the optimiser budget is a science decision.
+    """
+
+    # ── probe_generalization.source_accuracy ──────────────────────────────
+
+    @staticmethod
+    def _pg_source(n=120, d=12, seed=11):
+        from src.interp.probe_generalization import ProbeGeneralizationTest
+
+        g = torch.Generator().manual_seed(seed)
+        reps = torch.randn(n, d, generator=g)
+        clean = (reps[:, 0] > 0).long()
+        split = ProbeGeneralizationTest(embed_dim=d, seed=3).source_split(n)
+        return reps, clean, split
+
+    def test_pg_reported_source_accuracy_is_not_the_training_accuracy(self):
+        """Anti-correlated held-out rows: the gap must appear.
+
+        The training rows carry the clean rule ``reps[:, 0] > 0``; the rows
+        that get reported carry its complement. A probe fitted on the clean
+        rows is then wrong on every reported row, so if the reported number
+        were in-sample the two accuracies would be equal.
+        """
+        from src.interp.probe_generalization import ProbeGeneralizationTest
+
+        reps, clean, split = self._pg_source()
+        _, _, heldout_idx = split
+        labels = clean.clone()
+        labels[heldout_idx] = 1 - labels[heldout_idx]
+
+        g = torch.Generator().manual_seed(12)
+        tgt = torch.randn(80, 12, generator=g)
+        # patience is raised for the same reason lr is: at the default 5 the
+        # probe stops at train=0.708 where patience=50 reaches 0.958, so the
+        # assertion below would be measuring the stopping rule.
+        pgt = ProbeGeneralizationTest(embed_dim=12, max_epochs=200, patience=50, lr=0.1, seed=3)
+        result = pgt.cross_dataset_generalization(
+            reps, labels, tgt, (tgt[:, 0] > 0).long(), "t", split=split
+        )
+
+        assert result["source_train_accuracy"] > 0.9
+        assert result["source_accuracy_heldout"] < 0.25
+        assert result["source_train_accuracy"] - result["source_accuracy_heldout"] > 0.6
+
+    def test_pg_old_in_sample_name_is_gone(self):
+        """`source_accuracy` must not come back under a name that lies."""
+        from src.interp.probe_generalization import ProbeGeneralizationTest
+
+        reps, clean, split = self._pg_source()
+        g = torch.Generator().manual_seed(13)
+        tgt = torch.randn(80, 12, generator=g)
+        pgt = ProbeGeneralizationTest(embed_dim=12, max_epochs=60, lr=0.1, seed=3)
+        result = pgt.cross_dataset_generalization(
+            reps, clean, tgt, (tgt[:, 0] > 0).long(), "t", split=split
+        )
+        assert "source_accuracy" not in result
+        # Every accuracy the result carries has to say which split it is from.
+        for key in (
+            "source_accuracy_heldout",
+            "source_selection_accuracy",
+            "source_train_accuracy",
+        ):
+            assert key in result
+        assert result["n_source_train"] + result["n_source_selection"] + result[
+            "n_source_heldout"
+        ] == reps.size(0)
+        assert result["n_source_heldout"] > 0
+
+    def test_pg_reported_accuracy_reads_the_heldout_labels_only(self):
+        """Relabel the held-out rows: only the held-out number may move."""
+        from src.interp.probe_generalization import ProbeGeneralizationTest
+
+        reps, clean, split = self._pg_source()
+        _, _, heldout_idx = split
+        g = torch.Generator().manual_seed(14)
+        tgt = torch.randn(80, 12, generator=g)
+        tgt_lab = (tgt[:, 0] > 0).long()
+
+        flipped = clean.clone()
+        flipped[heldout_idx] = 1 - flipped[heldout_idx]
+
+        pgt = ProbeGeneralizationTest(embed_dim=12, max_epochs=60, lr=0.1, seed=3)
+        a = pgt.cross_dataset_generalization(reps, clean, tgt, tgt_lab, "t", split=split)
+        b = pgt.cross_dataset_generalization(reps, flipped, tgt, tgt_lab, "t", split=split)
+
+        # Reads the held-out labels ...
+        assert a["source_accuracy_heldout"] != b["source_accuracy_heldout"]
+        # ... and is not a function of the training labels or of the target.
+        assert a["source_train_accuracy"] == b["source_train_accuracy"]
+        assert a["target_accuracy"] == b["target_accuracy"]
+
+    def test_pg_generalization_gap_is_computed_from_the_heldout_source(self):
+        from src.interp.probe_generalization import ProbeGeneralizationTest
+
+        reps, clean, split = self._pg_source()
+        g = torch.Generator().manual_seed(15)
+        tgt = torch.randn(80, 12, generator=g)
+        pgt = ProbeGeneralizationTest(embed_dim=12, max_epochs=60, lr=0.1, seed=3)
+        result = pgt.cross_dataset_generalization(
+            reps, clean, tgt, (tgt[:, 0] > 0).long(), "t", split=split
+        )
+        assert result["generalization_gap"] == (
+            result["source_accuracy_heldout"] - result["target_accuracy"]
+        )
+
+    def test_pg_compare_models_pairs_its_two_arms(self):
+        """Two arms holding the SAME array must score identically, exactly."""
+        from src.interp.probe_generalization import ProbeGeneralizationTest
+
+        reps, clean, split = self._pg_source()
+        g = torch.Generator().manual_seed(16)
+        tgt = torch.randn(80, 12, generator=g)
+        tgt_lab = (tgt[:, 0] > 0).long()
+        pgt = ProbeGeneralizationTest(embed_dim=12, max_epochs=60, lr=0.1, seed=3)
+        result = pgt.compare_models(reps, reps.clone(), clean, tgt, tgt.clone(), tgt_lab)
+        assert result["jepa_source_acc_heldout"] == result["baseline_source_acc_heldout"]
+        assert result["jepa_gen_ratio"] == result["baseline_gen_ratio"]
+        assert result["n_source_heldout"] > 0
+
+    def test_pg_is_reproducible_and_does_not_consume_the_global_rng(self):
+        from src.interp.probe_generalization import ProbeGeneralizationTest
+
+        reps, clean, split = self._pg_source()
+        g = torch.Generator().manual_seed(17)
+        tgt = torch.randn(80, 12, generator=g)
+        tgt_lab = (tgt[:, 0] > 0).long()
+        pgt = ProbeGeneralizationTest(embed_dim=12, max_epochs=60, lr=0.1, seed=3)
+
+        torch.manual_seed(4242)
+        a = pgt.cross_dataset_generalization(reps, clean, tgt, tgt_lab, "t", split=split)
+        torch.manual_seed(9999)
+        b = pgt.cross_dataset_generalization(reps, clean, tgt, tgt_lab, "t", split=split)
+        assert a["source_accuracy_heldout"] == b["source_accuracy_heldout"]
+        assert a["target_accuracy"] == b["target_accuracy"]
+
+    def test_pg_source_split_is_a_partition(self):
+        from src.interp.probe_generalization import ProbeGeneralizationTest
+
+        pgt = ProbeGeneralizationTest(embed_dim=12)
+        train, sel, test = pgt.source_split(120)
+        allidx = torch.cat([train, sel, test]).sort().values
+        assert torch.equal(allidx, torch.arange(120))
+        assert train.numel() and sel.numel() and test.numel()
+        # A partition that cannot leave every side non-empty is refused, not
+        # silently collapsed onto one side.
+        with pytest.raises(ValueError, match="non-empty"):
+            pgt.source_split(2)
+
+    # ── probing_complexity: best-epoch validation with no test set ───────
+
+    @staticmethod
+    def _pcc_case(n=150, d=12, seed=12):
+        from src.interp.probing_complexity import ProbingComplexityCurve
+
+        g = torch.Generator().manual_seed(seed)
+        reps = torch.randn(n, d, generator=g)
+        clean = (reps[:, 0] > 0).long()
+        pcc = ProbingComplexityCurve(
+            embed_dim=d,
+            depths=(1,),
+            max_epochs=200,
+            lr=0.1,
+            min_accuracy=0.99,
+            seed=4,
+        )
+        split = pcc.train_val_test_split(n)
+        _, _, test_idx = split
+        # Only the rows that get REPORTED contradict the rule the probe learns.
+        labels = clean.clone()
+        labels[test_idx] = 1 - labels[test_idx]
+        return pcc, reps, labels, split
+
+    def test_pcc_reported_accuracy_is_not_the_validation_score(self):
+        """Train and validation rows are clean; the reported rows are not.
+
+        The reported number has to fall with the test rows and not with the
+        other two partitions, which is only true if it is computed on a
+        partition the optimiser never trained or selected on.
+        """
+        pcc, reps, labels, split = self._pcc_case()
+        result = pcc.evaluate(reps, labels, "t", split=split)
+
+        probe = pcc.seeded_probe(1, 2, pcc.weight_generator(1))
+        with torch.enable_grad():
+            scores = pcc._train_probe(probe, reps, labels, split)
+
+        assert scores["train_accuracy"] > 0.85
+        assert result["val_depths"][1] > 0.85
+        assert result["depths"][1] < 0.35
+        assert result["max_accuracy"] == result["depths"][1]
+
+    def test_pcc_reported_accuracy_reads_the_test_labels(self):
+        pcc, reps, labels, split = self._pcc_case()
+        test_idx = split[2]
+        flipped = labels.clone()
+        flipped[test_idx] = 1 - flipped[test_idx]
+        a = pcc.evaluate(reps, labels, "t", split=split)
+        b = pcc.evaluate(reps, flipped, "t", split=split)
+        assert a["depths"] != b["depths"]
+
+    def test_pcc_compare_models_of_identical_arms_is_exactly_zero(self):
+        """The anchor: the same array in both arms must give advantage 0.0.
+
+        Before the split and the initial weights were shared, this returned
+        up to 0.625 on byte-identical arms, which is the whole defect in one
+        number.
+        """
+        pcc, reps, labels, _ = self._pcc_case()
+        result = pcc.compare_models(reps, reps.clone(), labels, "same")
+        assert result["depth_comparison"][1]["jepa_advantage"] == 0.0
+        assert result["jepa_max_acc"] == result["baseline_max_acc"]
+        assert result["complexity_gap"] == 0
+
+    def test_pcc_split_is_shared_by_both_arms_and_reported(self):
+        pcc, reps, labels, split = self._pcc_case()
+        result = pcc.compare_models(reps, reps.clone(), labels, "same")
+        assert result["n_train"] + result["n_val"] + result["n_test"] == reps.size(0)
+        assert result["n_test"] > 0
+        assert result["split_seed"] == 4
+        assert [result["n_train"], result["n_val"], result["n_test"]] == [
+            int(i.numel()) for i in split
+        ]
+
+    def test_pcc_is_reproducible_across_global_rng_state(self):
+        pcc, reps, labels, split = self._pcc_case()
+        torch.manual_seed(1)
+        a = pcc.evaluate(reps, labels, "t", split=split)
+        torch.manual_seed(2)
+        b = pcc.evaluate(reps, labels, "t", split=split)
+        assert a["depths"] == b["depths"]
+        assert a["val_depths"] == b["val_depths"]
+
+    def test_pcc_split_is_a_partition_and_refuses_a_degenerate_one(self):
+        from src.interp.probing_complexity import ProbingComplexityCurve
+
+        pcc = ProbingComplexityCurve(embed_dim=12)
+        train, val, test = pcc.train_val_test_split(120)
+        assert torch.equal(torch.cat([train, val, test]).sort().values, torch.arange(120))
+        with pytest.raises(ValueError, match="non-empty"):
+            pcc.train_val_test_split(3)
+
+    # ── structural_probe.source_spearman: the unit is the sentence ───────
+
+    @staticmethod
+    def _sp_case(T=8, n_sent=30, d=16, seed=13):
+        from src.interp.structural_probe import StructuralProbe
+
+        def chain(gen):
+            pos = torch.cumsum(torch.randint(0, 2, (T,), generator=gen), 0).float()
+            return pos - pos.mean()
+
+        g = torch.Generator().manual_seed(seed)
+        reps_list, dist_list = [], []
+        for _ in range(n_sent):
+            pos = chain(g)
+            h = torch.randn(T, d, generator=g) * 0.05
+            # Column 0 encodes the position, so squared distance under a linear
+            # map can recover the gold distance.
+            h[:, 0] = pos
+            reps_list.append(h)
+            dist_list.append(torch.cdist(pos.unsqueeze(-1), pos.unsqueeze(-1)).squeeze(-1))
+        probe = StructuralProbe(embed_dim=d, probe_rank=4)
+        train_idx, test_idx = probe.sentence_split(n_sent, seed=0, holdout_fraction=0.5)
+        probe.train_probe(reps_list, dist_list, epochs=40, train_idx=train_idx)
+        return probe, reps_list, dist_list, train_idx, test_idx
+
+    def test_sp_compute_runs_and_source_spearman_is_on_unseen_sentences(self):
+        """`compute` used to raise AttributeError; nobody had called it.
+
+        And `source_spearman` was the probe's own training sentences. Here the
+        held-out sentences get unstructured gold distances, so the two numbers
+        must separate.
+        """
+        from src.interp.probe_generalization import StructuralProbeGeneralization
+
+        probe, reps_list, dist_list, train_idx, test_idx = self._sp_case()
+
+        noisy = torch.Generator().manual_seed(17)
+        mixed = list(dist_list)
+        for i in test_idx.tolist():
+            m = torch.randint(0, 4, (probe.embed_dim and 8, 8), generator=noisy).float()
+            mixed[i] = 0.5 * (m + m.t())
+
+        result = StructuralProbeGeneralization.compute(
+            probe, reps_list, mixed, reps_list, dist_list, source_train_idx=train_idx
+        )
+        assert "source_spearman" not in result
+        assert result["source_spearman_train"] > 0.8
+        assert abs(result["source_spearman_heldout"]) < 0.3
+        assert result["source_optimism"] > 0.5
+        assert result["n_source_heldout"] == test_idx.numel()
+
+    def test_sp_heldout_spearman_reads_the_heldout_sentences_only(self):
+        from src.interp.probe_generalization import StructuralProbeGeneralization
+
+        probe, reps_list, dist_list, train_idx, test_idx = self._sp_case()
+        noisy = torch.Generator().manual_seed(17)
+        mixed = list(dist_list)
+        for i in test_idx.tolist():
+            m = torch.randint(0, 4, (8, 8), generator=noisy).float()
+            mixed[i] = 0.5 * (m + m.t())
+
+        perm = torch.Generator().manual_seed(21)
+        mixed2 = list(mixed)
+        for i in test_idx.tolist():
+            p = torch.randperm(8, generator=perm)
+            mixed2[i] = mixed[i][p][:, p]
+
+        a = StructuralProbeGeneralization.compute(
+            probe, reps_list, mixed, reps_list, dist_list, source_train_idx=train_idx
+        )
+        b = StructuralProbeGeneralization.compute(
+            probe, reps_list, mixed2, reps_list, dist_list, source_train_idx=train_idx
+        )
+        assert a["source_spearman_heldout"] != b["source_spearman_heldout"]
+        assert a["source_spearman_train"] == b["source_spearman_train"]
+
+    def test_sp_sentence_split_is_a_partition_and_refuses_a_degenerate_one(self):
+        from src.interp.structural_probe import StructuralProbe
+
+        train, test = StructuralProbe.sentence_split(40, seed=0, holdout_fraction=0.25)
+        assert torch.equal(torch.cat([train, test]).sort().values, torch.arange(40))
+        assert test.numel() == 10
+        # Same seed, same partition.
+        again = StructuralProbe.sentence_split(40, seed=0, holdout_fraction=0.25)
+        assert torch.equal(train, again[0])
+        with pytest.raises(ValueError, match="non-empty"):
+            StructuralProbe.sentence_split(4, seed=0, holdout_fraction=0.9)
+        with pytest.raises(ValueError, match="holdout_fraction"):
+            StructuralProbe.sentence_split(40, seed=0, holdout_fraction=0.0)
+
+    def test_sp_check_sentence_split_rejects_a_split_for_another_set(self):
+        from src.interp.structural_probe import StructuralProbe
+
+        train, test = StructuralProbe.sentence_split(10, seed=0)
+        with pytest.raises(ValueError, match="sentences"):
+            StructuralProbe.check_sentence_split((train, test), 11)
+
+    def test_sp_check_sentence_split_rejects_overlapping_sides(self):
+        """An overlapping split is the bug this guard exists for.
+
+        `idx[: n - k]` against `idx[k:]` repeats `n - 2k` sentences and still
+        satisfies the size check, and it is what `sentence_split` briefly did.
+        """
+        from src.interp.structural_probe import StructuralProbe
+
+        idx = torch.arange(10)
+        # 5 + 5 == 10, in range, but sentence 4 is on both sides.
+        with pytest.raises(ValueError, match="not a partition"):
+            StructuralProbe.check_sentence_split((idx[:5], torch.tensor([4, 5, 6, 7, 8])), 10)
+
+    # ── ProbeSelectivityTest: n_control different random splits ──────────
+
+    def test_selectivity_is_measured_out_of_sample_on_one_partition(self):
+        from src.interp.probe_generalization import ProbeSelectivityTest
+
+        g = torch.Generator().manual_seed(14)
+        reps = torch.randn(150, 12, generator=g)
+        reps[:, 0] = torch.randn(150, generator=g) * 4
+        labels = (reps[:, 0] > 0).long()
+        pst = ProbeSelectivityTest(embed_dim=12, max_epochs=200, lr=0.1, seed=1)
+        result = pst.compute_selectivity(reps, labels, n_control=3)
+
+        assert result["n_train"] + result["n_selection"] + result["n_heldout"] == reps.size(0)
+        assert result["n_heldout"] > 0
+        # A real task the probe can fit must beat the permuted-label controls,
+        # scored on the same rows.
+        assert result["real_task_accuracy"] > 0.9
+        assert result["control_task_accuracy"] < 0.7
+        assert result["selectivity"] == (
+            result["real_task_accuracy"] - result["control_task_accuracy"]
+        )
+
+    def test_selectivity_controls_share_one_partition_with_the_real_task(self):
+        """One partition, so the controls differ only in their labels."""
+        from src.interp.probe_generalization import ProbeSelectivityTest
+
+        g = torch.Generator().manual_seed(15)
+        reps = torch.randn(150, 12, generator=g)
+        reps[:, 0] = torch.randn(150, generator=g) * 4
+        labels = (reps[:, 0] > 0).long()
+        pst = ProbeSelectivityTest(embed_dim=12, max_epochs=60, lr=0.1, seed=1)
+        split = pst.source_split(reps.size(0))
+        a = pst.compute_selectivity(reps, labels, n_control=2, split=split)
+        b = pst.compute_selectivity(reps, labels, n_control=5, split=split)
+        # More control draws must not move the real task's own score: it is one
+        # fit on one partition, not an average over redraws.
+        assert a["real_task_accuracy"] == b["real_task_accuracy"]
+        assert torch.equal(pst.source_split(reps.size(0))[2], split[2])
+
+    def test_selectivity_is_reproducible_across_global_rng_state(self):
+        from src.interp.probe_generalization import ProbeSelectivityTest
+
+        g = torch.Generator().manual_seed(16)
+        reps = torch.randn(150, 12, generator=g)
+        reps[:, 0] = torch.randn(150, generator=g) * 4
+        labels = (reps[:, 0] > 0).long()
+        pst = ProbeSelectivityTest(embed_dim=12, max_epochs=60, lr=0.1, seed=1)
+        torch.manual_seed(1)
+        a = pst.compute_selectivity(reps, labels, n_control=3)
+        torch.manual_seed(2)
+        b = pst.compute_selectivity(reps, labels, n_control=3)
+        assert a["selectivity"] == b["selectivity"]
+        assert a["control_task_accuracy"] == b["control_task_accuracy"]
+
+    # ── the fourth sibling, already fixed elsewhere: do not regress ──────
+
+    def test_workspace_validation_still_reports_a_heldout_probe_accuracy(self):
+        """`workspace_validation` was TASK-18's card and is already fixed.
+
+        Pinned here so a future rename of that key cannot quietly turn it back
+        into an in-sample number without this file going red.
+        """
+        import inspect
+
+        from src.interp import workspace_validation as wv
+
+        src = inspect.getsource(wv)
+        assert "probe_accuracy_heldout" in src
+        assert "probe_accuracy_train" not in src
 
 
 # ═══════════════════════════════════════════════════════════════════
