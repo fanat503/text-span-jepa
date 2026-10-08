@@ -1,6 +1,6 @@
 #!/bin/bash
 # Text-Span JEPA — WikiText-103 multi-GPU (DDP)
-# Copyright 2026 Text-Span JEPA Authors
+# Copyright 2026 Slyatski Ilya
 set -euo pipefail
 
 NUM_GPUS=${1:-4}

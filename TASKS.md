@@ -740,3 +740,98 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 - verify: `& $PY tools/rt.py tests/test_config_system.py --slow`, plus running
   the script in dry-run and pasting the output
 - report: `.agent-notes/task-37.md`
+
+### TASK-38 | group: G-COVER | status: done | mode: solo
+- goal: position every mechanism against the literature. Delivered as
+  `docs/related_work.md`.
+- verdict: **nothing is novel in isolation.** All twelve mechanisms are
+  recombinations of published technique. Two survive as narrow COMBINATION
+  claims: JAWP (JEPA prediction restricted to a learned k-dim subspace under SVD
+  retraction) and SWIP (spectral shaping applied only OUTSIDE a protected
+  subspace — VICReg and Barlow Twins shape the whole spectrum). Neither is a new
+  mathematical object, and the Courant-Fischer step is textbook Ky Fan.
+- fifteen refused claims are listed explicitly so a later draft cannot
+  reintroduce them by accident.
+
+### TASK-39 | group: G-FIX | status: todo | mode: solo
+- goal: **PUC contributes a constant to `total_loss` under the shipped defaults.**
+- why this is the most serious defect the campaign has found, and it survived
+  25 cards: with `use_differentiable_entropy=False` — a flag never exposed
+  through `TextSpanJEPAConfig` — the PUC loss reads an EMA buffer with no
+  autograd edge to `z_pred`, so it is a constant added to the objective.
+  Measured by the worker that found it:
+    use_differentiable_entropy=False   loss 0.1401  requires_grad False
+    use_differentiable_entropy=True    loss 0.1037  requires_grad True   z.grad 1.4e-05
+  It looks live: the config key is non-zero and `validate()` gates it. That is
+  the worst shape a defect can have — a mechanism that appears in the ablation
+  grid, passes a config check, contributes a number to a printed loss, and
+  cannot influence training.
+- files_allowed: `src/models/puc.py`, `defaults.yaml`
+- files_forbidden: `src/models/mechanisms.py`, `src/train.py`, `proofs/**`
+  (per AGENTS.md the proof is a design doc; record the divergence there, do not
+  edit code to match it without a human decision)
+- verify: `& $PY tools/rt.py tests/test_puc.py tests/test_sterility.py`
+- must pin: a test that asserts the PUC loss carries an autograd edge to the
+  encoder under the DEFAULT config. If the default is genuinely meant to be off,
+  then `default: 0` in defaults.yaml and the mechanism must not appear in any
+  shipped ablation arm — say which, and why.
+- also: `use_differentiable_entropy` is unreachable from
+  `TextSpanJEPAConfig`. Either expose it or delete it; an unreachable knob that
+  changes the objective is a trap.
+- report: `.agent-notes/task-39.md`
+
+### TASK-40 | group: G-FIX | status: todo | mode: arena
+- goal: reconcile WSD and JAWP, which pull the SAME parameter in OPPOSITE
+  directions with nothing tying them together.
+- why: WSD pulls `Q` toward the **top-k** eigenvectors of the target covariance
+  (highest variance); JAWP selects the **bottom-k** of the residual, and JAWP's
+  own header names high-variance selection as the failure mode to avoid. Same
+  `Q`, opposite optima. Found while writing the related-work section, and it is
+  NOT in the audit matrix, so it has never been triaged.
+- this is a science decision, not a bug: both may be correct if they act on
+  different quantities at different times. Establish from the code which it is,
+  and if it is a genuine conflict, the resolution is the owner's.
+- files_allowed: `src/models/wsd.py`, `src/models/jawp.py`, `proofs/wsd.md`,
+  `proofs/jawp.md`
+- files_forbidden: `src/models/mechanisms.py`, `src/train.py`, `config/**`
+- verify: `& $PY tools/rt.py tests/test_wsd.py tests/test_jawp.py tests/test_sterility.py`
+- must also: two of JAWP's four numbered capabilities,
+  `detect_workspace_dimension` and `grassmann_retract`, have NO caller in `src/`
+  at all. Either wire them or delete them — a capability that appears in the
+  header's count of 16 but is never called is the count mismatch in AGENTS.md
+  made concrete.
+- report: `.agent-notes/task-40.md`
+
+### TASK-41 | group: G-COVER | status: todo | mode: arena
+- goal: the stale-documentation sweep. Everything below is already KNOWN to be
+  wrong and is recorded nowhere as a task.
+- why: 25 cards changed behaviour and the prose did not follow. A reviewer reads
+  the prose. Known-stale, verified by this campaign:
+  - `AGENTS.md` says "686 tests pass, ~108s". It is 1910 in ~66s on CI.
+  - `AGENTS.md` says "16 mechanisms" against 12 modules and N_MECHANISMS=16.
+  - the wave-1 audit plan still says the parameter count is 2.7x. It is 1.87x.
+  - `layer_analysis` published numbers are invalidated (TASK-12).
+  - `probe_generalization` `source_accuracy` / `generalization_gap` /
+    `generalization_ratio` / `compare_models` outputs are invalidated (TASK-11);
+    `probing_complexity` `depths` / `max_accuracy` / `min_extracting_depth` /
+    `complexity_gap` likewise; `source_spearman` never executed at all.
+  - `subspace_similarity` values are not comparable to new ones (TASK-18).
+  - seven `CollapseDiagnostics` values changed by design (TASK-19).
+  - `gac.py:162`'s docstring claims `z_pred` is "detached from graph". It is not.
+    The code is right and the docstring is wrong.
+  - `mlm_baseline.py` claimed "identical model capacity" (TASK-30, now removed).
+- method: grep the docs for every NUMBER and every module name, then check each
+  against the code. A number in prose that no longer matches the code is a
+  defect of the same class as a wrong number in a metric, and this campaign has
+  spent 25 cards establishing that distinction.
+- do NOT rewrite history: dated records stay dated, but must be MARKED as
+  superseded and say by which card. A dated audit that silently disagrees with
+  the code is worse than one that says "as of 2026-08-24, wrong, superseded by
+  TASK-30".
+- files_allowed: `README.md`, `AGENTS.md`, `proofs/**`, `docs/**`,
+  `config/ablations/README.md`
+- files_forbidden: `src/**`, `config/**` except that `config/ablations/README.md`
+  is allowed, `tests/**`
+- verify: `& $PY tools/rt.py tests/test_config_system.py --slow`, plus for each
+  correction the command that PROVES the new text is right
+- report: `.agent-notes/task-41.md`

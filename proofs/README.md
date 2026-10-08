@@ -25,12 +25,18 @@ source of the old "13 mechanisms" / "16 mechanisms" disagreement in this file.
 | # | GWP capability | Kind | Code |
 |---|---|---|---|
 | 1 | JAWP | module | [`src/models/jawp.py`](../src/models/jawp.py) — `JAWPModule` |
-| 2 | WIP | JAWP method | `workspace_information_preservation` (`jawp.py:574`) |
-| 3 | Spectral Gap | JAWP method | `detect_workspace_dimension` (`jawp.py:467`) |
-| 4 | Grassmann Optimization | JAWP methods | `grassmann_retract` (`jawp.py:808`), `principal_angles` (`jawp.py:870`), `subspace_distance` (`jawp.py:921`) |
-| 5 | Predictive Rank | JAWP method | `predictive_rank_loss` (`jawp.py:1082`) |
+| 2 | WIP | JAWP method | `workspace_information_preservation` (`jawp.py:659`) |
+| 3 | Spectral Gap | JAWP method | `detect_workspace_dimension` (`jawp.py:552`) |
+| 4 | Grassmann Optimization | JAWP methods | `grassmann_retract` (`jawp.py:893`), `principal_angles` (`jawp.py:955`), `subspace_distance` (`jawp.py:1005`) |
+| 5 | Predictive Rank | JAWP method | `predictive_rank_loss` (`jawp.py:1166`) |
 | 6–9 | CGN, SWIP, PCR, SPC | modules | [`cgn.py`](../src/models/cgn.py), [`swip.py`](../src/models/swip.py), [`pcr.py`](../src/models/pcr.py), [`spc.py`](../src/models/spc.py) |
 | 10–16 | WSD, CMC, GAC, STA, PUC, RDC, WSR | modules | [`wsd.py`](../src/models/wsd.py), [`cmc.py`](../src/models/cmc.py), [`gac.py`](../src/models/gac.py), [`sta.py`](../src/models/sta.py), [`puc.py`](../src/models/puc.py), [`rdc.py`](../src/models/rdc.py), [`wsr.py`](../src/models/wsr.py) |
+
+> **All six `jawp.py` line numbers in that table were re-derived on 2026-10-08
+> (TASK-41); every one of them had drifted by 84–85 lines.** A `file.py:NNN`
+> citation is a number in prose with the same failure mode as any other: it
+> stops being true the moment anything above it is inserted, and nothing
+> notices. If you edit `src/models/jawp.py`, re-derive the row.
 
 **Convention adopted: quote 12 when counting modules and 16 when counting
 numbered capabilities, and never use either number unqualified.** The split is
@@ -45,15 +51,15 @@ Four consequences of that split, stated because they are easy to misread:
 
 - **Predictive Rank is a trained loss term with no module entry.**
   `TextSpanJEPA` adds `lambda_predictive_rank * loss_pred_rank` to the total
-  loss ([`src/models/jepa.py:810`](../src/models/jepa.py)), default `0.0`
-  ([`defaults.yaml:140`](../defaults.yaml)), with an on-arm at
+  loss ([`src/models/jepa.py:858`](../src/models/jepa.py)), default `0.0`
+  ([`defaults.yaml:198`](../defaults.yaml)), with an on-arm at
   `config/ablations/predictive_rank_on.yaml`. Because it has no
   `ALL_MECHANISMS` entry it is invisible to `active_mechanisms()`,
   `mechanism_groups()`, `dependency_dag()` and `GWP.summary()` — which report
   `Core: ['jawp']`. That is a known visibility gap, not a second module count.
 - **WIP has no `use_wip` key anywhere in the repo.** It is reachable only
   through `MechanismBundle.compute_capacity_bound`
-  ([`src/models/mechanisms.py:544`](../src/models/mechanisms.py)), a composite
+  ([`src/models/mechanisms.py:540`](../src/models/mechanisms.py)), a composite
   diagnostic the audit marked R15.
 - **Spectral Gap and Grassmann Optimization are machinery, not losses.**
   `detect_workspace_dimension` selects the active rank; `grassmann_retract`
@@ -93,7 +99,18 @@ capability #2. See the counting convention above for why that is 12 + 1 and not
 
 ## Pre-Registered Hypotheses
 
-**[`HYPOTHESES.md`](HYPOTHESES.md)** — 10 pre-experimental hypotheses registered before running any training experiments, following top-lab standards (analogous to clinical trial pre-registration).
+**[`HYPOTHESES.md`](HYPOTHESES.md)** — **twelve** pre-experimental hypotheses
+(H1–H12) registered before running any training experiments, following top-lab
+standards (analogous to clinical trial pre-registration).
+
+**None has been run, and three of them cannot be evaluated as written.**
+`docs/results/README.md` establishes that no run any config in this repo can
+currently produce emits a downstream metric: `src/eval/probes.py` has a working
+`LinearProbe` but nothing in `src/train.py` calls it. H2, H10 and H12 state their
+predictions in terms of "linear probe accuracy", so their **Predictions** lines
+are unmeasurable today, not merely untested. The hypotheses are pre-registration
+and are deliberately left unedited — a prediction edited after the fact is not a
+pre-registration. Correct the *evaluation plan*, not the prediction.
 
 ## Proof Standards
 
@@ -105,12 +122,26 @@ Each proof document follows this structure:
 
 ## Verification
 
-All theorems are **computationally verified** in the test suite:
-- JAWP Q orthonormality error: < 1e-5
-- SPC Parseval's reconstruction: relative error < 1e-4
-- CGN partition of unity: exact (by construction)
-- SWIP loss non-negative: ✅
-- CMC loss non-negative + stability bound: ✅
-- GAC No Dead Zones + exploration ratio bounded: ✅
-- STA W1 metric (triangle inequality, symmetry, non-negativity): ✅
-- STA Davis-Kahan bound: ✅
+**This is a partial list, not a blanket claim.** An earlier version of this file
+opened with "All theorems are computationally verified in the test suite", which
+contradicted the matrix's own JAWP row ("cited verification tests absent") and
+`jawp.md`'s own banner. Of the thirteen proof documents: **six** have a
+property test that pins what the document claims (JAWP, SPC, SWIP, CMC, STA, and
+GAC partially), **six** have none (CGN, PCR, WSD, PUC, RDC, WSR), and `wip.md`
+is **UNAUDITED** in the matrix and claims nothing that is tested.
+Verified 2026-10-08 (TASK-41):
+
+| claim | pinned by | status |
+|---|---|---|
+| JAWP `Q` orthonormality, `atol=1e-5` on `QᵀQ − I` | `tests/test_jawp.py::TestJAWPCore::test_stiefel_retract_keeps_orthonormal` | ✅ exists — but note the name: `jawp.md`'s own Verification section names `test_q_orthonormality`, `test_courant_fischer`, `test_wip_preservation`, `test_stiefel_retraction` and `test_predictive_rank`, and **none of those five exists**. The retraction property is tested under a different name. |
+| SPC Parseval reconstruction | `tests/test_spc.py::TestSPCTheorem::test_spc_subsumes_uniform_mse` | ⚠️ exists, but the **tolerance was never `< 1e-4`** and is not now: the test asserts `0.8 < SPC/(n_bands·MSE) < 1.2` — a 20 % band. The old "relative error < 1e-4" in this file described a precision the suite never pinned. The `1e-4` figures that *are* pinned here are the DCT-basis orthonormality checks (`test_spc.py:131,184,206`), which are a different property. |
+| CGN partition of unity | — | ❌ no test references partition/unity; "exact by construction" is a code-reading claim, not a test |
+| SWIP loss non-negative | `tests/test_swip.py::TestSWIPCore::test_swip_loss_is_nonnegative` | ✅ exists |
+| CMC loss non-negative + stability bound | `tests/test_cmc.py` (incl. `test_triangle_inequality_holds`) | ✅ exists |
+| GAC exploration ratio bounded | `tests/test_gac.py::TestGACCore::test_starved_count` | ⚠️ partial — the *count* and *fraction* are pinned; the `0 ≤ ρ ≤ 1` bound is not asserted |
+| STA `W₁` metric + Davis-Kahan | `tests/test_sta.py::TestSTAMathematical`, `::TestSTADavisKahan`, `::TestSTABasic`, `::TestSTAWasserstein`, `::TestSTAIntegration` | ✅ all five named in `sta.md` exist |
+| PCR, WSD, PUC, RDC, WSR | — | ❌ no proof-level verification claimed |
+
+So: **the claims in the middle column are pinned; the claims in the last row are
+not.** Read the matrix for per-claim verdicts — it is the authority, not this
+table.

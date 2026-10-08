@@ -1,4 +1,4 @@
-# Copyright 2026 Text-Span JEPA Authors
+# Copyright 2026 Slyatski Ilya
 # Licensed under the Apache License, Version 2.0
 """Training-state guards: eval() must not mutate mechanism state.
 
@@ -110,7 +110,26 @@ def _make(name):
         from src.models.puc import PredictionUncertaintyCalibration
 
         m = PredictionUncertaintyCalibration(embed_dim=D, n_components=4, warmup_steps=0)
-        z = torch.randn(4, 8, D)
+        # Scale 0.1, not 1.0. `running_overconfidence` is the EMA of
+        # max(0, (H_target - H(z)) / H_target), so it is a *stationary point*
+        # for an isotropic batch: a true N(0, I) sample has batch-covariance
+        # entropy exactly H(N(0,I)) = D/2*log(2*pi*e), which IS the target
+        # (45.406 at D=32), so overconfidence is 0.0 and
+        # `mul_(0.99).add_(0.01 * 0.0)` cannot move the buffer. Nothing is
+        # frozen — the diagnostic is genuinely zero. A low-variance batch is
+        # overconfident, which is what this test is meant to exercise: it asks
+        # whether the guard blocks a mutation, so the input has to carry
+        # something to mutate.
+        #
+        # TASK-39: this fixture previously used randn and still passed, but only
+        # because the flag's default was the EMA-buffer path, whose entropy
+        # estimate is `softplus(running_eigenvalues - 5.0)` on an initial buffer
+        # of 1.0 -> softplus(-4) = 0.018 -> entropy -18.7 -> overconfidence
+        # 1.41, i.e. larger than 1 and therefore not a ratio at all. That
+        # diagnostic was pinned high for every input, so it always moved. The
+        # default is now the batch-covariance path, which reports the honest
+        # value and exposed the fixture. The assertion set is unchanged.
+        z = torch.randn(4, 8, D) * 0.1
         return m, (lambda: m(z, step=1))
 
     if name == "gac":

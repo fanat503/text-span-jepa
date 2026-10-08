@@ -45,6 +45,20 @@ stage "new regression files (must not run only in CI)"
   tests/test_feature_composition.py \
   tests/test_ablation_module.py || FAILED=1
 
+stage "merge damage (a conflicted tree still passes every other stage)"
+# Found the hard way: wave 7 merged two workers that both owned proofs/jawp.md
+# and proofs/wsd.md, left conflict markers in both, and the gate stayed GREEN -
+# no stage reads markdown, so `<<<<<<<` is invisible to all nine of them.
+# A gate that cannot see an unfinished merge will also not see a half-applied
+# patch that happens to be syntactically valid.
+if grep -rlE '^(<<<<<<< |>>>>>>> )' --include='*.md' --include='*.py' \
+     --include='*.yaml' --include='*.toml' . 2>/dev/null | grep -qv '^\.git/'; then
+  echo "  FAILED: conflict markers in the tree:" >&2
+  grep -rlE '^(<<<<<<< |>>>>>>> )' --include='*.md' --include='*.py' \
+       --include='*.yaml' --include='*.toml' . 2>/dev/null | grep -v '^\.git/' >&2
+  FAILED=1
+fi
+
 stage "agent safety policy (the guard must itself be guarded)"
 # policy.js is what stands between a confused agent and `shutil.rmtree` on the
 # repo. A policy that silently stops matching is worse than none, because the

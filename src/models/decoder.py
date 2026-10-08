@@ -1,4 +1,4 @@
-# Copyright 2026 Text-Span JEPA Authors
+# Copyright 2026 Slyatski Ilya
 # Licensed under the Apache License, Version 2.0
 # Tied token decoder: auxiliary head grounding latent representations in token space
 # Regression head architecture from data2vec (Baevski et al., ICML 2022):

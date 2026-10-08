@@ -1,4 +1,4 @@
-# Copyright 2026 Text-Span JEPA Authors
+# Copyright 2026 Slyatski Ilya
 # Licensed under the Apache License, Version 2.0
 # data2vec baseline: EMA teacher + regression head on masked token representations
 # Directly adapted from fairseq/examples/data2vec/models/data2vec_text.py

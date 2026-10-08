@@ -1,4 +1,4 @@
-# Copyright 2026 Text-Span JEPA Authors
+# Copyright 2026 Slyatski Ilya
 # Licensed under the Apache License, Version 2.0
 # Test suite — patterns from NextLat (Microsoft Research) + I-JEPA (Meta)
 # Key test patterns from NextLat model_base.py:
