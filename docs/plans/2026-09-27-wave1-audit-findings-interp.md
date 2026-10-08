@@ -8,6 +8,49 @@ and the module built to catch that class of bug cannot fail.
 
 ---
 
+> ## ⚠ PARTIALLY SUPERSEDED — read this before quoting anything below
+>
+> **A dated snapshot of 2026-09-27, kept as written.** The measurements were
+> real when taken; a fix that lands afterwards does not retroactively make them
+> wrong, but it does make them **void as a description of what the code does
+> now**. Reconciliation added 2026-10-08 by TASK-41.
+>
+> ### Numbers in this file that are now INVALID — do not quote, do not average
+>
+> | quantity | what happened |
+> |---|---|
+> | every `layer_analysis` published number (`inter_model_cka`, `layer_uniformity`, and the layer-probe accuracies behind them) | **TASK-12.** `_train_linear_probe` redrew an unseeded split **for every layer**; it now draws one seeded split and seeds it from a private `torch.Generator`. Anything measured under the old per-layer redraw — including the `0.882–0.983` band quoted in I15 — was measuring the split, not the layers. |
+> | `probe_generalization.source_accuracy`, `.generalization_gap`, `.generalization_ratio`, and every `compare_models` verdict | **TASK-11.** `source_accuracy` was an **in-sample** score (the classifier was fit and scored on the same rows) *and* the rows were undertrained in-sample. `source_accuracy` is **removed, not aliased** — the held-out equivalent is `source_accuracy_heldout` — so the gap and ratio formulas changed and every published value of all four is void. |
+> | `probing_complexity.depths`, `.max_accuracy`, `.min_extracting_depth`, `.complexity_gap` | **TASK-11.** `min_extracting_depth` is decided by a noisy per-depth maximum against a threshold; the module now trains on a fixed held-out split. The `0.76–0.89` swing quoted in I15 was that noise, and is the reason the number is invalid rather than merely noisy. |
+> | `structural_probe.source_spearman` | **TASK-11.** It **never executed at all** — it was computed by pooling a correlation over a *sentence list* while the held-out unit had to be rows. Replaced by `source_spearman_heldout`. The I1 text above is right that the original was not reachable. |
+> | `workspace_validation.subspace_similarity` (I14's `0.447`, `placebo 0.399`) | **TASK-18.** The untrained-SAE path now **refuses the verdict** instead of returning a number computed from a random decoder. Old and new `subspace_similarity` values are **not comparable** — they answer different questions. |
+> | seven `CollapseDiagnostics` values: `intrinsic_dim_{online,target}`, `mean_pairwise_cosine_{online,target}`, `uniformity_{online,target}`, `alignment` | **TASK-19.** Their 256-row subsample moved to a private `torch.Generator` so the diagnostics stop steering DropPath. Same estimator, same distribution, **different draw** — so any previously published value for those seven is void. The other 37 of the 44 are bitwise unchanged (`workspace_quality` moves with them). |
+> | I8's "CKA is a function of N" (`0.96 / 0.89 / 0.49` at N = 32/100/800) | **KILLED, not fixed — see decision D-011.** The `unbiased HSIC` change turned out to be a numerical no-op, and the reported `0.96` on independent matrices is the true value of Kornblith CKA at `D ≫ N`, not a bug. A campaign note already recorded this; it is repeated here so the number is not re-quoted from here. |
+>
+> ### Per-finding status
+>
+> | # | status as of 2026-10-08 |
+> |---|---|
+> | I1 | **FIXED.** `src/eval/probes.py` now publishes `split_indices()` — deterministic disjoint **train / val / test**, fit on train, select on val, report on test — and returns the split so any reported number is reproducible from the seed and sizes. |
+> | I2 | **LARGELY FIXED** — `_require_h_override` now *rejects* a `behavior_fn` that cannot accept `h_override` instead of swallowing the resulting `TypeError` and reporting `hypothesis_valid: True`. Re-verify the `IndexError` and `B=1` no-op details before repeating them. |
+> | I3, I5, I6, I7, I17 | **LARGELY FIXED.** `InterpretabilityIndex.compare` **raises** unless both sides carry the same metric keys (so the two indices cannot have different weight denominators), and it carries a measured `noise_baseline`. DCI informativeness is now the full-predictor adjusted R², and the validator threshold is a **measured** null (`ground_truth.py:127`: `_DCI_NULL_THRESHOLD = 0.167770056`), which is the opposite of this finding's complaint that `0.1` sat inside the noise floor. `pipeline_valid` now depends on `class_linear_sufficient`, `psi_usable and above_null`, `informativeness > _DCI_NULL_THRESHOLD` — so it can fail. The specific numbers quoted above (0.121→0.695, 0.173/0.152/0.080, `mod = 0` on one-hot, `mean_psi = 0.0` on noise) are **void as measurements of the current code**. |
+> | I4 | **OPEN.** `total_correlation` still mixes a histogram estimator with an exact Gaussian log-det, and still returns `0.0` on the two inputs it should flag. |
+> | I8 | **PARTIALLY** — see the killed row above; the cost analysis (`4.69 s` at N=4000, `≈2.4 h` at B·T=16384) is the part that survives. |
+> | I9 | **OPEN**, and now a known cost: `inter_model_cka` is still L_j × L_b calls. |
+> | I10 | **PARTIALLY FIXED.** BH step-down monotonicity, the paired Cohen's d, and the "Bayesian" bootstrap's name all needed work; `statistical_tests.py` is still not on the `run_comparison.py` path. |
+> | I11 | **OPEN** unless the surface feature landed; the `positions = arange(N)` MI-with-index issue is the load-bearing one. |
+> | I12 | **OPEN.** `ablation.py`'s key-name-guarded no-ops and the `run_all` `"full"` special case are the parts worth re-checking. |
+> | I13 | **OPEN.** `compare.py` passing the same tensor as both arguments is the headline item. |
+> | I14 | **PARTIALLY FIXED** — TASK-18 refused the untrained-SAE verdict. The in-sample feature-selection point and the "bootstrap CI" naming are separate. |
+> | I15 | **FIXED** for the two split-redraw bugs (TASK-11, TASK-12); the `layer_uniformity = 1 − std/mean` being maximized by identical layers is a property of the metric, not a bug, and still stands. |
+> | I16 | **MOSTLY FIXED.** Private generators throughout; three global `torch.manual_seed` calls remain (`ground_truth.py:174`, `information_theory.py:102`, `interpretability_index.py:223`). `src/interp/` still does not import `src/utils/seed.py`. |
+> | I18 | **MOOT.** The file grew from 1222 to a much larger suite with 45 test files and a `tests/conftest.py`; the specific line-count claims are void. |
+> | "What is genuinely correct" | Still worth reading — it is the half of an audit that is usually left out. Re-verify each item before quoting it. |
+> | "Still open" §1 (parameter counts) | **DONE.** All 62 configs, exactly: `docs/results/param_counts.json`. `total ÷ filename claim` is 1.71–2.08× and the claim is confirmed. |
+> | "Still open" §2 (perf/scaling audit) | **DONE**, in the sibling file `…-findings-perf.md`. |
+
+---
+
 ## I1 — the headline linear-probe number has no held-out split  · critical · VERIFIED
 
 `src/eval/probes.py`:

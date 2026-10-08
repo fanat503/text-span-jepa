@@ -7,16 +7,47 @@
 > theorems assume fixed k; the five verification tests named in the proof
 > are absent. Complementary-gate style fixes elsewhere do NOT apply here.
 >
-> **ADDENDUM (TASK-40, 2026-10-08).** Two findings, both triaged here for the
-> first time:
-> 1. **WSD pulls the same `workspace_Q` toward the opposite subspace.** The
->    antagonism is real and measured; the crossover is
->    $\lambda_\mathrm{WSD} \approx 0.42$ and every shipped config is below it.
->    Owner science call, not a bug. Full evidence and five options:
->    [`wsd.md` — Interaction with JAWP](wsd.md#interaction-with-jawp-opposite-optima-one-parameter).
-> 2. **Two of the four numbered JAWP capabilities have no caller in `src/`.**
->    Measured consequences in [Unreached capabilities](#unreached-capabilities).
-> TASK-40 changed no loss and no weight.
+> **ADDENDUM (TASK-40 + TASK-41, 2026-10-08) — a second mechanism pulls this same
+> `Q` the other way.** Not in the 2026-08-24 matrix; first triaged under TASK-40.
+> Nothing in this loss was changed.
+>
+> **The antagonism is REAL and MEASURED.** WSD maximizes
+> `⟨Q_JAWPᵀ Q_target⟩_F` where `Q_target` is the **top-k** eigenvectors of the
+> target covariance (`src/models/wsd.py:200-206,256-258`), so it pulls `Q`
+> toward the target's **highest-variance** directions. This mechanism's
+> minimizer on `St(D,k)` is the **bottom-k** eigenvectors of the *residual*
+> covariance (`src/models/jawp.py:45-65`), and this file's own header names
+> high-variance selection as the failure mode to avoid.
+>
+> WSD's pull is, in effect, the high-variance force this header removed as a
+> design decision — reintroduced under another name.
+>
+> **It is not the "different matrices" case.** `src/models/jepa.py:1086` passes a
+> **live view** of `workspace_Q` (no `.data()`), so both gradients land in the
+> same `total_loss` in the same backward pass. Measured cosine between the two
+> `Q`-gradients: **negative on 12 of 12 consecutive steps**, mean ≈ −0.47.
+> WSD's raw gradient is ≈2.4× this mechanism's, so the crossover is at
+> **lambda_wsd ≈ 0.42**; at lambda ≥ 1 `jawk_predictive_relevance` collapses to
+> **0.0000**.
+>
+> **Reachability, corrected.** An earlier report claimed every runnable config
+> ships `use_wsd: false`. Re-measured against the deep-merge over all 62
+> configs: **51 resolve `use_wsd: true`, 50 with both flags true**, including
+> `defaults.yaml` and every leave-one-out ablation row. The antagonism is live.
+> It is not dominant only because the shipped `lambda_wsd: 0.01` sits ~42× below
+> the crossover. Full evidence: `proofs/wsd.md` and `.agent-notes/task-40.md`.
+>
+> **Two numbered capabilities here have no caller anywhere in `src/`.**
+> `detect_workspace_dimension` and `grassmann_retract` are counted in
+> `GWP.N_MECHANISMS = 16` but nothing calls them. Measured, not guessed:
+> `detect_workspace_dimension` recovers a constructed `k*` **exactly** at
+> k* ∈ {1,2,3,6,12,24} with zero spread over 5 seeds at ~1.7 ms/call — it is not
+> a dead formula and should be wired. `grassmann_retract` is span-equivalent to
+> the current step (overlap² = 1.0000, trajectories equal to ~7e-6) but its
+> gauge term is **not** the symmetric correction Theorem 3 is stated for, so
+> swapping it in on that evidence would be wrong. Both left in place pending the
+> owner's call; deleting a capability that is counted in the header is a
+> different decision from deleting dead code.
 
 
 ## Problem Statement

@@ -8,13 +8,54 @@
 > Davis-Kahan bound is circular; adaptive tau and per-step resync are
 > unimplemented. Silent eig-failure now warns (fixed R15).
 >
-> **ADDENDUM (TASK-40, 2026-10-08) — WSD and JAWP pull the SAME parameter in
-> OPPOSITE directions.** Not in the 2026-08-24 matrix; first triaged under
-> TASK-40. The antagonism is REAL and MEASURED, it is sub-threshold at every
-> shipped weight, and its resolution is an owner science call. Evidence,
-> measured crossover, and the five options are in
-> [Interaction with JAWP](#interaction-with-jawp-opposite-optima-one-parameter)
-> below. Nothing in the loss was changed by TASK-40.
+> **ADDENDUM (TASK-40 + TASK-41, 2026-10-08) — WSD and JAWP pull the SAME
+> parameter in OPPOSITE directions.** Not in the 2026-08-24 matrix; first triaged
+> under TASK-40. Nothing in either loss was changed.
+>
+> **The mechanism.** `Q_target` here is the **top-k** eigenvectors of an EMA of
+> the *target* covariance (`src/models/wsd.py:200-206`), and the loss maximizes
+> `⟨Q_JAWPᵀ Q_target⟩_F` (`src/models/wsd.py:256-258`) — so WSD pulls `Q` toward
+> the target's **highest-variance** directions. JAWP's minimizer on `St(D,k)` is
+> the **bottom-k** eigenvectors of the *residual* covariance
+> (`src/models/jawp.py:45-65`), and JAWP's header names high-variance selection as
+> the failure mode to avoid.
+>
+> **Not a false alarm, and the "different matrices / different clocks" escape does
+> not apply.** `src/models/jepa.py:1086` hands WSD a **live view** of
+> `jawp.workspace_Q` (no `.data()`), and both terms sit in the same `total_loss`
+> in the same backward pass. Measured in situ at D=64, k=6: the cosine between
+> the two `Q`-gradients is **negative on 12 of 12 consecutive steps** (mean
+> ≈ −0.47), and WSD's raw `Q`-gradient is ≈2.4× JAWP's, giving a measured
+> crossover at **lambda_wsd ≈ 0.42**. At lambda ≥ 1
+> `jawk_predictive_relevance` collapses to **0.0000** — the workspace stops
+> being predictable.
+>
+> **Reachability — corrected against the code, and it matters.** TASK-40 first
+> reported that every runnable config ships `use_wsd: false`. **That was wrong.**
+> Re-measuring the deep-merge over all 62 configs: `defaults.yaml` sets
+> `use_wsd: true`, `use_jawp: true`, `lambda_wsd: 0.01`, and **51 of 62 configs
+> resolve `use_wsd: true`, 50 with both flags true** — including every
+> leave-one-out ablation row, which is the table the paper will run. The
+> antagonism is therefore **live**, not dormant.
+>
+> **Why nothing has gone wrong yet.** At the shipped `lambda_wsd: 0.01` it sits
+> roughly **42× below** the measured crossover, so it is present but not
+> dominant. The crossover figure is scale- and schedule-specific (D=64, k=6, 60
+> steps, random tokens) — an order of magnitude, not a portable constant.
+>
+> **Traps recorded.** The tempting one-line fix (detach `Q` so the two stops
+> share a parameter) makes this Drift Bound false *by construction* while
+> `tests/test_sterility.py` still passes, because `test_wsd_component_nonzero`
+> only asserts the logged number is > 0. It is **not recommended**. Separately,
+> `src/models/mechanisms.py:475` passes `.data`, so `MechanismBundle`'s WSD loss
+> currently carries **no gradient at all** (verified `requires_grad = False`) —
+> reachable in `TextSpanJEPA`, dead in the bundle path.
+>
+> Two of the most consequential changes available on this seam are **invisible
+> to the entire required verify set**: flipping WSD to bottom-k, and removing
+> that `.data`, each leave all 105 verify-set tests passing. The five options
+> with their consequences are in `.agent-notes/task-40.md`. **The resolution is
+> the owner's science call.**
 
 ## Statement
 
@@ -257,4 +298,7 @@ None of these was applied. Listed so the owner can choose.
 **Not recommended by TASK-40, for the record:** option 3. It looks like the
 cheap fix and it is the only one that turns a measured conflict into an
 undetectable no-op.
+
+
+<<<<<<< planted
 

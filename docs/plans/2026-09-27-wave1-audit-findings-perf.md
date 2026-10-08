@@ -5,6 +5,57 @@ parameter counts by direct instantiation matching `src/train.py:create_model`.
 
 ---
 
+> ## ⚠ PARTIALLY SUPERSEDED — read this before quoting anything below
+>
+> **A dated snapshot of 2026-09-27, kept as written.** Findings are not
+> rewritten after fixes land. Reconciliation added 2026-10-08 by TASK-41.
+>
+> ### The number this file is most often quoted for, and what replaced it
+>
+> **P1's `2.7×` is wrong as a description of the current tree, and the card's
+> replacement figure (`1.87×`) is right.** Two different quantities were confused:
+>
+> - The line that said `get_num_params()` "is **2.7× smaller than the checkpoint
+>   it saves" described a `get_num_params()` that subtracted the embeddings *and
+>   omitted the target encoder*. **That function no longer exists in that form.**
+>   It now returns `sum(p.numel() for p in self.parameters())` — the whole model,
+>   including the frozen `target_encoder` — which is exactly what the trainer
+>   logs, and `docs/results/param_counts.json` measures that way for all 62
+>   configs. So the "2.7× under-report" is **FIXED**, and the column of
+>   `get_num_params()` values in the P1 table (12.82 M / 56.38 M / 98.85 M /
+>   232.27 M) is **void**: the correct values are the `total` column beside them.
+> - The **surviving** ratio is `total ÷ filename claim`, which is **1.87×** for
+>   `base_140m` and 1.71–2.08× across the ladder — `2.08× / 1.71× / 1.87× /
+>   1.79×` for `xsmall_30m / small_100m / base_140m / large_300m`. That is the
+>   number the wave-1 findings doc's "Deferred — not yet measured" section was
+>   still hedging about, and it is what `README.md` now states. The *filenames*
+>   are not wrong: they track **trainable** parameters, within −11%…+8%.
+> - A `2.7×` that is **still correct** and must not be "fixed": the width range
+>   across the ladder is 384→1024 = 2.67×, which is what
+>   `config/scaling/large_300m.yaml:10` refers to when it says holding `lr` fixed
+>   across a 2.7× width range. Different quantity, same digits.
+>
+> ### Per-finding status
+>
+> | # | status as of 2026-10-08 |
+> |---|---|
+> | P0 | **FIXED** (`ema_tau_end: 0.9999` declared once in `defaults.yaml`; decision D-006). The `ema_schedule: cosine` half is **still dead code** and is recorded as the open item in D-006 — `defaults.yaml:155` says so in place. |
+> | P1 | **SUPERSEDED as above.** Two sub-claims survive: `get_num_params()`'s docstring records the old under-report, and the component split is exactly still right — re-measured 2026-10-08 on `config/scaling/base_140m.yaml`: encoder 124,082,688 + `target_encoder` 124,082,688 + predictor 11,437,057 + decoder 2,360,832 = **262,021,633 total**, leaving 58,368 for the mechanisms and everything else. The "only `use_jawp` enabled" note was right about the four scaling rungs and **is now also true of the other 58 configs** — `defaults.yaml` enables all twelve, so a plain `python -m src.train` trains the full model, and the four rungs opt out explicitly. |
+> | P2 | **FIXED — this file's `0.52–0.58` est/actual column is void.** `src/utils/flops.py` was rewritten as a *structural* estimator (TASK-22): its docstring now carries its own `FlopCounterMode` comparison and reports **est/actual 0.99963–0.99980** across T = 128/256/512 at `base_140m` dims, and names the four things the old `6·N·L·B` form could not represent (target encoder, predictor passes, decoder head, per-step diagnostics). The per-step diagnostics are still called unconditionally and still not modelled in the estimate — that residual is documented in the function's own docstring. **"dead code" is also no longer accurate**: it has a measured reproduction target and a documented gap. |
+> | P3 | **PARTIALLY FIXED.** `CollapseDiagnostics.compute` is still called on every step from `src/models/jepa.py:920`, but the **19 SVD-bearing calls are now 5** (`_SharedSpectral`, TASK-19). Measured before→after by that card: `compute` 2.1641 s → 1.6562 s, **51.2% → 45.0% of the forward** (at 1 thread; this file's 67% was measured at 4). The gate was analysed and **deliberately not added** — see `.agent-notes/task-19.md` §3 for the three correctness traps. Also: **seven metric values changed by design** in that same change (`intrinsic_dim_{online,target}`, `mean_pairwise_cosine_{online,target}`, `uniformity_{online,target}`, `alignment`) because their 256-row subsample moved to a private generator; any number published for those seven is void, the other 37 are bitwise unchanged. |
+> | P4 | **LARGELY FIXED.** The GAC/CMC retained-graph problem is gone and several `.item()` sites were batched; the 92/201 sync counts were measured before any of that and **should not be quoted**. The `_gather_masked` and `SpanMaskCollator` items are still worth re-measuring before repeating the 130 ms / 89 ms figures. |
+> | P5 | **FIXED.** `_gac_z` and `_cmc_pass` are released after `backward()`. `gradient_checkpointing` is still `false` by default, and the predictor still has no checkpointing path. |
+> | P6 | **STILL TRUE**, now with a written spec: `docs/plans/2026-09-28-distributed-training-spec.md`. The five numbered problems are unchanged. The `find_unused_parameters` note is still correct and now has a name — `gac_wiring` in `src/train.py`. |
+> | P7 | **SUPERSEDED — the ladder table is no longer the ladder.** All four rungs now inherit `epochs 50`, `batch_size 64`, `grad_accum_steps 8` (effective **512** for all four), `lr 1e-3`, `num_refine_steps 3`, `drop_path_rate 0.1`, `max_seq_len 512` from `defaults.yaml`, and each declares only `embed_dim / encoder_depth / num_heads / predictor_embed_dim / predictor_depth`. So this finding's "**two points per group**, not four" is **fixed**: it is now one group of four, differing only in width and depth. The curriculum-length confound is also gone (`jawk_curriculum_steps` and `future_warmup_steps` are inherited). **Attribution:** this landed in the squash commit `11bcbd0` (PR #10, "21 cards, 82 commits"); there is no per-card note for it, so this row cites the commit rather than inventing a card number. |
+> | "Safe wins" list | Items 1 (partly — the dedup and the private RNG landed; the *gate* did not), 4, 7 and 8 landed. Items 3, 5 and 6 were not taken. The `drop_path`/`lr`/curriculum items from P7 were taken instead. Re-verify each before repeating it. |
+> | "Trade-offs" list | Still a decision list, still nobody's decision. `flops.py`'s status is stale — see P2. |
+>
+> Note also that the doc's own closing premise — that a local full-suite run is
+> not affordable — is why `AGENTS.md` takes its test count from CI rather than
+> from a wall clock on this machine (decisions D-001/D-002).
+
+---
+
 ## P0 — `ema_tau_end: 1.0` is a *semantic* bug, not just a validation error
 
 Part 1 established that `ema_tau_end: 1.0` makes 18 configs raise. This audit

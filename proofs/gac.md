@@ -6,6 +6,19 @@
 > DIVERGENT: the wired call site passes LIVE predictions (R12 wiring),
 > but energy is a batch-MEAN, so the No-Dead-Zones bound scales by 1/N;
 > the warmup ramp further rescales it. Theorem holds up to these factors.
+>
+> **The "LIVE predictions" half was re-verified 2026-10-08 (TASK-41)** against
+> the code, because `src/models/gac.py:152`'s `forward` docstring still says
+> `z_pred: (..., D) predictor output (detached from graph)` and the audit
+> matrix's GAC row repeated that false premise until this date. It is wrong:
+> `src/models/jepa.py:698` stores the live `span_preds` in `_gac_z`,
+> `src/train.py:1398,1410` passes that tensor to `forward`, and
+> `src/train.py:1411-1412` backward-s `loss_gac` into the same graph behind
+> `if loss_gac.requires_grad`. Executed: a grad-carrying `z_pred` gives
+> `loss.requires_grad == True` and `max |z_pred.grad| = 6.75e-07`; a detached
+> one gives `requires_grad == False`, which is exactly the branch the trainer
+> skips. `src/**` was not that card's to edit, so the corrected docstring is
+> recorded in `proofs/IMPLEMENTATION_STATUS.md` rather than applied here.
 
 
 ## Statement

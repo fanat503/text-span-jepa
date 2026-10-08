@@ -8,6 +8,61 @@ claimed it with file:line evidence but I have not re-run it yet.
 
 ---
 
+> ## ⚠ PARTIALLY SUPERSEDED — read this before quoting anything below
+>
+> **This is a dated snapshot of 2026-09-27 and it is kept that way.** The findings
+> are not rewritten: an audit that silently edits itself after the fixes landed is
+> not an audit. But 25+ cards have since closed or changed a large part of it, and
+> **a finding below is not a statement about the current tree** unless the status
+> table says so. Reconciliation added 2026-10-08 by TASK-41.
+>
+> The `686 tests / ~108s` baseline above is correct **for its commit** and is not
+> the current count — see `AGENTS.md` ("Test count").
+>
+> ### Part 1 — configuration and mechanism registry
+>
+> | # | status as of 2026-10-08 |
+> |---|---|
+> | V1 | **FIXED.** All 62 configs now resolve to `ema_tau_end: 0.9999`; 0 of 62 fail the `ema_tau_end < 1.0` rule. Endpoint declared once in `defaults.yaml` (decision D-006). The 4 files still *mention* `ema_tau_end: 1.0` do so inside a comment describing the pre-fix state. |
+> | V2 | **FIXED.** `config/ablations/wsd_on.yaml` no longer sets `use_jawp: false`; TABLES.md reports `wsd_on` at 12/12 mechs on. |
+> | V3 | **FIXED.** The leave-one-out grid exists: 12 `no_<mech>.yaml`, one flag each, `TestLeaveOneOut` pins it. |
+> | V4 | **FIXED.** All 40 ablations resolve to 768/12/12 — there is no second architecture in the table (`config/ablations/README.md`). |
+> | V5 | **SUPERSEDED, and this one is a trap.** The table below is no longer the ladder. All four rungs now inherit `epochs 50`, `batch_size 64`, `grad_accum_steps 8` (effective 512), `lr 1e-3`, `num_refine_steps 3`, `drop_path_rate 0.1` from `defaults.yaml`, and each declares only `embed_dim / encoder_depth / num_heads / predictor_*`. The confounds this finding named — mixed effective batch, mixed epochs, `lr 5e-4` at the top, `drop_path 0.15`, a longer JAWP curriculum at the top — were each removed on purpose (see the header comment in `config/scaling/large_300m.yaml`, and the device-scale configs that now hold effective batch at 512). **The finding's conclusion ("a 30M-vs-300M result cannot be attributed to scale") is no longer the reason it could not be.** What remains true is narrower and is recorded per-rung in those files. Attribution: squash commit `11bcbd0` (PR #10); there is no per-card note for the ladder rewrite. |
+> | V6 | **FIXED.** `_warn_unknown_config_keys` now compares the **full dotted path**, not the bare leaf name, so `model.batch_size` (right key, wrong subtree), `modle:` and `optimisation:` are all caught. Pinned by `tests/test_config_system.py::TestTrainerTypoDetectorGap`. |
+> | V7 | **RESOLVED, not by changing code.** 12 modules vs 16 numbered capabilities is now a stated convention with a mapping table (`proofs/README.md`, decision D-013), pinned by two tests. Two of the "verified clean" claims below still hold. |
+> | V8 | **STILL TRUE**, with one part closed: `rdc.py`/`puc.py` expose `checkpoint_dict()`, but `MechanismBundle` is still off the production path and its `forward` still hands SWIP/WSD/WSR a **detached** `workspace_Q` (`docs/related_work.md` §4 relies on this and re-checks it). |
+> | V9 | **FIXED.** `load_checkpoint` (`src/train.py:340`) now **raises** `CheckpointLoadError` instead of returning zeros, propagates `FileNotFoundError`, and validates the payload's type and required keys. The corrupt-checkpoint-overwrites-good-one path this described no longer exists. |
+> | V10 | **MOSTLY FIXED.** `optimization.ema` and `logging.write_tag` are both **gone from `defaults.yaml`**. `meta.seed` still exists alongside the top-level `seed:`, and no config declares either, so the last bullet's shape survives while its example count does not (0 configs set `meta.seed`, not 28). |
+>
+> ### Part 2 — reproducibility
+>
+> | # | status as of 2026-10-08 |
+> |---|---|
+> | R1, R2 | **FIXED.** RNG state is checkpointed; fresh and resumed runs are bitwise equal. |
+> | R3 | **FIXED.** The hand-rolled key list is gone; the 15 reverting tensors round-trip, and `rdc`/`puc` `checkpoint_dict()` are used. |
+> | R4 | **FIXED** for mechanism state (`src/models/_state_guard.py`, `TrainingStateGuard`; nine files reference it — the eight mechanism modules plus `jepa.py`. Decision D-003). |
+> | R5 | **FIXED.** The lambda `worker_init_fn` is gone; `tools/rt.py` runs on Windows. |
+> | R6 | **FIXED, and further than this finding asked.** There is now **no automatic `weights_only=False` retry at all** — the module docstring in `src/utils/torchio.py` names this finding's own reasoning as the false premise, and a file that will not load strictly raises `UnsafeCheckpointError` instead. A legacy checkpoint is opt-in per call site via `allow_unsafe_fallback=True`. |
+> | R7 | **STILL TRUE, and now documented rather than pinned.** Thread count still changes results. `TEXT_SPAN_JEPA_DETERMINISTIC=1` is the opt-in (`src/utils/seed.py:86`); each scaling rung's header states the measured divergence. |
+> | R8 | **STILL TRUE**, and now a written spec: `docs/plans/2026-09-28-distributed-training-spec.md`. |
+> | R9 | **OPEN** — the one live `xfail` (`TestWSRSamNoSilentSubstitute::test_retraction_preserves_column_orientation`) is this same defect, escalated as decision D-010 and still awaiting the owner. |
+> | R10 | **LARGELY FIXED.** `_gac_z` / `_cmc_pass` are released after `backward()` (that was the live-graph half); `_prev_target_h` and the lagged WSR/jspace attributes still miss `.to(device)`. |
+> | R11 | **MOSTLY FIXED, one residue.** Almost every draw site in `src/interp/` now comes from a private `torch.Generator` seeded off a node/run seed, not the global stream. **Three global `torch.manual_seed` calls remain**: `ground_truth.py:174`, `information_theory.py:102`, `interpretability_index.py:223`. `src/interp/` still does not import `src/utils/seed.py` — it grew its own generators instead. `tests/conftest.py` now exists and seeds per-test from a `blake2b` hash of the node id. Re-verify the "28 sites" figure before quoting it; the count that matters now is the **3**. |
+> | R12 | **FIXED.** `tests/conftest.py` exists. |
+> | R13 | **FIXED.** `config/wikitext/data2vec_wikitext_small.yaml` builds — `verify` in the results apparatus constructs all 62 configs. |
+> | Scheduler replay caveat | **STILL TRUE.** Scheduler state is replayed from `global_step`. |
+> | "Verified clean" block | **STILL TRUE**, and the no-network/no-GPU claim is the one the whole CPU-only policy rests on. Re-verify if a test adds a dependency. |
+> | "Top three fixes" | #1 and #2 landed. #3 landed as the state guard. The list is kept because it is the shape of the argument, not because it is pending. |
+> | "Deferred — not yet measured" | **OBSOLETE.** Parameter counts were measured: all 62 configs, exactly, by TASK-25 (what to log) and TASK-37 (the apparatus), into `docs/results/param_counts.json`. The claim "names off by 1.7–2.1×" is **confirmed and is a statement about `total`, not about the filename's meaning** — the filenames track *trainable* parameters, within −11%…+8%. See the P1 section of the perf audit, which supersedes this file's version of that number. |
+>
+> ### What this file gets right that is still worth reading
+>
+> The structural claim underneath all of it: a green suite asserted *shape*, not
+> *meaning*, and every finding here was invisible to it. That is still true, and
+> it is why a documentation number counts as a defect of the same class.
+
+---
+
 ## V1 — 18 of 57 configs cannot run at all  · severity: critical · VERIFIED
 
 `TextSpanJEPAConfig.validate()` requires `ema_tau_end < 1.0`. Eighteen shipped

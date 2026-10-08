@@ -19,7 +19,7 @@ pip install -r requirements.txt
 pip install -e ".[dev,eval]"   # dev: pytest/ruff · eval: sklearn/scipy/matplotlib
 ```
 
-python 3.9+, pytorch 2.0+
+python 3.9+, pytorch 2.3+
 
 training
 --------
@@ -31,7 +31,10 @@ python -m src.train --fname config/scaling/small_100m.yaml
 # ablations: each toggles one mechanism against defaults.yaml
 python -m src.train --fname config/ablations/swip_on.yaml
 
-# baseline objectives share the same encoder/capacity
+# baseline objectives — SAME ENCODER CLASS, NOT capacity-matched.
+# at the 640/10 rung: encoder 81,758,720 in all three arms (matched exactly),
+# MLM total 113,953,280 vs JEPA total 170,706,561 / trainable 88,947,841.
+# do not read the three arms' parameter counts as a capacity comparison.
 python -m src.train --fname config/wikitext/mlm_wikitext_small.yaml
 python -m src.train --fname config/wikitext/data2vec_wikitext_train.yaml
 ```
@@ -78,8 +81,10 @@ machine with each config exactly as it resolves (GPT-2 vocab 50304,
 | `large_300m` (d1024 L16 h16) | 300 M | 537,990,145 | 284,412,929 | 1.79× |
 
 so a rung's total is 1.7–2.1× its name. budget memory against **total**:
-`large_300m` is 538M parameters ≈ 2.0 GiB of fp32 weights plus ~4.1 GiB of
-AdamW m/v state.
+`large_300m` is 538M parameters ≈ 2.00 GiB of fp32 weights plus **2.12 GiB** of
+AdamW m/v state. the optimizer is built from `requires_grad` parameters only
+(`src/train.py:617`), so the moment buffers cover the 284.4M *trainable*
+parameters, not the 538M total: two fp32 states each.
 
 operational notes
 -----------------
@@ -92,9 +97,12 @@ operational notes
   (catches typos like `lamda_swip`) and `_meta.*` subtrees are exempt.
 - theory status: `proofs/` are DESIGN documents with an audited
   implementation matrix in `proofs/IMPLEMENTATION_STATUS.md` — several
-  theorems describe aspirational objects, not the shipped code. CGN and
-  STA have been reconciled (code now matches the stated math); see the
-  matrix for per-mechanism verdicts.
+  theorems describe aspirational objects, not the shipped code. As of the
+  2026-08-24 audit **every one of the twelve modules has divergences**. Three
+  documents have been rewritten to describe the implemented object instead of
+  the theorem it replaced (`pcr.md`, `spc.md`, and `swip.md`, whose term 2 is
+  implemented and whose scale-invariance claim is retracted). See the matrix
+  for per-mechanism verdicts.
 
 
 cite

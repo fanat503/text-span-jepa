@@ -2,7 +2,12 @@
 
 ## Central Claim
 
-All 15 mechanisms in Text-Span JEPA are instances of a single optimization principle:
+All **16 numbered GWP capabilities** — the twelve mechanism *modules* plus the
+four *methods of `JAWPModule`* (WIP, Spectral Gap, Grassmann Optimization,
+Predictive Rank), per the counting convention in [`README.md`](README.md) — are
+instances of a single optimization principle. (This file previously said "All 15
+mechanisms" in two places while the table immediately below listed 16 rows; the
+table was right and the sentence was not. Corrected 2026-10-08, TASK-41.)
 
 **Workspace-Conditioned Prediction (WCP):**
 > Predict $Y$ from $X$ using a representation that maximizes $I(Z_\mathcal{W}; Y)$ while preserving $I(Z_\mathcal{W}; f_{\mathrm{exo}})$, where $\mathcal{W} = \operatorname{span}(Q)$ is a learned subspace optimized on $\mathrm{St}(D,k)$.
@@ -63,7 +68,7 @@ where:
 
 ### For Paper
 - **Single claim**: "We introduce Workspace-Conditioned Prediction, a principled framework for text representation learning."
-- **Each mechanism is an instance**: Not 13 ad-hoc tricks, but 13 components of ONE optimization problem.
+- **Each mechanism is an instance**: Not 16 ad-hoc tricks, but 16 components of ONE optimization problem. (Was "13"; 13 was the *proof-document* count, not a mechanism count — corrected 2026-10-08, TASK-41.)
 - **Ablation hierarchy**: Removing mechanisms = relaxing constraints, with clear mathematical interpretation.
 
 ### For Reviewers
@@ -112,6 +117,11 @@ $$R_\mathrm{total} \leq R_{\mathcal{W}^*} + R_\perp + R_\mathrm{drift} + R_\math
 
 where $R_\mathrm{exogenous\_drift} = \eta_\mathrm{rdc} \cdot ||\Delta z_\perp||^2$ is the penalty for drift that could discard exogenous features.
 
-**Full bound** with all 15 mechanisms:
+**Full bound.** Ten risk terms, covering **eleven of the twelve modules** —
+WSR appears nowhere in it, and the four non-module capabilities (WIP, Spectral
+Gap, Grassmann Optimization, Predictive Rank) are not risk terms at all. (This
+line previously read "with all 15 mechanisms", which was true of neither the 12
+nor the 16. Corrected 2026-10-08, TASK-41; the missing WSR term is left missing
+because inventing it would be designing a theorem, which is a human decision.)
 
 $$R_\mathrm{total} \leq \underbrace{R_{\mathcal{W}^*}}_{\text{JAWP}} + \underbrace{R_\perp}_{\text{SWIP}} + \underbrace{R_\mathrm{drift}}_{\text{WSD+STA}} + \underbrace{R_\mathrm{consistency}}_{\text{CMC}} + \underbrace{R_\mathrm{overconfidence}}_{\text{PUC}} + \underbrace{R_\mathrm{exogenous\_drift}}_{\text{RDC}} + \underbrace{R_\mathrm{bottleneck}}_{\text{PCR}} + \underbrace{R_\mathrm{spectral}}_{\text{SPC}} + \underbrace{R_\mathrm{routing}}_{\text{CGN}} + \underbrace{R_\mathrm{exploration}}_{\text{GAC}}$$

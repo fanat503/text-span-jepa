@@ -8,6 +8,24 @@ rejected ones lost, and what would reverse the decision.
 
 ---
 
+> ## Reading the numbers in this file
+>
+> This is a **log**, so the numbers in an entry are the numbers that were true
+> when the decision was taken, and they stay that way. They are not restated as
+> current. Two entries carry counts that have since moved and are flagged here
+> rather than edited:
+>
+> | entry | number as written | current |
+> |---|---|---|
+> | D-001 | "The local full suite is 1541 tests" | 1960 collected on `agent/task-41`; last full CI execution 1910 passed / 21 skipped / 1 xfailed at commit `9732de2` |
+> | D-002 | "~82s", "1483 of the 1541 assertions" | see `AGENTS.md` § "Test count" for why no local wall clock is quoted |
+>
+> The **decisions** in both entries are unaffected: neither one is about how many
+> tests there are, only about where the number is measured from. Replaced
+> 2026-10-08 by TASK-41.
+
+---
+
 ## D-001 The full-suite baseline comes from CI, not from a local run
 
 **Problem.** The campaign needs a baseline, and the rules require acceptance by
@@ -153,10 +171,13 @@ parameter equals `1 - tau = 1e-4`. At `tau = 1.0` that value is 0.0 and the
 assertion fails, so the freeze is caught numerically and not by a bound on a
 number.
 
-**Open.** `src/train.py:836` still reads `ema_tau_end` with a fallback of
-`1.0`, so a `--no_defaults` run still freezes. Surfaced as a documented skip
-rather than silently patched, because `src/train.py` was owned elsewhere during
-that task.
+**Open → CLOSED 2026-10-08 (TASK-41 verification, no code change).** As written
+this item said `src/train.py:836` read `ema_tau_end` with a fallback of `1.0`, so
+a `--no_defaults` run froze the target encoder anyway. **That is no longer the
+code**: the fallback is now `0.9999` and it lives at `src/train.py:848`
+(`tau_end=model_cfg.get("ema_tau_end", 0.9999)`). A `--no_defaults` run therefore
+lands on the same EMA endpoint as a merged one, which is what this entry wanted
+when it was escalated. The decision stands; only the open item is closed.
 
 ---
 
@@ -318,16 +339,24 @@ ablated or counted by `active_mechanisms()`.
 
 **What the extra four are.** Not modules. WIP (#2), Spectral Gap (#3),
 Grassmann Optimization (#4) and Predictive Rank (#5) are **methods of
-`JAWPModule`** in `src/models/jawp.py:467/574/808/870/921/1082`. They cannot be
-turned on or off as units: `use_wip` does not exist anywhere in the repo.
+`JAWPModule`** — line numbers re-derived 2026-10-08, because the ones originally
+written here had all drifted:
+`detect_workspace_dimension` (`src/models/jawp.py:552`),
+`workspace_information_preservation` (`jawp.py:659`),
+`grassmann_retract` (`jawp.py:893`), `principal_angles` (`jawp.py:955`),
+`subspace_distance` (`jawp.py:1005`), `predictive_rank_loss` (`jawp.py:1166`).
+They cannot be turned on or off as units: `use_wip` does not exist anywhere in
+the repo.
 
 **Consequence recorded, not fixed.** Predictive Rank (#5) *is* a trained loss
-term — `jepa.py:810` adds `lambda_predictive_rank * loss_pred_rank`, default
-`0.0`, with an on-arm at `config/ablations/predictive_rank_on.yaml` — yet it
+term — `jepa.py:858` adds `lambda_predictive_rank * loss_pred_rank`, default
+`0.0` (`defaults.yaml:198`), with an on-arm at
+`config/ablations/predictive_rank_on.yaml` — yet it
 has no `ALL_MECHANISMS` entry, so `active_mechanisms()`,
 `mechanism_groups()`, `dependency_dag()` and `GWP.summary()` do not see it and
 report `Core: ['jawp']`. All three sites are under `src/**`, which this card
-did not own, so the gap is documented rather than closed.
+did not own, so the gap is documented rather than closed. (The `jepa.py:810`
+line number written here had drifted; `defaults.yaml:140` had too.)
 
 **What now pins the truth.**
 `tests/test_config_system.py::TestAblationGridComplete::test_all_mechanisms_length_is_stable`

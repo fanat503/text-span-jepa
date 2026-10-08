@@ -4,6 +4,28 @@ This file documents our hypotheses BEFORE running experiments. This follows
 the top-lab practice of pre-registering predictions to avoid HARKing
 (Hypothesizing After Results are Known).
 
+> **Status note, added 2026-10-08 (TASK-41). Twelve hypotheses (H1–H12); none
+> has been run.** Nothing below is edited, and nothing below should be: a
+> prediction edited after the fact is not a pre-registration. Two facts a
+> reader needs, recorded here rather than by rewriting the hypotheses:
+>
+> 1. **Three hypotheses cannot be evaluated as written.** H2, H10 and H12 state
+>    their predictions in terms of *linear probe accuracy*. No run any config in
+>    this repo can currently produce emits a downstream metric —
+>    `src/eval/probes.py` has a working `LinearProbe` but nothing in
+>    `src/train.py` calls it (`docs/results/README.md`, "What the paper still
+>    does not have"). Fix the evaluation plan, not the prediction.
+> 2. **H2's ablation arm is misnamed for the current default.** It reads
+>    "`cgn_on.yaml` vs `no_cgn` (implicit in default)". Since D-005
+>    (`docs/decisions.md`) `defaults.yaml` has **all twelve** `use_*` flags
+>    `true`, so the full-model arm is `all_core.yaml`, not "implicit". The
+>    `no_cgn.yaml` arm named beside it is correct and sufficient.
+>
+> Every hypothesis also names an arm pair from `config/ablations/`, and those
+> files exist — but `docs/results/README.md` records that **no ablation has been
+> run**, so none of these predictions has a measurement behind it, favourable or
+> unfavourable.
+
 ## H1: JAWP Workspace Improves Prediction Quality
 
 **Hypothesis**: JAWP workspace prediction loss will be significantly lower
