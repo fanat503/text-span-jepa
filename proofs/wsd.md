@@ -300,5 +300,4 @@ cheap fix and it is the only one that turns a measured conflict into an
 undetectable no-op.
 
 
-<<<<<<< planted
 
