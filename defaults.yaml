@@ -268,6 +268,21 @@ model:
 
   # PUC: Prediction Uncertainty Calibration (stability)
   # Minimax optimality (Jaynes + Donsker-Varadhan) — prevents overconfidence.
+  #
+  # TASK-39: there is deliberately NO key here for the entropy-source flag. The
+  # executed loss must read this batch's covariance to have an autograd edge to
+  # z_pred; reading the Oja EMA buffer instead makes the loss a constant added
+  # to total_loss, which moves the printed number and no gradient. The module
+  # default is therefore the grad-carrying path
+  # (PredictionUncertaintyCalibration.use_differentiable_entropy = True).
+  #
+  # Adding `puc_use_differentiable_entropy` here before TextSpanJEPAConfig reads
+  # it would be a dead key, not a knob: `TextSpanJEPAConfig(**kwargs)` drops
+  # unknown keys via kwargs.get, so it would validate, merge, and do nothing —
+  # the exact failure TestNoDeadKeys exists to prevent. Exposing it needs
+  # src/models/jepa.py (a `kwargs.get` beside use_puc, and the kwarg at the
+  # PredictionUncertaintyCalibration construction) plus the mirror in
+  # src/models/mechanisms.py. Both are outside TASK-39's file ownership.
   use_puc: true
   puc_eta: 0.01
   puc_ema_beta: 0.999
