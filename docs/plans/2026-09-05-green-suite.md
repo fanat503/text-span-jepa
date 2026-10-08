@@ -1,5 +1,14 @@
 # PLAN: Green Suite — все тесты зелёные без skip/xfail
 
+> **Датированный план от 2026-09-05, сохранён как есть** (добавлено TASK-41,
+> 2026-10-08). File:line координаты и числа относятся к тому коммиту. Актуальный
+> счётчик тестов: `AGENTS.md`, раздел «Test count». Замечание на будущее
+> читателю: этот план родился из требования «без skip/xfail», а сегодня в
+> репозитории **есть один `xfail`** —
+> `TestWSRSamNoSilentSubstitute::test_retraction_preserves_column_orientation`
+> в `tests/test_training_state_guards.py`, оставленный намеренно и
+> эскалированный владельцу как решение D-010 (дефект `wsr_mode: sam`).
+
 - **Date:** 2026-09-05
 - **Status:** done (DoD составлен; вердикт ревью — self-APPROVE с отклонением: агент-инфраструктура
   недоступна 6 ретраев × `model concurrency limit exceeded`; эскалация пользователю — принять self-review

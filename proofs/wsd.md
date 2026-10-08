@@ -7,6 +7,22 @@
 > lambda-to-penalty coupling) are not enforced; the 'constructive'
 > Davis-Kahan bound is circular; adaptive tau and per-step resync are
 > unimplemented. Silent eig-failure now warns (fixed R15).
+>
+> **Cross-mechanism, not in the 2026-08-24 audit (added 2026-10-08, found by
+> TASK-40).** The `Q_target` this theorem penalizes distance to is the
+> **top-k** eigenvectors of an EMA of the *target covariance*
+> (`src/models/wsd.py:200-206`), and the loss maximizes `‖Q_JAWPᵀ Q_target‖²_F`
+> (`src/models/wsd.py:256-258`) — so WSD pulls `Q` toward the target's
+> **highest-variance** directions. JAWP's minimizer on `St(D,k)` is the
+> **bottom-k** eigenvectors of the *residual* covariance
+> (`src/models/jawp.py:45-65`), and JAWP's header names high-variance
+> selection as the failure mode to avoid. Same parameter, opposite criteria,
+> and the reference model has both on (`defaults.yaml`: `use_wsd: true`,
+> `lambda_wsd: 0.01`, `use_jawp: true`). This is a science decision, not a
+> bug: the two act on different matrices (`Cov(z_target)` vs `Σ_res`) and on
+> different clocks (`wsd_sync_interval: 100` vs every step), so they may be
+> reconcilable — but nothing in the repo says so. Recorded in
+> `proofs/IMPLEMENTATION_STATUS.md` pattern 5; the resolution is the owner's.
 
 
 ## Statement

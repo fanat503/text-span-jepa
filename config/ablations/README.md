@@ -21,8 +21,13 @@ copied, and the experiment silently stops matching its own description.
 Rejected alternative: the `640 / 10 / 10` shape that ten of the pre-fix
 ablations used. That shape is a *rung of the scaling ladder*
 (`config/scaling/small_100m.yaml`), not an independent architecture, and
-adopting it would have made every ablation row incomparable with the other 29
+adopting it would have made every ablation row incomparable with the other 39
 shipped configs that train 768/12/12.
+
+Verified 2026-10-08 (TASK-41): all **40** files in this directory resolve to
+`embed_dim 768 / encoder_depth 12` after the deep merge — there is no second
+shape left in the grid. (This file said "29", which counted neither the current
+40 nor the pre-fix 30.)
 
 ## The leave-one-out grid
 

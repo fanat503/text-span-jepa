@@ -6,6 +6,15 @@
 > DIVERGENT: curriculum slices Q[:, :k(t)] with time-varying k while the
 > theorems assume fixed k; the five verification tests named in the proof
 > are absent. Complementary-gate style fixes elsewhere do NOT apply here.
+>
+> **Cross-mechanism, not in the 2026-08-24 audit (added 2026-10-08, found by
+> TASK-40).** The bottom-k criterion proved below is the same `Q` WSD pulls
+> toward the target's **top-k** variance directions. `proofs/wsd.md` and
+> `proofs/IMPLEMENTATION_STATUS.md` pattern 5 carry the detail. Nothing in
+> this document's proof depends on the resolution; but the theorem's claim that
+> `Q*` is the *predictable* subspace is only safe to state while no other term
+> in the objective pulls the same parameter the other way, and the reference
+> model has such a term.
 
 
 ## Problem Statement

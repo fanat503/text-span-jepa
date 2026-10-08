@@ -1,12 +1,25 @@
 # PUC: Prediction Uncertainty Calibration
 
-> **IMPLEMENTATION STATUS (audited 2026-08-24)** — see
-> `proofs/IMPLEMENTATION_STATUS.md`.
+> **IMPLEMENTATION STATUS (audited 2026-08-24; headline corrected 2026-10-08)** —
+> see `proofs/IMPLEMENTATION_STATUS.md`.
 > Verified: non-negativity of the returned scalar.
 > DIVERGENT: the headline Lagrangian-dual formula is dead code; the
-> executed ReLU'd log-det barrier matches neither stated form; the loss
-> carries NO gradient (buffer-based statistics); the risk constraint and
-> min_log_det are unimplemented. Labeled in-module (R12).
+> executed ReLU'd log-det barrier matches neither stated form; the risk
+> constraint and min_log_det are unimplemented. Labeled in-module (R12).
+>
+> **The 2026-08-24 banner also said "the loss carries NO gradient
+> (buffer-based statistics)". That was true then and is not true of the
+> shipped default.** It read the Oja EMA **buffer**, which has no autograd
+> edge. TASK-39 flipped `use_differentiable_entropy`'s default to `True`
+> (`src/models/puc.py:100`), so the default path builds its eigenvalues from
+> `eigvalsh` of **this batch's** covariance *with* autograd
+> (`src/models/puc.py:261-264`) and the returned scalar carries an edge to
+> `z_pred`. `src/models/jepa.py:537-542` does not pass the flag, so training
+> takes that path. The inert path still exists — it is what
+> `use_differentiable_entropy=False` selects, it is not reachable from any
+> config (there is deliberately no `puc_use_differentiable_entropy` key), and
+> `puc_carries_grad` in the info dict reports which branch ran. The counts in
+> the matrix are unchanged; only this premise moved.
 
 
 ## Statement
