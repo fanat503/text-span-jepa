@@ -6,6 +6,17 @@
 > DIVERGENT: curriculum slices Q[:, :k(t)] with time-varying k while the
 > theorems assume fixed k; the five verification tests named in the proof
 > are absent. Complementary-gate style fixes elsewhere do NOT apply here.
+>
+> **ADDENDUM (TASK-40, 2026-10-08).** Two findings, both triaged here for the
+> first time:
+> 1. **WSD pulls the same `workspace_Q` toward the opposite subspace.** The
+>    antagonism is real and measured; the crossover is
+>    $\lambda_\mathrm{WSD} \approx 0.42$ and every shipped config is below it.
+>    Owner science call, not a bug. Full evidence and five options:
+>    [`wsd.md` — Interaction with JAWP](wsd.md#interaction-with-jawp-opposite-optima-one-parameter).
+> 2. **Two of the four numbered JAWP capabilities have no caller in `src/`.**
+>    Measured consequences in [Unreached capabilities](#unreached-capabilities).
+> TASK-40 changed no loss and no weight.
 
 
 ## Problem Statement
@@ -90,7 +101,7 @@ tr(Q_JAWP^T Σ_res Q_JAWP) ≤ tr(Q_PCA^T Σ_res Q_PCA)
 ```
 
 Equality holds ONLY when PCA directions coincide with the most
-predictable directions, which< requires Σ_res and Cov(z_target) to
+predictable directions, which requires Σ_res and Cov(z_target) to
 share eigenvectors with the SAME eigenvalue ordering. This requires
 prediction error to be isotropic — the trivial case.
 
@@ -158,6 +169,75 @@ X = U V^T. ∎
 - `tests/test_jawp.py#test_wip_preservation` — exogenous features preserved
 - `tests/test_jawp.py#test_stiefel_retraction` — Q stays on St(D,k)
 - `tests/test_jawp.py#test_predictive_rank` — rank preserved
+
+## Unreached capabilities
+
+Four numbered capabilities hang off `JAWPModule`. Two are called by the running
+model; two have **no caller anywhere in `src/`** (only `tests/`). Both are
+reachable only as manual calls, so nothing in a training run exercises them.
+This is the count mismatch in `AGENTS.md` made concrete: they are counted, and
+they are never called.
+
+| capability | method | called from `src/` | what happens if wired |
+|---|---|---|---|
+| Workspace Prediction | `compute_loss` | `jepa.py:736` | — |
+| Predictive Rank | `predictive_rank_loss` | `jepa.py:1041` | — |
+| **Spectral Gap** | `detect_workspace_dimension` (`jawp.py:552`) | **none** | outputs `k_star`; nothing consumes it, so `k_end` stays fixed and the number is a log-only diagnostic |
+| **Grassmann Optimization** | `grassmann_retract` (`jawp.py:893`) | **none** | `stiefel_retract` (`jawp.py:269`) is the one wired, from `jepa.py:532` and `train.py:1470` |
+
+**`detect_workspace_dimension`** (Spectral Gap #3) detects a natural workspace
+dimension from the residual spectrum, which is the one thing the
+`jawk_k_end` hyperparameter cannot express. Measured against a constructed
+ground truth (`D=64`, `N=2000`, known `k*`): it recovers `k*` **exactly** at
+`k*` in `{1, 2, 3, 6, 12, 24}`, with zero spread across five seeds, at
+~1.7 ms per call. The estimator works. What does not exist is the wiring that
+would let a detected `k*` reach `current_k`.
+
+**`grassmann_retract`** (Grassmann Optimization #4) is the post-step
+projector that removes the O(k) gauge component. `stiefel_retract` is wired and
+does the Riemannian symmetric correction instead. Measured over 60 steps
+(`D=64`, `k=6`, `wsd_sync_interval=1`): the two produce trajectories equal to
+~7e-6 in loss and an `overlap^2` of **1.0000** on `span(Q)`. On this
+configuration they are interchangeable — but that is a measurement, not a
+licence to swap them: `grassmann_retract`'s gauge term is an all-ones-weighted
+component while the Stiefel retraction's Riemannian correction is symmetric, and
+Theorem 3 above is stated for `stiefel_retract`. Swapping changes which
+quantity is called "the retraction" without changing any audited claim, which
+is a decision for the owner, not a cleanup.
+
+**Recommendation.** Both should be wired, not deleted — neither is a dead
+formula (unlike PUC's headline loss). The minimal wiring is one call each in
+`src/models/jepa.py`, where `active_k` and `workspace_Q` are already in scope
+at `_jawp_loss` / the retraction block; `src/models/jepa.py` is outside TASK-40's
+file boundary, so this is recorded rather than applied. The
+`AGENTS.md` / `README.md` count should either name them as caller-less or the
+callers should land first — TASK-41 owns that reconciliation.
+
+## Interaction with WSD: the same `Q`, the opposite subspace
+
+JAWP minimises $\mathrm{tr}(Q^\top\Sigma_\mathrm{res}Q)$, whose minimiser over
+$\mathrm{St}(D,k)$ is the **bottom**-$k$ of $\Sigma_\mathrm{res}$
+(`jawp.py:375`, `jawp.py:43-57`). WSD minimises
+$2k - 2\lVert Q^\top Q_\mathrm{tgt}\rVert_F^2$, whose minimiser is the **top**-$k$
+of the target covariance (`wsd.py:206`, `wsd.py:258`). Both hold a live view
+of `workspace_Q[:, :k_active]` in one `total_loss`, so both gradients land in
+one backward pass.
+
+Measured on the running model: the cosine between the two `Q`-gradients is
+negative on **12 of 12** consecutive steps (mean $\approx -0.47$), and WSD's
+raw gradient magnitude is ~2.4x JAWP's, putting the crossover at
+$\lambda_\mathrm{WSD} \approx 0.42$. WSD's pull is precisely the high-variance
+pull that DESIGN DECISION 3 removed from JAWP. Every runnable config sets
+`use_wsd: false` and the one ablation that enables it uses `lambda_wsd: 0.1`,
+below the crossover — so the conflict is real but sub-threshold in the grid.
+It becomes visible as a collapse of `jawk_predictive_relevance` to 0 at
+$\lambda_\mathrm{WSD} \ge 1$.
+
+This is an open science decision, not a bug: the two mechanisms optimise
+different quantities and either may be the intended science. Full evidence,
+data-dependence of the optima, and five resolution options with consequences
+are in [`wsd.md` — Interaction with JAWP](wsd.md#interaction-with-jawp-opposite-optima-one-parameter).
+TASK-40 changed no loss and no weight in either module.
 
 ## How Other Papers Can Use JAWP
 

@@ -65,6 +65,29 @@
 #  residual; signal can have low variance but low residual. □
 #
 #  ═══════════════════════════════════════════════════════════════════════════
+#  INTERACTION WITH WSD — READ proofs/wsd.md BEFORE TOUCHING Q
+#  ═══════════════════════════════════════════════════════════════════════════
+#  The theorem above sends Q to the BOTTOM-k of Σ_res. WSD
+#  (src/models/wsd.py) sends the SAME jawp.workspace_Q columns to the TOP-k
+#  of Cov(h_target), and jepa.py:1086 hands WSD a LIVE view of
+#  workspace_Q so both gradients land in one total_loss.backward().
+#
+#  Measured on the running model (D=64, k=6): cos(dL_JAWP/dQ, dL_WSD/dQ) is
+#  negative on 12/12 consecutive steps (mean ~ -0.47) and ||dL_WSD/dQ|| is
+#  ~2.4x ||dL_JAWP/dQ||, i.e. the crossover is lambda_wsd ~ 0.42. Above it,
+#  jawp_predictive_relevance collapses to 0 and the workspace stops being
+#  predictable at all. Every runnable config ships use_wsd: false and the one
+#  ablation that enables it uses lambda_wsd: 0.1, below the crossover.
+#
+#  This is an OPEN SCIENCE DECISION, not a bug: the two mechanisms optimise
+#  different quantities (residual spectrum vs target variance) and either may
+#  be the intended science. proofs/wsd.md section "Interaction with JAWP:
+#  opposite optima, one parameter" carries the full evidence, the
+#  data-dependence of the optima, and five resolution options with their
+#  consequences. Do not resolve it by editing a loss here or there.
+#  ═══════════════════════════════════════════════════════════════════════════
+#
+#  ═══════════════════════════════════════════════════════════════════════════
 #  STIEFEL MANIFOLD OPTIMIZATION
 #  ═══════════════════════════════════════════════════════════════════════════
 #
@@ -548,6 +571,26 @@ class JAWPModule(nn.Module):
         Q = self.workspace_Q.data[:, :k]
         return z - (z @ Q) @ Q.T
 
+    # ═══════════════════════════════════════════════════════════════════════
+    #  ⚠ NO CALLER IN src/ — numbered capability "Spectral Gap" (#3).
+    # ═══════════════════════════════════════════════════════════════════════
+    #  Reachable only as a manual call (tests/test_v025_integration.py is the
+    #  sole caller anywhere). Nothing in a training run calls it, and nothing
+    #  consumes k_star: jawk_k_end / current_k() are untouched by the result,
+    #  so even once wired it is a log-only diagnostic until a caller feeds it
+    #  back into the width.
+    #
+    #  It is NOT a dead formula (unlike PUC's headline loss). Measured against
+    #  a constructed ground truth (D=64, N=2000): recovers k* EXACTLY at k*
+    #  in {1,2,3,6,12,24}, zero spread across 5 seeds, ~1.7 ms per call.
+    #  So: WIRE, do not delete. The minimal wiring is one call in
+    #  src/models/jepa.py, where active_k and workspace_Q are already in
+    #  scope. jepa.py was outside the file boundary of the task that measured
+    #  this (TASK-40, 2026-10-08), which is why it is recorded and not done.
+    #  See proofs/jawp.md section "Unreached capabilities".
+    #
+    # ═══════════════════════════════════════════════════════════════════════
+
     @torch.no_grad()
     def detect_workspace_dimension(self, z_pred, z_target, min_gap_ratio=2.0):
         """Detect natural workspace dimension k* from the spectral gap
@@ -888,6 +931,25 @@ class JAWPModule(nn.Module):
     #
     #  For monitoring, use principal_angles() to compare subspaces
     #  across training steps — this is gauge-invariant.
+
+    # ═══════════════════════════════════════════════════════════════════════
+    #  ⚠ NO CALLER IN src/ — numbered capability "Grassmann Optimization" (#4).
+    # ═══════════════════════════════════════════════════════════════════════
+    #  The wired post-step projector is stiefel_retract (above), called from
+    #  mechanisms.py:532 and train.py:1470. This one is not called from src/
+    #  at all. Measured over 60 steps (D=64, k=6, wsd_sync_interval=1) the two
+    #  are interchangeable in practice: loss trajectories agree to ~7e-6 and
+    #  overlap^2(span Q) = 1.0000.
+    #
+    #  Do not swap them on the strength of that one measurement. The gauge term
+    #  removed here (Q_active @ (Q_active^T @ grad)) is not the symmetric
+    #  Riemannian correction stiefel_retract applies, and Theorem 3 in
+    #  proofs/jawp.md is stated for stiefel_retract — swapping would change
+    #  which quantity the proof calls "the retraction" without changing any
+    #  measured behaviour, which is an owner decision rather than a cleanup.
+    #  See proofs/jawp.md section "Unreached capabilities".
+    #
+    # ═══════════════════════════════════════════════════════════════════════
 
     @torch.no_grad()
     def grassmann_retract(self):

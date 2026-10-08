@@ -203,6 +203,29 @@ class WorkspaceSyncDrift(TrainingStateGuard):
         try:
             _eigenvalues, eigenvectors = torch.linalg.eigh(self.target_cov)
             # eigh returns ascending order; take top-k
+            #
+            # "top-k" is load-bearing and it OPPOSES JAWP. This puts Q_target on
+            # the HIGHEST-variance directions of h_target, so
+            # d(drift_loss)/dQ = -4 * P_target @ Q pulls the SAME
+            # jawp.workspace_Q toward them. JAWP pulls the same columns toward
+            # the BOTTOM-k of the residual covariance, and its own header names
+            # high-variance selection as the failure mode to avoid. Same
+            # parameter, opposite optima, one backward pass.
+            #
+            # Measured on the running model: the cosine between the two
+            # Q-gradients is negative on 12/12 consecutive steps (mean
+            # ~ -0.47), and the crossover is lambda_wsd ~ 0.42 -- above the
+            # 0.01 default and the 0.1 ablation, so the grid is safe today.
+            # Above the crossover, jawp_predictive_relevance collapses to 0.
+            #
+            # Mutation check: flipping this line to eigenvectors[:, :self.k]
+            # (bottom-k, i.e. "just make them agree") passes all 105 tests in
+            # tests/test_wsd.py + tests/test_jawp.py + tests/test_sterility.py.
+            # Nothing pins the direction, which is why this went untriaged for
+            # the life of the mechanism. Do NOT change it, and do NOT raise
+            # lambda_wsd, without reading proofs/wsd.md section "Interaction
+            # with JAWP: opposite optima, one parameter": it holds five
+            # resolution options and this is an OWNER science call.
             self.target_Q.copy_(eigenvectors[:, -self.k :])
         except Exception as e:
             # Keep previous Q_target, but SAY SO: a silently frozen drift
