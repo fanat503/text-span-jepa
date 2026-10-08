@@ -1,4 +1,4 @@
-# Copyright 2026 Text-Span JEPA Authors
+# Copyright 2026 Slyatski Ilya
 # Licensed under the Apache License, Version 2.0
 """TASK-14: the pass/fail thresholds in `ground_truth.py` must be able to fail.
 

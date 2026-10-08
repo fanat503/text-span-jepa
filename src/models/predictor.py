@@ -1,4 +1,4 @@
-# Copyright 2026 Text-Span JEPA Authors
+# Copyright 2026 Slyatski Ilya
 # Licensed under the Apache License, Version 2.0
 # Predictor: span + future prediction with iterative refinement
 # Uses torch.gather for efficient masked-position extraction (Fix #3)

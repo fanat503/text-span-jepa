@@ -1,4 +1,4 @@
-# Copyright 2026 Text-Span JEPA Authors
+# Copyright 2026 Slyatski Ilya
 # Licensed under the Apache License, Version 2.0
 """Cross-micro-batch retention of `jepa._gac_z` and `jepa._cmc_pass["slots"]`.
 

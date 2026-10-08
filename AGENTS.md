@@ -101,7 +101,9 @@ are a real, currently-open defect in this repo.
   diagnostics. Preserve that shape — `MechanismBundle.forward` aggregates them.
 - `retract()` must be called after `optimizer.step()` to hold the Stiefel
   manifold constraint. Do not remove it.
-- Copyright header: `# Copyright 2026 Text-Span JEPA Authors` + Apache-2.0 line.
+- Copyright header: `# Copyright 2026 Slyatski Ilya` + Apache-2.0 line.
+  The repo has a single named author, so the holder is that person rather than
+  a collective - a copyright that resolves to nobody will not survive review.
 
 ## Tests
 

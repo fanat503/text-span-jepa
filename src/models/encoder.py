@@ -1,4 +1,4 @@
-# Copyright 2026 Text-Span JEPA Authors
+# Copyright 2026 Slyatski Ilya
 # Licensed under the Apache License, Version 2.0
 # Bidirectional Transformer encoder (online + target shared architecture)
 # Architecture adapted from I-JEPA (Assran et al., CVPR 2023) for 1D text

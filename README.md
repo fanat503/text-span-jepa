@@ -103,7 +103,7 @@ cite
 ```bibtex
 @article{textspanjepa2026,
   title={Text-Span JEPA: Latent Predictive Learning for Language Representations},
-  author={Text-Span JEPA Authors},
+  author={Slyatski Ilya},
   year={2026}
 }
 ```

@@ -1,4 +1,4 @@
-# Copyright 2026 Text-Span JEPA Authors
+# Copyright 2026 Slyatski Ilya
 # Licensed under the Apache License, Version 2.0
 """Contracts for `src/utils/seed.py`: the thread pin and the determinism switch.
 

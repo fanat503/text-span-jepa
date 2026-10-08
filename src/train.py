@@ -1,4 +1,4 @@
-# Copyright 2026 Text-Span JEPA Authors
+# Copyright 2026 Slyatski Ilya
 # Licensed under the Apache License, Version 2.0
 # Main training loop — supports JEPA, MLM, and data2vec baselines
 # Training loop patterns from I-JEPA (Assran et al., CVPR 2023):
