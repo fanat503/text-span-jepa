@@ -4,9 +4,12 @@
 
 import math
 
+import pytest
 import torch
 
+from src.models.jepa import TextSpanJEPA, TextSpanJEPAConfig
 from src.models.puc import PredictionUncertaintyCalibration
+from src.utils.seed import seed_everything
 
 
 class TestPUCCore:
@@ -212,6 +215,138 @@ class TestPUCDiagnostics:
         for key, val in info.items():
             if isinstance(val, float):
                 assert math.isfinite(val), f"{key} not finite: {val}"
+
+
+class TestPUCIsNotAConstant:
+    """TASK-39. The defect this class exists to make unrepeatable.
+
+    With the entropy source set to the Oja EMA buffer, the loss is built from a
+    `register_buffer` running estimate. Buffers have `requires_grad=False`, so
+    the returned loss has no autograd edge to `z_pred`: `total_loss` shifts by a
+    constant, `backward()` puts nothing new into any parameter, and PUC cannot
+    influence training at all. It looked live because `use_puc` is true, the
+    weight is non-zero, `validate()` gates it, and a number reaches the printed
+    loss.
+
+    These tests assert the PROPERTY — a gradient edge exists — not a magnitude,
+    so they survive a refactor of the barrier. The card's own numbers were
+    False -> 0.1401 / requires_grad False, True -> 0.1037 / z.grad 1.4e-05.
+    """
+
+    embed_dim = 32
+
+    def _encoder_grad(self, use_puc: bool, lambda_puc: float) -> torch.Tensor:
+        """Flat encoder gradient after one backward, everything else fixed."""
+        seed_everything(7)
+        cfg = TextSpanJEPAConfig(
+            vocab_size=64,
+            max_seq_len=16,
+            embed_dim=self.embed_dim,
+            encoder_depth=1,
+            num_heads=2,
+            mlp_ratio=2.0,
+            predictor_embed_dim=16,
+            predictor_depth=1,
+            future_offsets=[1],
+            num_refine_steps=1,
+            future_warmup_steps=0,
+            use_puc=use_puc,
+            lambda_puc=lambda_puc,
+            puc_warmup_steps=0,
+        )
+        model = TextSpanJEPA(cfg)
+        model.train()
+        torch.manual_seed(3)
+        ids = torch.randint(0, 64, (2, 16))
+        mask = torch.zeros(2, 16, dtype=torch.long)
+        mask[:, 2:8] = 1
+        total, loss_dict, _ = model.compute_loss_with_targets(ids, ids, mask, 50, 100)
+        total.backward()
+        grads = [p.grad.reshape(-1) for p in model.encoder.parameters() if p.grad is not None]
+        assert grads, "encoder has no gradient at all; the test would be vacuous"
+        return torch.cat(grads), float(loss_dict["loss_puc"])
+
+    def test_default_config_puc_loss_carries_an_edge_to_the_encoder(self):
+        """THE card. Under the DEFAULT config, PUC must reach the encoder.
+
+        Compares the encoder gradient with PUC enabled at a non-zero weight
+        against the same model with PUC off. If PUC's loss is a constant the two
+        tensors are bitwise identical and this is 0.0 — which is precisely the
+        measurement that identified the defect.
+        """
+        with_puc, loss_puc = self._encoder_grad(use_puc=True, lambda_puc=0.05)
+        without_puc, _ = self._encoder_grad(use_puc=False, lambda_puc=0.0)
+        assert loss_puc > 0.0, (
+            f"PUC's own loss is {loss_puc}; a zero loss cannot distinguish a "
+            "live mechanism from an inert one, so this test would pass for the "
+            "wrong reason. Widen the seed/batch or the fixture is degenerate."
+        )
+        delta = (with_puc - without_puc).abs().max()
+        assert delta > 0.0, (
+            "PUC's loss reaches total_loss but not the encoder: max |encoder.grad "
+            "(PUC on) - encoder.grad(PUC off)| is exactly 0.0. PUC is a constant "
+            "added to the objective. Check use_differentiable_entropy."
+        )
+
+    def test_default_construction_takes_the_differentiable_path(self):
+        """The module default must be the path that can train."""
+        puc = PredictionUncertaintyCalibration(embed_dim=self.embed_dim)
+        assert puc.use_differentiable_entropy is True, (
+            "the default flipped back to the EMA-buffer path: with it False the "
+            "loss has no autograd edge and PUC cannot train"
+        )
+
+    def test_grad_free_path_is_still_reachable_but_refuses_to_do_it_quietly(self):
+        """The legacy path must keep working AND announce itself.
+
+        tests/test_sterility.py pins that the buffer path stays grad-free, so it
+        cannot be deleted under this card. What can change is that selecting it
+        is no longer silent.
+        """
+        with pytest.warns(UserWarning, match="no autograd edge"):
+            PredictionUncertaintyCalibration(
+                embed_dim=self.embed_dim,
+                use_differentiable_entropy=False,
+            )
+
+    def test_loss_reports_whether_it_can_reach_the_encoder(self):
+        """The printed loss must say whether its own term can train.
+
+        A non-zero loss with no edge is the inert case; the diagnostic has to
+        distinguish it from the ordinary zero-loss-with-no-edge case.
+
+        `target_entropy=200.0` (as tests/test_sterility.py uses) opens the
+        entropy-deficit gate for an N(0, I) batch, so the loss is the barrier
+        rather than the gate's zero.
+        """
+        puc = PredictionUncertaintyCalibration(
+            embed_dim=self.embed_dim,
+            warmup_steps=0,
+            target_entropy=200.0,
+        )
+        z = torch.randn(4, 16, self.embed_dim, requires_grad=True)
+        loss, info = puc(z, step=100)
+        assert loss.item() > 0.0, f"expected a positive loss, got {loss.item()}"
+        assert info["puc_carries_grad"] is True
+        assert loss.requires_grad is True
+
+        # The warning fires at construction, so it is asserted where it happens.
+        # It is already pinned by test_grad_free_path_is_still_reachable_but_
+        # refuses_to_do_it_quietly.
+        with pytest.warns(UserWarning):
+            legacy = PredictionUncertaintyCalibration(
+                embed_dim=self.embed_dim,
+                warmup_steps=0,
+                target_entropy=200.0,
+                use_differentiable_entropy=False,
+            )
+        legacy_loss, legacy_info = legacy(z, step=100)
+        assert legacy_loss.item() > 0.0, (
+            f"the buffer path must still produce the same positive number, got "
+            f"{legacy_loss.item()}; if it changed, the two paths no longer "
+            "differ only in whether the value carries a gradient"
+        )
+        assert legacy_info["puc_carries_grad"] is False
 
 
 class TestPUCCheckpoint:

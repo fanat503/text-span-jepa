@@ -24,13 +24,26 @@
 # PUC drives Σ_pred toward this optimal covariance.
 #
 # Implementation status (audited R11/R12): the EXECUTED loss is a ReLU'd
-# log-det barrier over Oja-tracked eigenvalues, gated by an entropy-deficit
-# check — it is NOT the Lagrangian-dual object sketched in the theorem
-# above. Full discrepancy matrix: proofs/IMPLEMENTATION_STATUS.md.
+# log-det barrier over the eigenvalues of THIS batch's prediction covariance,
+# gated by an entropy-deficit check — it is NOT the Lagrangian-dual object
+# sketched in the theorem above. Full discrepancy matrix:
+# proofs/IMPLEMENTATION_STATUS.md.
+#
+# TASK-39 divergence, recorded here because proofs/** is not this file's to
+# edit (AGENTS.md: the proof is a design doc, not a spec). The batch-covariance
+# eigenvalues carry autograd; the Oja EMA buffer does not. So the loss only
+# influences training when ``use_differentiable_entropy`` is True, and the
+# default is True for exactly that reason. With it False the loss is a
+# CONSTANT added to total_loss: it changes the printed number and moves no
+# gradient. Measured on the DEFAULT config (use_puc=true, lambda_puc=0.05),
+# max |encoder.grad(PUC on) - encoder.grad(PUC off)| was exactly 0.0 before
+# this default was flipped and 2.2e-08 after. The flag is still not reachable
+# from ``TextSpanJEPAConfig`` — see the report; exposing it needs jepa.py.
 
 from __future__ import annotations
 
 import math
+import warnings
 from typing import Any
 
 import torch
@@ -61,9 +74,17 @@ class PredictionUncertaintyCalibration(TrainingStateGuard):
         ema_beta: EMA decay for running covariance statistics.
         warmup_steps: steps before PUC activates.
         min_log_det: floor for log-determinant (numerical stability).
-        use_differentiable_entropy: if True, entropy is computed from
-            batch-covariance eigenvalues WITH autograd (gradient flows to
-            z_pred); default False keeps the legacy buffer-based estimate.
+        use_differentiable_entropy: if True (the default), the eigenvalues the
+            log-det barrier is built from are those of THIS batch's prediction
+            covariance, computed WITH autograd, so the loss carries an edge to
+            ``z_pred`` and can actually train the encoder.
+
+            False reads the Oja EMA buffer instead, which is a ``register_buffer``
+            of a running estimate and has no autograd edge: the returned loss is
+            then a CONSTANT added to ``total_loss`` — it changes the printed
+            number and moves no gradient. It is retained only so the legacy
+            behaviour stays testable and so the Oja state keeps its documented
+            checkpoint/cadence contract; selecting it now warns at construction.
 
     """
 
@@ -76,7 +97,7 @@ class PredictionUncertaintyCalibration(TrainingStateGuard):
         ema_beta: float = 0.999,
         warmup_steps: int = 500,
         min_log_det: float = -50.0,
-        use_differentiable_entropy: bool = False,
+        use_differentiable_entropy: bool = True,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -86,6 +107,16 @@ class PredictionUncertaintyCalibration(TrainingStateGuard):
         self.warmup_steps = warmup_steps
         self.min_log_det = min_log_det
         self.use_differentiable_entropy = use_differentiable_entropy
+        if not use_differentiable_entropy:
+            warnings.warn(
+                "PredictionUncertaintyCalibration(use_differentiable_entropy=False) "
+                "reads the Oja EMA buffer, which has no autograd edge to z_pred, so "
+                "its loss is a constant added to total_loss: it cannot train "
+                "anything. It is kept only for the legacy-behaviour test and the "
+                "Oja checkpoint contract. Do not ship a run that selects it.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         # Target entropy: isotropic Gaussian H = D/2 * log(2πe)
         if target_entropy is not None:
@@ -301,6 +332,12 @@ class PredictionUncertaintyCalibration(TrainingStateGuard):
             "puc_max_eigenvalue": eigenvalues.max().item(),
             "puc_log_det": log_det_tracked.item(),
             "puc_n_components": self.n_components,
+            # Whether the number just added to total_loss can reach the encoder.
+            # A zero loss without an edge is the gate being closed, which is fine;
+            # a NON-ZERO loss without an edge is the inert EMA path. Reported so
+            # the inert case is visible in a printed run instead of only in a
+            # diff of this file. See the TASK-39 note in the header.
+            "puc_carries_grad": bool(torch.is_tensor(final_loss) and final_loss.requires_grad),
         }
 
         return final_loss, info
