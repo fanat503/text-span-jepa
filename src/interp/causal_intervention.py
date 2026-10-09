@@ -28,6 +28,8 @@ import math
 import torch
 import torch.nn.functional as F
 
+from src.interp import rng
+
 # ═══════════════════════════════════════════════════════════════════
 # Pure tensor ops (kept as-is: these are the primitives, not the experiments)
 # ═══════════════════════════════════════════════════════════════════
@@ -272,7 +274,7 @@ def _null_draw_count(n_points, n_permutations):
     return int(n_permutations)
 
 
-def permutation_spearman_test(scales, values, n_permutations=1000, generator=None):
+def permutation_spearman_test(scales, values, n_permutations=1000, generator=None, seed=None):
     """Two-sided permutation test of |Spearman(scales, values)|.
 
     At n=5 points, |r| > 0.9 happens by chance roughly 10% of the time, so a
@@ -282,8 +284,23 @@ def permutation_spearman_test(scales, values, n_permutations=1000, generator=Non
     120 permutations are perfectly monotone, so even a flawless signal can only
     reach p = 2/120 = 0.0167.
 
+    Args:
+        generator: caller-owned CPU ``torch.Generator``, the sole source of the
+            sampled null's randomness. ``intervention_predictability_score``
+            passes one built from its own ``seed`` argument.
+        seed: convenience alternative to `generator`, for a caller that has a
+            seed rather than a generator. ``None`` on both falls back to a
+            private generator derived from the run seed, which replaces a
+            previous hardcoded ``manual_seed(0)``: that constant made every
+            call in the process share one null draw, and no seed sweep could
+            move it.
+
     Returns:
         (r_observed, p_value) with p_value in (0, 1].
+
+    Raises:
+        ValueError: if both `generator` and `seed` are given, or if
+            `n_permutations` < 1.
 
     """
     if n_permutations < 1:
@@ -308,8 +325,14 @@ def permutation_spearman_test(scales, values, n_permutations=1000, generator=Non
                 count += 1
         return r_obs, count / total
 
+    if generator is not None and seed is not None:
+        raise ValueError(
+            "pass either generator (a caller-owned generator whose state you "
+            "advance) or seed (a base seed for a private generator), not both: "
+            "the two would silently fight over the same draw."
+        )
     if generator is None:
-        generator = torch.Generator().manual_seed(0)
+        generator = rng.generator_for(seed, "causal_intervention.permutation_null")
     count = 0
     for _ in range(n_permutations):
         perm = torch.randperm(n, generator=generator)
