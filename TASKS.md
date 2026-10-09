@@ -1,5 +1,5 @@
 <!-- swarm header — update every tick -->
-X: 12 | TICK: 2 | cap: - | 429: 0 | volna: 2
+X: 12 | TICK: 7 | cap: - | 429: 0 | volna: 7
 
 # TASKS
 
@@ -201,7 +201,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 
 ---
 
-### TASK-11 | group: G-COVER | status: todo | mode: arena
+### TASK-11 | group: G-COVER | status: done | mode: arena
 - goal: give the five sibling probe metrics a held-out split, or rename them to
   say they do not have one.
 - why: after `src/eval/probes.py` was fixed, five more modules still report
@@ -719,7 +719,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   commit, and the 1910-test run is attached to it.
 - report: `.agent-notes/task-36.md`
 
-### TASK-37 | group: G-COVER | status: todo | mode: solo
+### TASK-37 | group: G-COVER | status: done | mode: solo
 - goal: build the results apparatus, so the paper has a results section and not
   only a methods section.
 - why: the whole campaign has been about correctness. CI is green at 1910 tests
@@ -753,7 +753,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 - fifteen refused claims are listed explicitly so a later draft cannot
   reintroduce them by accident.
 
-### TASK-39 | group: G-FIX | status: todo | mode: solo
+### TASK-39 | group: G-FIX | status: done | mode: solo
 - goal: **PUC contributes a constant to `total_loss` under the shipped defaults.**
 - why this is the most serious defect the campaign has found, and it survived
   25 cards: with `use_differentiable_entropy=False` — a flag never exposed
@@ -780,7 +780,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   changes the objective is a trap.
 - report: `.agent-notes/task-39.md`
 
-### TASK-40 | group: G-FIX | status: todo | mode: arena
+### TASK-40 | group: G-FIX | status: done | mode: arena
 - goal: reconcile WSD and JAWP, which pull the SAME parameter in OPPOSITE
   directions with nothing tying them together.
 - why: WSD pulls `Q` toward the **top-k** eigenvectors of the target covariance
@@ -802,7 +802,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   made concrete.
 - report: `.agent-notes/task-40.md`
 
-### TASK-41 | group: G-COVER | status: todo | mode: arena
+### TASK-41 | group: G-COVER | status: done | mode: arena
 - goal: the stale-documentation sweep. Everything below is already KNOWN to be
   wrong and is recorded nowhere as a task.
 - why: 25 cards changed behaviour and the prose did not follow. A reviewer reads
