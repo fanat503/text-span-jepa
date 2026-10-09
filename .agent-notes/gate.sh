@@ -35,15 +35,49 @@ FAILED=0
 stage() { printf '\n=== %s ===\n' "$1"; }
 
 stage "new regression files (must not run only in CI)"
-# The tick-1 verifier found this hole: four test files shipped by workers were
-# never in the gate, so they ran only under the required CI check. A gate that
-# does not run a test is a comment.
+# Every worker-authored test, not just the ones that existed before the
+# campaign. Found by diffing tests/ against this file: 19 were named
+# nowhere here, so they ran only under CI. A gate that does not run a
+# test is a comment.
+#
+# The first list in this block was replaced rather than extended when the 19 were
+# added, which silently dropped the four files it had been running before. The
+# union below is verified by fix_gate.py, which exits non-zero if any
+# worker-authored test is unnamed - that check is what would have caught it.
 "$PY" tools/rt.py \
+  tests/test_ablation_module.py \
   tests/test_cmc_resume.py \
-  tests/test_run_comparison.py \
   tests/test_determinism.py \
   tests/test_feature_composition.py \
-  tests/test_ablation_module.py || FAILED=1
+  tests/test_run_comparison.py \
+  tests/test_activation_release.py || FAILED=1
+"$PY" tools/rt.py \
+  tests/test_collapse_dedup.py \
+  tests/test_distributed_helpers.py \
+  tests/test_grad_scaler.py \
+  tests/test_host_reads.py \
+  tests/test_interp.py \
+  tests/test_interp_ground_truth_thresholds.py || FAILED=1
+"$PY" tools/rt.py \
+  tests/test_layer_analysis.py \
+  tests/test_sae_resume.py \
+  tests/test_seed.py \
+  tests/test_sigreg_jspace.py \
+  tests/test_statistical_tests.py \
+  tests/test_target_centering_state.py || FAILED=1
+"$PY" tools/rt.py \
+  tests/test_train_device.py \
+  tests/test_workspace_validation_honesty.py || FAILED=1
+
+stage "new regression files, slow-marked"
+# `--slow` is REQUIRED here, not optional. Without it `tools/rt.py` skips every
+# slow-marked test in the list and then fails the stage on its own budget, which
+# is how the omission was found: the stage printed nothing and the gate went RED.
+"$PY" tools/rt.py --slow \
+  tests/test_baseline_parity.py \
+  tests/test_model.py \
+  tests/test_training_e2e.py \
+  tests/test_v025_integration.py || FAILED=1
 
 stage "merge damage (a conflicted tree still passes every other stage)"
 # Found the hard way: wave 7 merged two workers that both owned proofs/jawp.md
