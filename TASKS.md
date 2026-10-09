@@ -698,8 +698,11 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 
 ---
 
-### TASK-36 | group: G-HYGIENE | status: todo | mode: solo
-- goal: merge PR #11, which the GitHub API is refusing.
+### TASK-36 | group: G-HYGIENE | status: done | mode: solo
+- goal: merge PR #11, which the GitHub API was refusing. DONE - the GraphQL
+  failure was transient. PR #11 merged 2026-10-07T17:16:53Z as 1e49f77 with CI
+  green at 1910 passed. Recorded rather than deleted because a transient API
+  error that blocks a merge is worth a future tick knowing to simply retry.
 - state: the work is SAFE and this card is only about the final click.
   `agent/wave-6` is pushed, PR #11 is OPEN, `mergeable: MERGEABLE`,
   `mergeStateStatus: CLEAN`, CI green: **1910 passed, 21 skipped, 1 xfailed,
