@@ -404,8 +404,22 @@ class SAETrainer:
         )
 
     def load(self, path):
-        """Load SAE checkpoint."""
+        """Load SAE checkpoint.
+
+        Restores the module *and* the optimiser, module first. ``save`` wrote
+        ``sae_state`` and this used not to read it back, so a resume handed the
+        run a fresh constructor's weights with a warm Adam state attached --
+        moment buffers describing parameters that no longer existed. The resumed
+        run then diverged from the run it was resuming at the very next step,
+        and nothing said so: ``step_count`` resumed faithfully at 5 while its
+        step 6 was not step 6 of anything.
+
+        Module first, so a shape disagreement between the checkpoint and the
+        constructed SAE raises here instead of being absorbed into a
+        half-applied optimiser state.
+        """
         ckpt = safe_torch_load(path, map_location=self.device)
+        self.sae.load_state_dict(ckpt["sae_state"])
         self.optimizer.load_state_dict(ckpt["optimizer_state"])
         self.scheduler.load_state_dict(ckpt["scheduler_state"])
         self.step_count = ckpt["step_count"]
