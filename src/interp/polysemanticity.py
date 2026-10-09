@@ -22,6 +22,8 @@ import math
 import torch
 import torch.nn.functional as F
 
+from src.interp import rng
+
 
 class PolysemanticityIndex:
     """Polysemanticity Index (PSI): how many distinct concepts per dimension.
@@ -44,6 +46,7 @@ class PolysemanticityIndex:
         n_top_activations=100,
         n_dimensions_sample=None,
         device="cpu",
+        seed=None,
     ):
         """
         Args:
@@ -51,12 +54,17 @@ class PolysemanticityIndex:
             n_top_activations: how many top-activating inputs per dimension
             n_dimensions_sample: subsample dimensions (None = all)
             device: compute device
+            seed: base seed for the dimension subsample and the k-means
+                initialisation. Both draw from private generators, so the
+                process-global RNG is never touched and a given seed reproduces
+                the same PSI. ``None`` derives the stream from the run seed.
 
         """
         self.n_clusters_range = n_clusters_range
         self.n_top_activations = n_top_activations
         self.n_dimensions_sample = n_dimensions_sample
         self.device = device
+        self.seed = seed
 
     @torch.no_grad()
     def compute(self, representations, labels=None):
@@ -76,15 +84,22 @@ class PolysemanticityIndex:
             if labels is not None:
                 labels = labels.to(self.device)
 
+            # One generator for the whole index: the dimension subsample and the
+            # k-means initialisations below are draws from the same call and must
+            # not come from unrelated streams. Keyed by (dimension, k) so the
+            # result is a pure function of the seed and does not depend on how
+            # many dimensions happen to precede.
+            gen = rng.generator_for(self.seed, "polysemanticity.index")
+
             # Subsample dimensions for efficiency
             if self.n_dimensions_sample and self.n_dimensions_sample < D:
-                dim_idx = torch.randperm(D)[: self.n_dimensions_sample]
+                dim_idx = torch.randperm(D, generator=gen)[: self.n_dimensions_sample]
             else:
                 dim_idx = torch.arange(D)
 
             psi_scores = []
             for d in dim_idx:
-                psi = self._compute_dim_psi(representations, d.item(), labels)
+                psi = self._compute_dim_psi(representations, d.item(), labels, generator=gen)
                 psi_scores.append(psi)
 
             psi_tensor = torch.tensor(psi_scores)
@@ -108,8 +123,13 @@ class PolysemanticityIndex:
                 "min_psi": 0.0,
             }
 
-    def _compute_dim_psi(self, representations, dim_idx, labels=None):
-        """Compute PSI for a single dimension."""
+    def _compute_dim_psi(self, representations, dim_idx, labels=None, generator=None):
+        """Compute PSI for a single dimension.
+
+        Args:
+            generator: the caller's private generator, threaded into every
+                k-means initialisation so the clustering is reproducible.
+        """
         try:
             N = representations.size(0)
             activations = representations[:, dim_idx]
@@ -126,7 +146,7 @@ class PolysemanticityIndex:
             for k in range(self.n_clusters_range[0], self.n_clusters_range[1] + 1):
                 if n_top < k * 5:  # Need enough points per cluster
                     continue
-                score = self._cluster_quality(top_reps, k)
+                score = self._cluster_quality(top_reps, k, generator=generator)
                 if score > best_score:
                     best_score = score
                     best_k = k
@@ -147,18 +167,33 @@ class PolysemanticityIndex:
             return 0.0
 
     @staticmethod
-    def _cluster_quality(points, k):
+    def _cluster_quality(points, k, generator=None):
         """Simple cluster quality: silhouette-like score.
 
         Uses k-means-style clustering and measures inter vs intra distance.
+
+        Args:
+            generator: optional caller-owned CPU ``torch.Generator`` seeding the
+                centroid initialisation. Omitted, a private generator is derived
+                from the run seed, so this static method stays reproducible and
+                leaves the process-global stream untouched even when called
+                directly. The fallback is **idempotent** rather than
+                counter-based: this is a *measurement*, so scoring the same
+                ``points`` twice must return the same number.
         """
         try:
             N, _D = points.shape
             if k * 3 > N:
                 return 0.0
 
+            gen = (
+                generator
+                if generator is not None
+                else rng.generator_for(None, "polysemanticity.kmeans")
+            )
+
             # Simple k-means with random initialization
-            centroids = points[torch.randperm(N)[:k]]
+            centroids = points[torch.randperm(N, generator=gen)[:k]]
 
             for _ in range(10):  # k-means iterations
                 # Assign to nearest centroid

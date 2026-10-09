@@ -199,8 +199,8 @@ def noise_baseline_metrics(
             internally above 256, so values above that add cost, not fidelity.
         n_features: D, the ambient representation dimension.
         n_draws: how many noise draws to average. >= 3 is needed for a spread.
-        seed: base seed. Global torch RNG state is saved and restored, so this
-            is deterministic and does not perturb the caller's stream.
+        seed: base seed. Each draw uses its own private ``torch.Generator``, so
+            this is deterministic and the process-global RNG is never touched.
 
     Returns:
         dict with ``metrics``, ``metrics_std``, ``index``, ``index_std``,
@@ -217,13 +217,14 @@ def noise_baseline_metrics(
 
     idx = InterpretabilityIndex()
     draws = []
-    state = torch.random.get_rng_state()
-    try:
-        for i in range(n_draws):
-            torch.manual_seed(int(seed) + 7919 * i)
-            draws.append(geometry_metrics(torch.randn(int(n_samples), int(n_features))))
-    finally:
-        torch.random.set_rng_state(state)
+    # A private generator per draw, rather than reseeding the process-global
+    # stream and restoring it afterwards. The save/restore pair was only correct
+    # if nothing else drew in between, and `torch.manual_seed` is exactly the
+    # call this package is trying to stop making: it moves a stream shared with
+    # every other consumer. Same seed, same draws, and nothing global moves.
+    for i in range(n_draws):
+        gen = torch.Generator(device="cpu").manual_seed((int(seed) + 7919 * i) % (2**31 - 1))
+        draws.append(geometry_metrics(torch.randn(int(n_samples), int(n_features), generator=gen)))
 
     keys = sorted(draws[0])
     metrics = {k: float(sum(d[k] for d in draws) / n_draws) for k in keys}
