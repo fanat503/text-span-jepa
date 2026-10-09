@@ -67,6 +67,8 @@ even when both are asked for draw 0.
 
 from __future__ import annotations
 
+import hashlib
+
 import torch
 
 #: Mixed into every derived seed so this package's draws cannot coincide with
@@ -104,6 +106,27 @@ def run_seed() -> int:
     return int(torch.initial_seed())
 
 
+def _site_offset(site: str) -> int:
+    """The share of a seed that ``site`` is responsible for, in ``[0, _SEED_MODULUS)``.
+
+    ``site`` is the namespace this module promises keeps two consumers off each
+    other's stream, so it has to reach the seed arithmetic -- in *both*
+    branches. It cannot go through ``hash()``: CPython randomises ``str`` hashing
+    per process (``PYTHONHASHSEED``), so a seed built from it would differ
+    between the process that wrote a checkpoint and the process that reads it
+    back, which is exactly the cross-process property this module exists to
+    provide. ``blake2b`` over the UTF-8 bytes is stable for good, and is already
+    this repo's idiom for "digest something to a stable int"
+    (``tests/test_determinism.py``).
+
+    Folding the digest into 31 bits makes a cross-site collision possible in
+    principle, at ~2**-31 per pair; a wider digest would only push the derived
+    seed above the band ``_SEED_MODULUS`` exists to keep it in.
+    """
+    digest = hashlib.blake2b(site.encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, "big") % _SEED_MODULUS
+
+
 def derive_generator(site: str, stream: int = 0) -> torch.Generator:
     """Build the generator for one draw, as a pure function of its inputs.
 
@@ -122,7 +145,10 @@ def derive_generator(site: str, stream: int = 0) -> torch.Generator:
         A freshly seeded CPU generator.
     """
     base = run_seed() + INTERP_SALT
-    derived = (base * 1_000_003 + int(stream) * 2_654_435_761) % _SEED_MODULUS
+    # `site` is mixed in, not merely accepted: without it two labels asked for
+    # draw 0 shared a stream, which is the collision this module exists to
+    # prevent and which its own docstring says cannot happen.
+    derived = (base * 1_000_003 + _site_offset(site) + int(stream) * 2_654_435_761) % _SEED_MODULUS
     gen = torch.Generator(device="cpu")
     gen.manual_seed(derived)
     return gen
@@ -196,6 +222,12 @@ def generator_for(seed: int | None, site: str, stream: int = 0) -> torch.Generat
     """
     if seed is None:
         return derive_generator(site, stream)
+    # `site` is mixed in here for the same reason it is mixed in there: a
+    # caller's own seed does not make two different labels one stream. Without
+    # this, `generator_for(0, "sae.init")` and `generator_for(0, "sae.resample")`
+    # returned identical draws -- the SAE's initialisation and its dead-feature
+    # resampling drawing the same numbers -- while the docstring above promised
+    # they could not.
     gen = torch.Generator(device="cpu")
-    gen.manual_seed((int(seed) * 1_000_003 + int(stream)) % _SEED_MODULUS)
+    gen.manual_seed((int(seed) * 1_000_003 + _site_offset(site) + int(stream)) % _SEED_MODULUS)
     return gen
