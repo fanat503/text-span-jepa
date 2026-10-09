@@ -436,3 +436,366 @@ class TestStrictIsStrict:
 
         assert not loaded.training
         assert next(loaded.parameters()).device.type == "cpu"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# What the comparison can and cannot conclude.
+#
+# `run_full_comparison` is handed ONE checkpoint per arm and ONE dataloader.
+# A claim of the form "JEPA beats the baseline" is a claim about the
+# population of training runs on a population of corpora, so the units that
+# matter are checkpoints and corpora -- and the signature supplies exactly
+# one of each. The only thing it can resample is the ROW of a representation
+# matrix.
+#
+# These tests pin the consequence, which is that the pipeline REFUSES rather
+# than emits a number. They are written so the pre-fix code fails them:
+#
+#   * `results["statistical"]` held a subtraction under the key "statistical"
+#     with no p-value anywhere. The tests assert there is still no p-value,
+#     and that the refusal is explicit.
+#   * the pairing of the two arms was an accident of the caller passing
+#     shuffle=False. A shuffled loader now raises.
+#   * Phase 4's "MI with position (surface)" was `arange(N)`, an arithmetic
+#     identity returning 0.0 for every representation.
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+@pytest.fixture
+def comparison_arms(monkeypatch, toy_width):
+    """Two toy-width models, built only once per test."""
+    import baselines.mlm_baseline as mlm_mod
+
+    torch.manual_seed(0)
+    jepa = TextSpanJEPA(_toy_jepa_config()).eval()
+    base = mlm_mod.MLMBaseline(
+        vocab_size=VOCAB, max_seq_len=SEQ, embed_dim=EMBED, depth=1, num_heads=2
+    ).eval()
+    return jepa, base
+
+
+def _loader(shuffle, n_rows=32, seed=0):
+    from torch.utils.data import DataLoader, TensorDataset
+
+    from src.interp import rng
+
+    gen = rng.generator_for(seed, "test_run_comparison.loader")
+    ids = torch.randint(0, VOCAB, (n_rows, SEQ), generator=gen)
+    return DataLoader(TensorDataset(ids), batch_size=8, shuffle=shuffle)
+
+
+def _run(tmp_path, arms, **kwargs):
+    from src.interp.run_comparison import run_full_comparison
+
+    jepa, base = arms
+    return run_full_comparison(
+        jepa, base, _loader(kwargs.pop("shuffle", False)), str(tmp_path), "cpu", 4, **kwargs
+    )
+
+
+class TestNoPValueTheDesignCannotSupport:
+    """The central refusal. No significance claim, because n_seed == 1."""
+
+    def test_report_contains_no_p_value_or_significance_flag(self, tmp_path, comparison_arms):
+        """The whole point: wiring in `statistical_tests.py` would make this red.
+
+        A p-value here conditions on the checkpoint, while the report's
+        verdicts are about training runs. Emitting one would be false
+        confidence, so its absence is the property under test.
+        """
+        results = _run(tmp_path, comparison_arms)
+
+        stat = results["statistical"]
+        assert stat, "the comparison block is empty; the run produced nothing to compare"
+        for metric, entry in stat.items():
+            assert "jepa" in entry and "baseline" in entry, f"{metric} lost its point values"
+            assert "p_value" not in entry, f"{metric} reports a p-value the design cannot support"
+            assert "significant" not in entry, (
+                f"{metric} reports a significance flag. With one checkpoint per arm "
+                f"the p-value conditions on the seed and certifies nothing about it."
+            )
+
+    def test_verdict_is_not_testable_and_says_what_is_missing(self, tmp_path, comparison_arms):
+        """The report must state its own limits, not merely omit a number."""
+        design = _run(tmp_path, comparison_arms)["comparison_design"]
+
+        assert (
+            design["verdict"] == "NOT_TESTABLE"
+        ), f"the report believes it can support a verdict: {design['verdict']!r}"
+        units = design["units_of_replication"]
+        assert units["checkpoints_per_arm"] == 1
+        assert units["corpora"] == 1
+
+        uncovered = " ".join(design["variance_not_covered"])
+        assert "seed" in uncovered, f"the missing seed variance is not recorded: {uncovered!r}"
+        assert "corpus" in uncovered, f"the missing corpus variance is not recorded: {uncovered!r}"
+        assert design[
+            "required_to_support_a_verdict"
+        ], "a refusal that does not say what would fix it is not actionable"
+
+    def test_summary_does_not_claim_a_supported_verdict(self, tmp_path, comparison_arms):
+        summary = _run(tmp_path, comparison_arms)["summary"]
+
+        assert summary["verdict_supported"] is False, (
+            "the summary reports a supported verdict while the design block "
+            "refuses one; a reader sees only the summary"
+        )
+
+    def test_the_four_metrics_are_not_four_tests(self, tmp_path, comparison_arms):
+        """`effective_rank_online` and `sv_entropy_online` are one measurement.
+
+        Measured bootstrap-difference correlation between the two is r=0.9999
+        -- both are functionals of the same singular spectrum -- and
+        `collapsed_dim_ratio_online` is identically 0.0 on both arms. The
+        multiplicity block must therefore record that the nominal family is
+        smaller than the four entries, rather than letting three numbers from
+        one spectrum read as three findings.
+        """
+        design = _run(tmp_path, comparison_arms)["comparison_design"]
+        multiplicity = design["multiplicity"]
+
+        assert multiplicity["metrics_in_the_statistical_block"] == 4
+        assert multiplicity["comparisons_published_in_this_report"] > 4, (
+            "the report publishes more scalar comparisons than the statistical "
+            "block holds, so no correction over the smaller family covers the "
+            f"larger one: {multiplicity}"
+        )
+        assert "note" in multiplicity
+
+    def test_the_sign_count_carries_its_null_probability(self, tmp_path, comparison_arms):
+        """`wins > n//2` fires 31% of the time on nothing.
+
+        Phase 8 and `RobustnessBattery` both treat a majority of "JEPA
+        better" booleans as an advantage. Under the null that the arms are
+        indistinguishable, 3-of-4 has probability 0.3125, so the count is
+        reported next to that number and explicitly not called a verdict.
+        """
+        summary = _run(tmp_path, comparison_arms)["summary"]
+
+        assert summary["geometry_majority_is_a_verdict"] is False
+        assert 0.0 < summary["geometry_majority_null_probability"] <= 1.0
+
+    @pytest.mark.parametrize(
+        "n_wins,n_total,expected",
+        [
+            (3, 4, 0.3125),  # 5/16 -- the RobustnessBattery case
+            (4, 6, 0.34375),  # 22/64
+            (5, 8, 0.36328125),  # 93/256
+            (0, 0, 1.0),
+        ],
+    )
+    def test_majority_null_probability_matches_the_exact_binomial(self, n_wins, n_total, expected):
+        """Closed form, so the number in the report is checkable by hand."""
+        from src.interp.run_comparison import majority_null_probability
+
+        assert majority_null_probability(n_wins, n_total) == pytest.approx(expected)
+
+
+class TestPairingIsAssertedNotAssumed:
+    """The two arms must be scored on the same sequences in the same order."""
+
+    def test_a_shuffled_dataloader_is_refused(self, tmp_path, comparison_arms):
+        """`run_full_comparison` iterates the caller's loader once per arm.
+
+        With `shuffle=True` each arm gets a different ordering, so the
+        comparison is unpaired while still being reported as a comparison --
+        measured 47 of 48 rows misaligned. This raises instead.
+        """
+        from src.interp.run_comparison import ComparisonDesignError
+
+        with pytest.raises(ComparisonDesignError) as excinfo:
+            _run(tmp_path, comparison_arms, shuffle=True)
+
+        message = str(excinfo.value)
+        assert "shuffle" in message, (
+            f"the error does not name the likely cause, so the operator "
+            f"cannot act on it: {message!r}"
+        )
+
+    def test_a_non_shuffling_dataloader_is_accepted(self, tmp_path, comparison_arms):
+        design = _run(tmp_path, comparison_arms, shuffle=False)["comparison_design"]
+        assert design["arms_paired"] is True
+
+    def test_mismatched_shapes_are_refused_with_both_shapes_named(self, comparison_arms):
+        from src.interp.run_comparison import ComparisonDesignError, assert_paired_extraction
+
+        with pytest.raises(ComparisonDesignError) as excinfo:
+            assert_paired_extraction(torch.zeros(4, 8), torch.zeros(3, 8))
+
+        message = str(excinfo.value)
+        assert (
+            "(4, 8)" in message and "(3, 8)" in message
+        ), f"the error does not show both shapes: {message!r}"
+
+
+class TestPairedBootstrapIsActuallyPaired:
+    """The one interval this design can honestly produce."""
+
+    def test_identical_arms_give_a_zero_width_interval(self):
+        """The sharpest available property, and it discriminates.
+
+        Two copies of the same matrix differ by exactly zero on every
+        replicate, so a PAIRED resampling returns `ci_lower == ci_upper == 0`.
+        An unpaired one draws two independent row multisets, compares
+        different subsets of the same array, and returns a WIDE interval on
+        this degenerate input -- measured [-0.452, +0.140], i.e. it invents
+        a difference between two copies of one array. That is what
+        `statistical_tests.BootstrapCI.compare` does, and it is why the
+        forbidden module is not wired in.
+        """
+        from src.interp.run_comparison import paired_row_bootstrap_ci
+
+        gen = torch.Generator().manual_seed(0)
+        reps = torch.randn(40, 8, generator=gen) * (1 + torch.arange(8).float() / 8)
+
+        result = paired_row_bootstrap_ci(reps, reps, "effective_rank_online", n_bootstrap=8, seed=3)
+
+        assert result["ci_lower"] == 0.0 and result["ci_upper"] == 0.0, (
+            f"resampling the same matrix through both arms must give exactly "
+            f"zero difference, got [{result['ci_lower']}, {result['ci_upper']}]. "
+            f"A non-zero interval means the two arms were resampled "
+            f"independently, discarding the pairing."
+        )
+        assert result["mean_diff"] == 0.0
+
+    def test_a_real_difference_is_still_detected(self):
+        """The degenerate case above must not pass because nothing ever moves."""
+        from src.interp.run_comparison import paired_row_bootstrap_ci
+
+        gen = torch.Generator().manual_seed(0)
+        scale = 1 + torch.arange(8).float() / 8
+        a = torch.randn(40, 8, generator=gen) * scale
+        b = torch.randn(40, 8, generator=gen) * scale * 3.0
+
+        result = paired_row_bootstrap_ci(a, b, "effective_rank_online", n_bootstrap=8, seed=3)
+
+        assert result["ci_upper"] > result["ci_lower"], (
+            "the interval is degenerate on inputs that DO differ, so the "
+            "zero-width case above proves nothing"
+        )
+        assert result["mean_diff"] != 0.0
+
+    def test_bootstrap_refuses_fewer_than_two_rows(self):
+        """N < 2 is a refusal, not a null result.
+
+        `statistical_tests.PairedPermutationTest.compute` returns
+        `p_value: 1.0, significant: False` for N < 2, which a report prints
+        as "tested, not significant" -- i.e. "no difference found". It is
+        not that; no test ran.
+        """
+        from src.interp.run_comparison import ComparisonDesignError, paired_row_bootstrap_ci
+
+        with pytest.raises(ComparisonDesignError) as excinfo:
+            paired_row_bootstrap_ci(torch.randn(1, 8), torch.randn(1, 8), "effective_rank_online")
+
+        assert "at least 2 rows" in str(excinfo.value)
+
+    def test_the_interval_is_opt_in_and_says_what_it_covers(self, tmp_path, comparison_arms):
+        """It costs two `CollapseDiagnostics.compute` calls per replicate.
+
+        Measured 90 s at B=100 and 453 s at B=500 for the production shape
+        (N=500, D=768, one thread), so it is off by default rather than
+        silently multiplying the pipeline's runtime. When it IS computed, the
+        record must say what question it answers.
+        """
+        without = _run(tmp_path, comparison_arms)["statistical"]["effective_rank_online"]
+        assert "paired_row_bootstrap" not in without, "the interval ran at the default cost"
+
+        with_it = _run(tmp_path, comparison_arms, n_bootstrap=4, seed=0)
+        entry = with_it["statistical"]["effective_rank_online"]
+        assert entry["paired_row_bootstrap"]["n_resamples"] == 4
+        assert "paired" in entry["paired_row_bootstrap"]["method"]
+
+        covered = with_it["comparison_design"]["paired_row_bootstrap"]["covers"]
+        assert (
+            "seed" in covered and "corpus" in covered
+        ), f"the interval does not state what it cannot speak to: {covered!r}"
+
+
+class TestSurfaceFeatureIsNotTheRowIndex:
+    """Phase 4's headline hypothesis was being tested against nothing."""
+
+    def test_mi_surface_is_absent_rather_than_fabricated(self, tmp_path, comparison_arms):
+        """`arange(N)` is an arithmetic identity, not a weak surface feature.
+
+        Every row of `positions = arange(N).expand(-1, D)` is CONSTANT, so
+        `F.normalize` maps all of them to one direction, the similarity
+        matrix has identical rows, cross-entropy equals log(N), and the
+        estimator's `max(mi, 0.0)` returns exactly 0.0 -- measured for noise,
+        all-zeros, all-ones, rank-1 and 1e6-scaled representations alike. So
+        `jepa_mi_position` and `baseline_mi_position` were 0.0 vs 0.0 for
+        every model, and "JEPA has lower MI with surface features" was never
+        tested.
+        """
+        it = _run(tmp_path, comparison_arms)["information_theory"]
+
+        assert it["jepa_mi_surface"] is None, (
+            f"a surface MI was reported with no surface feature supplied: "
+            f"{it['jepa_mi_surface']!r}"
+        )
+        assert it["baseline_mi_surface"] is None
+        assert (
+            "NOT COMPUTED" in it["surface_mi_note"]
+        ), f"the note does not say the hypothesis went untested: {it['surface_mi_note']!r}"
+
+    def test_the_untested_hypothesis_is_recorded_in_the_design_block(
+        self, tmp_path, comparison_arms
+    ):
+        design = _run(tmp_path, comparison_arms)["comparison_design"]
+        assert any(
+            "surface" in item for item in design["variance_not_covered"]
+        ), f"the missing surface feature is not in the refusal: {design['variance_not_covered']!r}"
+
+    def test_a_supplied_surface_feature_is_computed(self, tmp_path, comparison_arms):
+        """The fix is one argument, not a redesign: supply the feature."""
+        torch.manual_seed(0)
+        feature = torch.randint(0, 8, (32, 4)).float()
+
+        it = _run(tmp_path, comparison_arms, surface_features=feature)["information_theory"]
+
+        assert it["jepa_mi_surface"] is not None
+        assert "clamp" in it["surface_mi_note"], (
+            "the note must say that a 0.0 means 'at the estimator's floor', "
+            "not 'no dependence' -- the two are the same printed number"
+        )
+
+    def test_mismatched_surface_feature_length_is_refused(self, tmp_path, comparison_arms):
+        with pytest.raises(ValueError) as excinfo:
+            _run(tmp_path, comparison_arms, surface_features=torch.zeros(7, 4))
+        assert "one row per scored sequence" in str(excinfo.value)
+
+
+class TestRefuseNonsenseCorpusByDefault:
+    """`main()` built random token IDs and wrote a report that looked real."""
+
+    def test_random_token_run_is_refused_without_the_explicit_flag(self, tmp_path, monkeypatch):
+        """The entry point must not silently produce a plausible artefact.
+
+        It parsed `--dataset wikitext`, never loaded it, fell through to
+        `torch.randint(0, 50304, (500, 128))`, ran the full protocol on
+        uniform noise, and wrote `comparison_results.json` and `summary.txt`
+        -- files indistinguishable from a real result.
+        """
+        import src.interp.run_comparison as rc
+
+        monkeypatch.setattr(
+            rc.argparse.ArgumentParser,
+            "parse_args",
+            lambda self, _a=None: self.parse_known_args()[0],
+        )
+        monkeypatch.setattr(rc, "load_model", lambda *a, **k: torch.zeros(1))
+        monkeypatch.setattr(
+            "sys.argv", ["run_comparison", "--jepa_ckpt", "a", "--baseline_ckpt", "b"]
+        )
+
+        with pytest.raises(SystemExit) as excinfo:
+            rc.main()
+
+        message = str(excinfo.value)
+        assert "REFUSED" in message
+        assert (
+            "--allow_random_tokens" in message
+        ), f"the refusal does not name the flag that permits the run: {message!r}"
+        assert not (
+            tmp_path / "comparison_results.json"
+        ).exists(), "a report was written despite the refusal"

@@ -31,6 +31,22 @@ class SparseAutoencoder(nn.Module):
     fired recently, reinitializing them from encoder weights of active
     features. Prevents feature death during training.
 
+    Axes
+    ----
+    ``nn.Linear(in, out)`` stores its weight as ``(out, in)``, so this module
+    has one feature along a *different* axis of its two matrices, and
+    ``latent_dim`` is independent of ``input_dim`` (the defaults are 768 -> 4096,
+    the overexpansion Bricken et al. train at):
+
+        encoder.weight  (latent_dim, input_dim)   a feature is a ROW
+        decoder.weight  (input_dim, latent_dim)   a feature is a COLUMN
+
+    The decoder direction of feature ``j`` is therefore ``decoder.weight[:, j]``
+    and is normalised over the input axis. Every site in this file that touches
+    a feature axis says which one it means, because a square SAE hides the
+    difference: on a ``(n, n)`` matrix ``dim=0`` and ``dim=1`` both yield unit
+    vectors and every one of these mistakes reads as working code.
+
     Reproducibility
     ---------------
     Every draw -- weight init and dead-feature resampling alike -- comes from a
@@ -51,6 +67,16 @@ class SparseAutoencoder(nn.Module):
         seed=None,
     ):
         super().__init__()
+        if input_dim <= 0 or latent_dim <= 0:
+            raise ValueError(
+                f"input_dim and latent_dim must be positive, "
+                f"got input_dim={input_dim}, latent_dim={latent_dim}"
+            )
+        # `torch.topk` would accept `k > latent_dim` only by raising from inside
+        # `encode`, one call away from the constructor that could have said so.
+        if not 1 <= k <= latent_dim:
+            raise ValueError(f"k must be in [1, latent_dim={latent_dim}], got {k}")
+
         self.input_dim = input_dim
         self.latent_dim = latent_dim
         self.k = k
@@ -85,8 +111,15 @@ class SparseAutoencoder(nn.Module):
             nn.init.xavier_uniform_(self.encoder.weight, generator=init_gen)
             nn.init.zeros_(self.encoder.bias)
             nn.init.kaiming_uniform_(self.decoder.weight, a=math.sqrt(5), generator=init_gen)
-            # Normalize decoder rows to unit norm
-            self.decoder.weight.data = F.normalize(self.decoder.weight.data, dim=1)
+            # Normalize each feature's decoder direction to unit norm. A feature
+            # is a COLUMN of `decoder.weight` (see the Axes note in the class
+            # docstring), and `recons = W_dec @ latent + b` means feature j
+            # contributes `a_j * W_dec[:, j]`, so the norm that makes a latent
+            # activation readable as the magnitude of that contribution is the
+            # column norm -- `dim=0`. Normalising over `dim=1` instead
+            # constrains each *input coordinate* across all features, which is
+            # not a property the Anthropic pattern has any use for.
+            self.decoder.weight.data = F.normalize(self.decoder.weight.data, dim=0)
             nn.init.zeros_(self.decoder.bias)
 
     def encode(self, x):
@@ -191,12 +224,25 @@ class SparseAutoencoder(nn.Module):
         # Find most active features for resampling source
         alive_mask = ~dead_mask
         if alive_mask.sum() == 0:
-            # All features dead — reinitialize from random
-            nn.init.xavier_uniform_(self.encoder.weight[:, dead_mask], generator=gen)
-            self.decoder.weight.data[dead_mask] = F.normalize(
-                self.encoder.weight[:, dead_mask].T,
-                dim=1,
-            )
+            # All features dead — reinitialize from random.
+            #
+            # `dead_mask` is all-True here (that is what `alive_mask.sum() == 0`
+            # means), so the dead set is the whole encoder and there is nothing
+            # to select on. That is also the only way this can be written
+            # correctly: `self.encoder.weight[dead_mask]` is advanced indexing
+            # and returns a COPY, so initialising it writes the fresh weights
+            # into a temporary that is then discarded -- the previous version
+            # did exactly that, and re-initialised nothing. Drawing the whole
+            # `(latent_dim, input_dim)` matrix also keeps Xavier's fan_in /
+            # fan_out those of the real encoder rather than of a slice.
+            nn.init.xavier_uniform_(self.encoder.weight, generator=gen)
+            nn.init.zeros_(self.encoder.bias)
+            # Rebuild the decoder from the new encoder rows so each reset
+            # feature's direction is the transpose of its encoder row, unit
+            # norm over the input axis. Keeping the two in step is the point of
+            # a reset: a feature whose encoder row is brand new must not keep a
+            # decoder column describing a direction the encoder has left behind.
+            self.decoder.weight.data.copy_(F.normalize(self.encoder.weight.data.t(), dim=0))
         else:
             # Sample from alive features
             alive_idx = alive_mask.nonzero(as_tuple=True)[0]
@@ -214,8 +260,10 @@ class SparseAutoencoder(nn.Module):
                     generator=gen,
                 )
                 self.encoder.bias.data[d_idx] = 0.0
-                # Reset decoder column (decoder shape: latent_dim, input_dim)
-                # Column d_idx of decoder corresponds to feature d_idx
+                # Reset decoder column. `decoder.weight` is (input_dim, latent_dim),
+                # so column d_idx is feature d_idx, and its norm is taken over
+                # the input axis. This branch was already correct; the all-dead
+                # branch above had the same axes transposed.
                 col = self.decoder.weight.data[:, d_idx]
                 self.decoder.weight.data[:, d_idx] = F.normalize(col, dim=0)
 
@@ -276,9 +324,15 @@ class SAETrainer:
             ),
         )
 
-        # Post-step: normalize decoder rows to unit norm
+        # Post-step: normalize each feature's decoder direction to unit norm, over
+        # the input axis. See the Axes note in `SparseAutoencoder`: a feature is
+        # a column of `decoder.weight`, so this is `dim=0`. It was `dim=1`,
+        # which re-imposed the constructor's input-axis normalisation over the
+        # top-k directions on every single optimiser step and left the feature
+        # axis unconstrained -- on a square SAE the two are indistinguishable,
+        # on a rectangular one the trainer undid the constructor.
         with torch.no_grad():
-            self.sae.decoder.weight.data = F.normalize(self.sae.decoder.weight.data, dim=1)
+            self.sae.decoder.weight.data = F.normalize(self.sae.decoder.weight.data, dim=0)
 
         self.step_count += 1
 
