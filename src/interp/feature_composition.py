@@ -31,17 +31,24 @@ class FeatureCompositionScore:
     for the inductive bias hypothesis.
     """
 
-    def __init__(self, sae_model, encoder_model, device="cpu"):
+    def __init__(self, sae_model, encoder_model, device="cpu", seed=1234):
         """
         Args:
             sae_model: trained SparseAutoencoder
             encoder_model: encoder model (for generating representations)
             device: compute device
+            seed: base seed for the placebo permutation. Each pair's permutation
+                is seeded ``seed + pair_idx``, so the placebo for a given pair is
+                reproducible and an ablation can vary it by varying this. It was
+                previously the bare literal ``1234``, which meant the placebo
+                control was fixed across every run and no seed sweep could move
+                it.
 
         """
         self.sae = sae_model
         self.encoder = encoder_model
         self.device = device
+        self.seed = seed
 
     @torch.no_grad()
     def feature_arithmetic_test(
@@ -149,7 +156,7 @@ class FeatureCompositionScore:
             # identity while keeping the marginal SAE code distribution; the
             # same selection run on shuffled AB calibrates the tautology of
             # comparing against data that literally contains A and B.
-            gen = torch.Generator().manual_seed(1234 + pair_idx)
+            gen = torch.Generator().manual_seed(int(self.seed) + pair_idx)
             perm = torch.randperm(ab_reps.size(0), generator=gen).to(ab_reps.device)
             z_ab_placebo = self.sae.encode(ab_reps[perm].mean(dim=0, keepdim=True))[0]
 

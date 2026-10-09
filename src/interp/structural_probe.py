@@ -31,6 +31,8 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from src.interp import rng
+
 #: Default fraction of sentences held out. Unchanged from the 80/20 shape the
 #: module has always used for any internal split.
 DEFAULT_HOLDOUT_FRACTION = 0.2
@@ -52,6 +54,13 @@ class StructuralProbe(nn.Module):
     :meth:`evaluate` are disjoint from the ones passed to
     :meth:`train_probe`. Neither method enforces it, because neither method
     can: it is the caller's partition to make. Use :meth:`sentence_split`.
+
+    Args:
+        embed_dim: input representation dimension.
+        probe_rank: rank of the projection matrix.
+        seed: seeds a private ``torch.Generator`` for the projection matrix, so
+            two probes built with the same seed are bit-identical and building
+            one leaves the process-global RNG untouched.
     """
 
     @staticmethod
@@ -132,12 +141,17 @@ class StructuralProbe(nn.Module):
                 f"sides are not disjoint"
             )
 
-    def __init__(self, embed_dim=768, probe_rank=64):
+    def __init__(self, embed_dim=768, probe_rank=64, seed=None):
         super().__init__()
         self.embed_dim = embed_dim
         self.probe_rank = probe_rank
-        # Learnable projection matrix (rank probe_rank)
-        self.proj = nn.Parameter(torch.randn(probe_rank, embed_dim) * 0.01)
+        self.seed = seed
+        # Learnable projection matrix (rank probe_rank). Drawn from a private
+        # generator: this is the probe's only randomness, and it previously came
+        # from the process-global stream, so two probes built in one process
+        # differed by whatever else had drawn in between.
+        gen = rng.generator_for(seed, "structural_probe.proj")
+        self.proj = nn.Parameter(torch.randn(probe_rank, embed_dim, generator=gen) * 0.01)
 
     def forward(self, representations):
         """Compute predicted tree distances.

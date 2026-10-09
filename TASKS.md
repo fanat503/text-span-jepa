@@ -1,5 +1,5 @@
 <!-- swarm header — update every tick -->
-X: 12 | TICK: 2 | cap: - | 429: 0 | volna: 2
+X: 12 | TICK: 7 | cap: - | 429: 0 | volna: 7
 
 # TASKS
 
@@ -201,7 +201,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 
 ---
 
-### TASK-11 | group: G-COVER | status: todo | mode: arena
+### TASK-11 | group: G-COVER | status: done | mode: arena
 - goal: give the five sibling probe metrics a held-out split, or rename them to
   say they do not have one.
 - why: after `src/eval/probes.py` was fixed, five more modules still report
@@ -698,8 +698,11 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 
 ---
 
-### TASK-36 | group: G-HYGIENE | status: todo | mode: solo
-- goal: merge PR #11, which the GitHub API is refusing.
+### TASK-36 | group: G-HYGIENE | status: done | mode: solo
+- goal: merge PR #11, which the GitHub API was refusing. DONE - the GraphQL
+  failure was transient. PR #11 merged 2026-10-07T17:16:53Z as 1e49f77 with CI
+  green at 1910 passed. Recorded rather than deleted because a transient API
+  error that blocks a merge is worth a future tick knowing to simply retry.
 - state: the work is SAFE and this card is only about the final click.
   `agent/wave-6` is pushed, PR #11 is OPEN, `mergeable: MERGEABLE`,
   `mergeStateStatus: CLEAN`, CI green: **1910 passed, 21 skipped, 1 xfailed,
@@ -719,7 +722,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   commit, and the 1910-test run is attached to it.
 - report: `.agent-notes/task-36.md`
 
-### TASK-37 | group: G-COVER | status: todo | mode: solo
+### TASK-37 | group: G-COVER | status: done | mode: solo
 - goal: build the results apparatus, so the paper has a results section and not
   only a methods section.
 - why: the whole campaign has been about correctness. CI is green at 1910 tests
@@ -753,7 +756,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 - fifteen refused claims are listed explicitly so a later draft cannot
   reintroduce them by accident.
 
-### TASK-39 | group: G-FIX | status: todo | mode: solo
+### TASK-39 | group: G-FIX | status: done | mode: solo
 - goal: **PUC contributes a constant to `total_loss` under the shipped defaults.**
 - why this is the most serious defect the campaign has found, and it survived
   25 cards: with `use_differentiable_entropy=False` — a flag never exposed
@@ -780,7 +783,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   changes the objective is a trap.
 - report: `.agent-notes/task-39.md`
 
-### TASK-40 | group: G-FIX | status: todo | mode: arena
+### TASK-40 | group: G-FIX | status: done | mode: arena
 - goal: reconcile WSD and JAWP, which pull the SAME parameter in OPPOSITE
   directions with nothing tying them together.
 - why: WSD pulls `Q` toward the **top-k** eigenvectors of the target covariance
@@ -802,7 +805,7 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
   made concrete.
 - report: `.agent-notes/task-40.md`
 
-### TASK-41 | group: G-COVER | status: todo | mode: arena
+### TASK-41 | group: G-COVER | status: done | mode: arena
 - goal: the stale-documentation sweep. Everything below is already KNOWN to be
   wrong and is recorded nowhere as a task.
 - why: 25 cards changed behaviour and the prose did not follow. A reviewer reads
@@ -835,3 +838,65 @@ tests only through `tools/rt.py` (1 thread, cumulative budget, no whole-suite).
 - verify: `& $PY tools/rt.py tests/test_config_system.py --slow`, plus for each
   correction the command that PROVES the new text is right
 - report: `.agent-notes/task-41.md`
+
+### TASK-42 | group: G-FIX | status: todo | mode: solo
+- goal: `sae.py:190` raises `IndexError` whenever `latent_dim != input_dim`.
+- why: confirmed on pristine `d7002d8` by two independent cards. The SAE
+  supports a rectangular encoder but the indexing at :190 assumes square, so a
+  legitimate config combination cannot construct an SAE at all. Nobody noticed
+  because every shipped arm uses `latent_dim == input_dim`.
+- files_allowed: `src/interp/sae.py`, `tests/test_interp.py`
+- files_forbidden: other `src/interp/**`
+- verify: `& $PY tools/rt.py tests/test_interp.py`
+- report: `.agent-notes/task-42.md`
+
+### TASK-43 | group: G-COVER | status: todo | mode: solo
+- goal: `layer_analysis.py:117`'s `seeded_linear` DOES advance the global torch
+  stream, and its test proves determinism rather than the property its name
+  claims.
+- why: the test re-seeds symmetrically before and after, so it passes whether or
+  not the function leaks the global stream. `src/interp/rng.py` now holds the fix
+  pattern via `skip_init`, which TASK-23 already used for exactly this problem in
+  `sae.py`.
+- files_allowed: `src/interp/layer_analysis.py`, `tests/test_layer_analysis.py`
+- files_forbidden: other `src/interp/**`, and `src/interp/rng.py` (TASK-23's)
+- verify: `& $PY tools/rt.py tests/test_layer_analysis.py tests/test_interp.py`
+- must pin: a test that advances the global stream, calls the function, and
+  asserts the stream is UNCHANGED. The existing test cannot be edited into
+  doing this - it has to be a different test.
+- report: `.agent-notes/task-43.md`
+
+### TASK-44 | group: G-COVER | status: todo | mode: solo
+- goal: re-measure `ground_truth.py`'s thresholds against the corrected RNG, and
+  DECIDE - do not retune.
+- why: TASK-14 calibrated every threshold in this module on a measured null, and
+  TASK-23 has now removed the `torch.manual_seed` at `ground_truth.py:174` that
+  reseeded the process-global stream. The thresholds were therefore calibrated
+  against a draw sequence that no longer occurs. They may still be right.
+- the rule, from AGENTS.md and from what TASK-14 already did: re-measure and
+  decide. Do NOT tune the thresholds until the old numbers return - that would
+  fit a calibration to reproduce the result it was derived from.
+- files_allowed: `src/interp/ground_truth.py`,
+  `tests/test_interp_ground_truth_thresholds.py`
+- files_forbidden: other `src/interp/**`, `proofs/**` (record the divergence
+  there instead)
+- verify: `& $PY tools/rt.py tests/test_interp_ground_truth_thresholds.py tests/test_interp.py`
+- also: TASK-23 flagged that `_PSI_NULL_MAX_MEAN_PSI = 0.0` compared with strict
+  `>` is a knife edge - PSI scores exactly 0.0 for about 1 draw in 6. Measured
+  16/60 on unmodified main and 10/60 after. Decide whether the threshold or the
+  comparison is wrong, and say which.
+- report: `.agent-notes/task-44.md`
+
+### TASK-45 | group: G-FIX | status: todo | mode: solo
+- goal: `robustness.py:389` still lacks `majority_null_probability`.
+- why: TASK-16 measured that a NULL model - held completely fixed, only the
+  dummy-corpus seed varied - produces an `effective_rank` spread of 0.558 to
+  1.987, which is 2.6x the point effect the comparison reports as its finding.
+  Without a null distribution, a robustness module cannot distinguish "this model
+  is fragile" from "this metric moves when you change the seed".
+- files_allowed: `src/interp/robustness.py`, `tests/test_interp.py`
+- files_forbidden: other `src/interp/**`
+- verify: `& $PY tools/rt.py tests/test_interp.py`
+- note: TASK-23 made every robustness perturbation site use a private generator,
+  so a reproducible null is now actually measurable. This card depends on that.
+- report: `.agent-notes/task-45.md`
