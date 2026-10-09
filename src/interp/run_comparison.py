@@ -22,6 +22,7 @@ import json
 from pathlib import Path
 
 import torch
+from src.interp import rng
 from src.utils.torchio import safe_torch_load
 from src.utils.cka_metrics import linear_cka, rbf_cka
 
@@ -433,6 +434,14 @@ def main():
         default="cuda" if torch.cuda.is_available() else "cpu",
     )
     parser.add_argument("--max_batches", type=int, default=50)
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Base seed for the placeholder dataloader. Omitted, it is derived "
+        "from the process run seed, so the run is reproducible per run and "
+        "never draws from the process-global RNG.",
+    )
     args = parser.parse_args()
 
     # Load models
@@ -447,7 +456,12 @@ def main():
     print("Creating dataloader...")
     from torch.utils.data import DataLoader, TensorDataset
 
-    dummy_ids = torch.randint(0, 50304, (500, 128))
+    # Private generator, not the global stream: this is a documented CLI entry
+    # point, so two invocations of the same command previously produced two
+    # different datasets with nothing in the output saying so. Now the seed is
+    # on the command line and in the file name of what it produced.
+    dummy_gen = rng.generator_for(args.seed, "run_comparison.dummy_dataloader")
+    dummy_ids = torch.randint(0, 50304, (500, 128), generator=dummy_gen)
     dataset = TensorDataset(dummy_ids)
     dataloader = DataLoader(dataset, batch_size=16, shuffle=False)
 
