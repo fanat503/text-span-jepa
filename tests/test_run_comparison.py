@@ -465,7 +465,6 @@ class TestStrictIsStrict:
 def comparison_arms(monkeypatch, toy_width):
     """Two toy-width models, built only once per test."""
     import baselines.mlm_baseline as mlm_mod
-    import src.models.jepa as jepa_mod
 
     torch.manual_seed(0)
     jepa = TextSpanJEPA(_toy_jepa_config()).eval()
@@ -489,7 +488,9 @@ def _run(tmp_path, arms, **kwargs):
     from src.interp.run_comparison import run_full_comparison
 
     jepa, base = arms
-    return run_full_comparison(jepa, base, _loader(kwargs.pop("shuffle", False)), str(tmp_path), "cpu", 4, **kwargs)
+    return run_full_comparison(
+        jepa, base, _loader(kwargs.pop("shuffle", False)), str(tmp_path), "cpu", 4, **kwargs
+    )
 
 
 class TestNoPValueTheDesignCannotSupport:
@@ -518,9 +519,9 @@ class TestNoPValueTheDesignCannotSupport:
         """The report must state its own limits, not merely omit a number."""
         design = _run(tmp_path, comparison_arms)["comparison_design"]
 
-        assert design["verdict"] == "NOT_TESTABLE", (
-            f"the report believes it can support a verdict: {design['verdict']!r}"
-        )
+        assert (
+            design["verdict"] == "NOT_TESTABLE"
+        ), f"the report believes it can support a verdict: {design['verdict']!r}"
         units = design["units_of_replication"]
         assert units["checkpoints_per_arm"] == 1
         assert units["corpora"] == 1
@@ -528,9 +529,9 @@ class TestNoPValueTheDesignCannotSupport:
         uncovered = " ".join(design["variance_not_covered"])
         assert "seed" in uncovered, f"the missing seed variance is not recorded: {uncovered!r}"
         assert "corpus" in uncovered, f"the missing corpus variance is not recorded: {uncovered!r}"
-        assert design["required_to_support_a_verdict"], (
-            "a refusal that does not say what would fix it is not actionable"
-        )
+        assert design[
+            "required_to_support_a_verdict"
+        ], "a refusal that does not say what would fix it is not actionable"
 
     def test_summary_does_not_claim_a_supported_verdict(self, tmp_path, comparison_arms):
         summary = _run(tmp_path, comparison_arms)["summary"]
@@ -622,9 +623,9 @@ class TestPairingIsAssertedNotAssumed:
             assert_paired_extraction(torch.zeros(4, 8), torch.zeros(3, 8))
 
         message = str(excinfo.value)
-        assert "(4, 8)" in message and "(3, 8)" in message, (
-            f"the error does not show both shapes: {message!r}"
-        )
+        assert (
+            "(4, 8)" in message and "(3, 8)" in message
+        ), f"the error does not show both shapes: {message!r}"
 
 
 class TestPairedBootstrapIsActuallyPaired:
@@ -706,9 +707,9 @@ class TestPairedBootstrapIsActuallyPaired:
         assert "paired" in entry["paired_row_bootstrap"]["method"]
 
         covered = with_it["comparison_design"]["paired_row_bootstrap"]["covers"]
-        assert "seed" in covered and "corpus" in covered, (
-            f"the interval does not state what it cannot speak to: {covered!r}"
-        )
+        assert (
+            "seed" in covered and "corpus" in covered
+        ), f"the interval does not state what it cannot speak to: {covered!r}"
 
 
 class TestSurfaceFeatureIsNotTheRowIndex:
@@ -733,11 +734,13 @@ class TestSurfaceFeatureIsNotTheRowIndex:
             f"{it['jepa_mi_surface']!r}"
         )
         assert it["baseline_mi_surface"] is None
-        assert "NOT COMPUTED" in it["surface_mi_note"], (
-            f"the note does not say the hypothesis went untested: {it['surface_mi_note']!r}"
-        )
+        assert (
+            "NOT COMPUTED" in it["surface_mi_note"]
+        ), f"the note does not say the hypothesis went untested: {it['surface_mi_note']!r}"
 
-    def test_the_untested_hypothesis_is_recorded_in_the_design_block(self, tmp_path, comparison_arms):
+    def test_the_untested_hypothesis_is_recorded_in_the_design_block(
+        self, tmp_path, comparison_arms
+    ):
         design = _run(tmp_path, comparison_arms)["comparison_design"]
         assert any(
             "surface" in item for item in design["variance_not_covered"]
@@ -776,19 +779,23 @@ class TestRefuseNonsenseCorpusByDefault:
         import src.interp.run_comparison as rc
 
         monkeypatch.setattr(
-            rc.argparse.ArgumentParser, "parse_args", lambda self, _a=None: self.parse_known_args()[0]
+            rc.argparse.ArgumentParser,
+            "parse_args",
+            lambda self, _a=None: self.parse_known_args()[0],
         )
         monkeypatch.setattr(rc, "load_model", lambda *a, **k: torch.zeros(1))
-        monkeypatch.setattr("sys.argv", ["run_comparison", "--jepa_ckpt", "a", "--baseline_ckpt", "b"])
+        monkeypatch.setattr(
+            "sys.argv", ["run_comparison", "--jepa_ckpt", "a", "--baseline_ckpt", "b"]
+        )
 
         with pytest.raises(SystemExit) as excinfo:
             rc.main()
 
         message = str(excinfo.value)
         assert "REFUSED" in message
-        assert "--allow_random_tokens" in message, (
-            f"the refusal does not name the flag that permits the run: {message!r}"
-        )
-        assert not (tmp_path / "comparison_results.json").exists(), (
-            "a report was written despite the refusal"
-        )
+        assert (
+            "--allow_random_tokens" in message
+        ), f"the refusal does not name the flag that permits the run: {message!r}"
+        assert not (
+            tmp_path / "comparison_results.json"
+        ).exists(), "a report was written despite the refusal"

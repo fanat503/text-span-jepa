@@ -196,20 +196,25 @@ def describe_comparison_design(
             "requested_resamples": n_bootstrap,
             "computed": n_bootstrap > 0,
             "covers": (
-                "would a different draw of sequences from this one corpus flip "
-                "the difference; it conditions on the checkpoint and therefore "
-                "says nothing about seed or corpus variance"
-            )
-            if n_bootstrap > 0
-            else "not computed (n_bootstrap=0)",
+                (
+                    "would a different draw of sequences from this one corpus flip "
+                    "the difference; it conditions on the checkpoint and therefore "
+                    "says nothing about seed or corpus variance"
+                )
+                if n_bootstrap > 0
+                else "not computed (n_bootstrap=0)"
+            ),
         },
         "required_to_support_a_verdict": [
-            ">= 2 independently trained checkpoints per arm (different seeds), "
-            "compared under the same protocol",
-            ">= 2 corpora, or a held-out split disjoint from BOTH arms' "
-            "training data -- a row bootstrap over one corpus cannot supply it",
-            "one declared multiplicity family covering every comparison the "
-            "report prints",
+            (
+                ">= 2 independently trained checkpoints per arm (different seeds), "
+                "compared under the same protocol"
+            ),
+            (
+                ">= 2 corpora, or a held-out split disjoint from BOTH arms' "
+                "training data -- a row bootstrap over one corpus cannot supply it"
+            ),
+            ("one declared multiplicity family covering every comparison the " "report prints"),
         ],
     }
 
@@ -531,7 +536,9 @@ def run_full_comparison(
         # reimplemented here; duplicated padding would be a second law to keep
         # true.
         width = max(jepa_reps.size(-1), base_reps.size(-1), sf.size(-1))
-        jepa_mi_pos = InfoNCEEstimator.compute(_align_width(jepa_reps, width), _align_width(sf, width))
+        jepa_mi_pos = InfoNCEEstimator.compute(
+            _align_width(jepa_reps, width), _align_width(sf, width)
+        )
         base_mi_pos = InfoNCEEstimator.compute(
             _align_width(base_reps, width), _align_width(sf, width)
         )
@@ -661,7 +668,13 @@ def run_full_comparison(
     # is corrected.
 
     n_published = (
-        len([v for v in results.get("collapse", {}).get("jepa", {}).values() if isinstance(v, (int, float))])
+        len(
+            [
+                v
+                for v in results.get("collapse", {}).get("jepa", {}).values()
+                if isinstance(v, (int, float))
+            ]
+        )
         + len([k for k, v in results.get("geometry", {}).items() if isinstance(v, dict)])
         + 5  # information theory scalars (4 metrics + the surface note)
         + 4  # polysemanticity
@@ -678,8 +691,10 @@ def run_full_comparison(
     )
     if surface_features is None:
         design["variance_not_covered"] = list(design["variance_not_covered"]) + [
-            "the surface-feature MI hypothesis: no surface feature was supplied, "
-            "so the module's headline claim went untested"
+            (
+                "the surface-feature MI hypothesis: no surface feature was supplied, "
+                "so the module's headline claim went untested"
+            )
         ]
     results["comparison_design"] = design
 
@@ -705,9 +720,9 @@ def run_full_comparison(
         # indistinguishable it fires with this probability, so the count is
         # reported next to the chance of producing it from nothing. Measured:
         # 0.3125 at 3-of-4, 0.3438 at 4-of-6, 0.3633 at 5-of-8.
-        "geometry_majority_null_probability": majority_null_probability(n_won + 1, n_total)
-        if n_total
-        else 1.0,
+        "geometry_majority_null_probability": (
+            majority_null_probability(n_won + 1, n_total) if n_total else 1.0
+        ),
         "geometry_majority_is_a_verdict": False,
         "jepa_more_monosemantic": jepa_psi["mean_psi"] < base_psi["mean_psi"],
         "jepa_higher_entropy": jepa_entropy > base_entropy,
