@@ -37,6 +37,9 @@ import torch
 import torch.nn.functional as F
 from scipy.special import digamma
 from torch import nn
+from torch.nn.utils import skip_init
+
+from src.interp import rng
 
 # Sentinel returned by total_correlation when TC cannot be measured for the
 # given input (too few samples, fewer than two live dimensions, or a
@@ -52,6 +55,29 @@ LOG2PI_E = 1.0 + math.log(2.0 * math.pi)
 # is inside the estimator's own noise is not a number, it is a division of two
 # random quantities; see ConditionalMIEstimator.compute.
 MI_NOISE_FLOOR = 1e-3
+
+
+def _seeded_linear(in_features, out_features, generator):
+    """An ``nn.Linear`` whose ``reset_parameters`` law comes from `generator`.
+
+    ``nn.Linear`` takes no generator argument and its constructor draws from the
+    process-global RNG, so a private stream requires building the module without
+    initialising it and then reproducing torch's own law here. That law is
+    kaiming-uniform with ``a=sqrt(5)``, which is exactly
+    ``uniform(-1/sqrt(fan_in), 1/sqrt(fan_in))`` -- see
+    ``torch.nn.Linear.reset_parameters`` -- and the bias uses the same bound.
+    Same order (weight then bias), so this is bit-identical to the stock
+    constructor given the same seed.
+
+    The module is built on the CPU and then moved by the caller's ``.to(...)``,
+    so the generator only ever draws on its own device.
+    """
+    layer = skip_init(nn.Linear, in_features, out_features)
+    bound = 1.0 / math.sqrt(in_features) if in_features > 0 else 0.0
+    with torch.no_grad():
+        nn.init.kaiming_uniform_(layer.weight, a=math.sqrt(5), generator=generator)
+        layer.bias.uniform_(-bound, bound, generator=generator)
+    return layer
 
 
 class MINEEstimator(nn.Module):
@@ -96,19 +122,19 @@ class MINEEstimator(nn.Module):
     def __init__(self, dim_x, dim_y, hidden_dim=128, seed=0):
         super().__init__()
         # Seed the parameter initialisation without mutating global RNG state
-        # for the caller.
-        rng_state = torch.random.get_rng_state()
-        try:
-            torch.manual_seed(seed)
-            self.statistics_net = nn.Sequential(
-                nn.Linear(dim_x + dim_y, hidden_dim),
-                nn.ReLU(),
-                nn.Linear(hidden_dim, hidden_dim),
-                nn.ReLU(),
-                nn.Linear(hidden_dim, 1),
-            )
-        finally:
-            torch.random.set_rng_state(rng_state)
+        # for the caller. This used to save the global state, reseed, build, and
+        # restore; a private generator is strictly stronger, because the
+        # save/restore pair was only correct if nothing else drew in between.
+        # `skip_init` is what makes that possible: stock `nn.Linear(...)` draws
+        # from the global stream inside its own constructor.
+        init_gen = rng.generator_for(seed, "information_theory.mine_init")
+        self.statistics_net = nn.Sequential(
+            _seeded_linear(dim_x + dim_y, hidden_dim, init_gen),
+            nn.ReLU(),
+            _seeded_linear(hidden_dim, hidden_dim, init_gen),
+            nn.ReLU(),
+            _seeded_linear(hidden_dim, 1, init_gen),
+        )
         self.dim_x = dim_x
         self.dim_y = dim_y
         self.seed = seed

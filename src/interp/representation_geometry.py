@@ -15,6 +15,8 @@
 
 import torch
 
+from src.interp import rng
+
 
 class RepresentationGeometry:
     """Representation geometry metrics linked to generalization.
@@ -282,6 +284,7 @@ class GeometryDegradationTest:
         noise_levels=(0.01, 0.05, 0.1, 0.2, 0.5),
         n_trials=3,
         device="cpu",
+        seed=None,
     ):
         """Add Gaussian noise to representations and measure geometry + accuracy.
 
@@ -293,6 +296,10 @@ class GeometryDegradationTest:
             noise_levels: list of noise standard deviations
             n_trials: number of noise trials per level
             device: compute device
+            seed: base seed for the noise draws. Each (level, trial) gets its own
+                generator derived from the seed, so the curve is reproducible
+                and the process-global RNG is never touched. Omitted, the stream
+                is derived from the run seed instead.
 
         Returns:
             dict with per-noise-level geometry and accuracy metrics
@@ -302,12 +309,20 @@ class GeometryDegradationTest:
         clean_geom = RepresentationGeometry.compute_all(representations)
         clean_acc = probe_fn(representations)
 
-        for noise_std in noise_levels:
+        for i_level, noise_std in enumerate(noise_levels):
             geom_list = []
             acc_list = []
 
-            for _ in range(n_trials):
-                noisy = representations + torch.randn_like(representations) * noise_std
+            for trial in range(n_trials):
+                # Keyed by (level, trial) rather than a running counter, so the
+                # curve is a pure function of `seed` and reordering the levels
+                # does not relabel the draws.
+                stream = i_level * 1_000_003 + trial
+                trial_gen = rng.generator_for(seed, "representation_geometry.noise", stream)
+                noisy = (
+                    representations
+                    + torch.randn_like(representations, generator=trial_gen) * noise_std
+                )
                 geom = RepresentationGeometry.compute_all(noisy)
                 acc = probe_fn(noisy)
                 geom_list.append(geom)
