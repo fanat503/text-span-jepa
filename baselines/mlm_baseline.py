@@ -129,6 +129,7 @@ class MLMBaseline(nn.Module):
         num_heads: int = 12,
         mlp_ratio: float = 4.0,
         drop_rate: float = 0.1,
+        drop_path_rate: float = 0.0,
         **kwargs,
     ):
         super().__init__()
@@ -142,6 +143,7 @@ class MLMBaseline(nn.Module):
             num_heads=num_heads,
             mlp_ratio=mlp_ratio,
             drop_rate=drop_rate,
+            drop_path_rate=drop_path_rate,
         )
         self.mlm_head = nn.Linear(embed_dim, vocab_size, bias=False)
         # Decoder attribute for train.py compatibility (same object, weight-tied)

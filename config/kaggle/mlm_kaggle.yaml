@@ -24,7 +24,6 @@ meta:
 data:
   batch_size: 32
   root_path: /kaggle/input/wikitext-103
-  mask_ratio: 0.15
   span_length_range: [1, 1]
 
 model:

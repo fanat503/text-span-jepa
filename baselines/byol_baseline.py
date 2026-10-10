@@ -177,6 +177,7 @@ class BYOLBaseline(nn.Module):
         num_heads: int = 12,
         mlp_ratio: float = 4.0,
         drop_rate: float = 0.0,
+        drop_path_rate: float = 0.0,
         target_momentum: float = 0.996,
         projector_hidden: int | None = None,
         predictor_hidden: int | None = None,
@@ -200,6 +201,7 @@ class BYOLBaseline(nn.Module):
             num_heads=num_heads,
             mlp_ratio=mlp_ratio,
             drop_rate=drop_rate,
+            drop_path_rate=drop_path_rate,
         )
 
         self.projector = build_mlp(embed_dim, projector_hidden)
@@ -316,10 +318,25 @@ class BYOLBaseline(nn.Module):
         gradient by a factor of two rather than failing loudly.
 
         Args:
-            view_a, view_b: ``(B, T)`` token indices, two views.
+            view_a: ``(B, T)`` token indices -- the trainer's SPAN-MASKED
+                input, at the `model.mask_ratio_start/end` curriculum.
+            view_b: ``(B, T)`` token indices -- the trainer's CLEAN input.
             mask_positions: accepted for the trainer's call signature and
                 ignored. This method has no per-position target set; it is not a
                 masked-prediction objective.
+
+        NOT THE PUBLISHED VIEW CONSTRUCTION
+        ------------------------------------
+        Grill et al. define BYOL over two AUGMENTED views of the same input.
+        `src.train.compute_loss` hands this arm `(masked, clean)`: one view is
+        span-masked and the other is untouched, so the pair is nested rather
+        than two independent augmentation draws. The objective, the EMA teacher
+        and the predictor are the published ones; the view construction is this
+        repo's, and a run of this arm is therefore NOT a reproduction of BYOL as
+        published. Wiring a real two-augmentation pipeline is a science change
+        that re-measures this repository's collapse thresholds -- see
+        `.agent-notes/fairness.md`. Stated here, at the signature, so an arm that
+        is not the published method cannot read as one.
 
         Returns:
             ``(loss, info)`` with `loss_byol`, the two cosine terms, and the

@@ -1639,3 +1639,343 @@ class TestShapesAndEdgeCases:
                 "representation they measure is the same object"
             )
             assert value.shape == (8, 32)
+
+
+# ═══════════════════════════════════════════════════════════════════
+#  Fairness: what the comparison holds fixed and what it must not
+# ═══════════════════════════════════════════════════════════════════
+
+
+#: Every arm `create_model` can build, including the two that predate this file.
+#: The fairness tests below are about the COMPARISON, so a property that holds for
+#: the four SSL arms but not for MLM/data2vec is not a property of the table.
+ALL_ARMS = ("text_span_jepa", "mlm", "data2vec", "byol", "barlow", "vicreg", "simsiam")
+
+#: The shape `TestTrainerContract` uses, spelled out so the fairness tests can
+#: build JEPA too. Only the keys `create_model` needs to reach a constructed
+#: encoder are here; the mechanism keys fall back to `TextSpanJEPAConfig`
+#: defaults, which is why this builds the FULL mechanism set without naming it.
+FAIR_SHAPE = {
+    **TINY,
+    "encoder_depth": TINY["depth"],
+    "predictor_embed_dim": 16,
+    "predictor_depth": 1,
+    "future_offsets": [1],
+    "num_refine_steps": 1,
+    "jawk_k_start": 2,
+    "jawk_k_end": 4,
+    "jawk_curriculum_steps": 0,
+    "spc_n_bands": 4,
+    "cgn_n_groups": 2,
+    "jspace_k_workspace": 4,
+    "wsd_k": 4,
+    "swip_k_workspace": 4,
+    "rdc_k_workspace": 4,
+    "sigreg_n_sketches": 8,
+    "sigreg_n_integration_points": 5,
+    "pcr_level_dims": None,
+}
+
+
+def drop_path_schedule(model: nn.Module):
+    """The per-block drop-path probabilities an arm actually trains with.
+
+    Read out of the built modules rather than out of the constructor argument,
+    because `**kwargs` on the baseline classes means an argument that IS passed
+    and an argument that is silently swallowed produce identical constructor
+    signatures and different training. Reading `block.drop_path.drop_prob` is
+    the only thing that distinguishes them.
+    """
+    return [getattr(b.drop_path, "drop_prob", 0.0) for b in model.encoder.blocks]
+
+
+def build_through_trainer(arm: str, **model_cfg) -> nn.Module:
+    """`create_model` at `FAIR_SHAPE`, with `model_cfg` overriding the shape."""
+    from src.train import create_model
+
+    cfg = {
+        **FAIR_SHAPE,
+        "mlp_ratio": 2.0,
+        "drop_rate": 0.0,
+        **model_cfg,
+    }
+    return create_model(
+        arm,
+        cfg,
+        vocab_size=FAIR_SHAPE["vocab_size"],
+        max_seq_len=FAIR_SHAPE["max_seq_len"],
+        device=torch.device("cpu"),
+    )
+
+
+class TestRegularizationParity:
+    """Defect 3: JEPA trained at `drop_path_rate` and the baselines at none.
+
+    WHAT THE CODE DID
+    -----------------
+    `defaults.yaml` declares `model.drop_path_rate: 0.1` and holds it fixed along
+    the scaling ladder ("drop-path is a regulariser; letting it track model size
+    makes a capacity curve uninterpretable"). `TextSpanJEPAConfig` forwards it to
+    the encoder. `create_model` forwarded `drop_rate` to every baseline branch
+    and `drop_path_rate` to none of them, so at the reference config the JEPA
+    column ran stochastic depth and all six baseline columns ran
+    `nn.Identity`. Measured before the fix, depth=2 at `FAIR_SHAPE`:
+
+        text_span_jepa   ['Identity', 'DropPath']
+        mlm              ['Identity', 'Identity']
+        data2vec         ['Identity', 'Identity']
+        byol             ['Identity', 'Identity']
+        barlow           ['Identity', 'Identity']
+        vicreg           ['Identity', 'Identity']
+        simsiam          ['Identity', 'Identity']
+
+    A baseline row is read as "this method at this budget". If one column
+    regularises and another does not, the row measures the regulariser too, and
+    the direction of the error is not knowable in advance -- stochastic depth
+    can help or hurt at a fixed budget, so this is not a correction that can be
+    waved through as "obviously helps the baselines".
+
+    WHY IT IS A CODE DEFECT AND NOT THE CONVENTION
+    ------------------------------------------------
+    Nothing in the four papers asks for or against drop-path: BYOL, Barlow
+    Twins, VICReg and SimSiam are augmentation-defined objectives over a shared
+    trunk, and the trunk here is `TextSpanJEPAEncoder` for every arm. The
+    asymmetry is not a methodological position, it is an omission in one branch
+    of a factory: `create_model` passed `drop_rate` to all six branches and
+    `drop_path_rate` to the JEPA branch only. Fixing it means every arm gets the
+    configured regularisation, which is the same thing `drop_rate` already does.
+
+    The `**kwargs` trap, which is why this reads modules and not signatures
+    --------------------------------------------------------------------
+    All four baseline classes end their constructor with `**kwargs` and never
+    forward it to `TextSpanJEPAEncoder`. So `BYOLBaseline(drop_path_rate=0.1)`
+    constructs successfully, accepts the argument, and trains with no drop-path
+    at all -- measured, and the reason `test_every_arm_honours_a_configured_drop_path`
+    below asserts on the built modules rather than on the constructor call
+    succeeding.
+    """
+
+    def test_the_jepa_column_is_not_the_only_one_with_stochastic_depth(self):
+        """The defect itself, in one assertion, at the reference rate."""
+        jepa = drop_path_schedule(build_through_trainer("text_span_jepa", drop_path_rate=0.1))
+        assert any(p > 0.0 for p in jepa), (
+            f"the JEPA reference column has no drop-path at drop_path_rate=0.1: "
+            f"{jepa}. If this fails, the defect under test moved rather than "
+            "disappeared -- re-measure before assuming the fix regressed."
+        )
+        for arm in ALL_ARMS:
+            if arm == "text_span_jepa":
+                continue
+            got = drop_path_schedule(build_through_trainer(arm, drop_path_rate=0.1))
+            assert got == jepa, (
+                f"{arm} trains with drop-path {got} while the JEPA column trains "
+                f"with {jepa}. Every arm shares TextSpanJEPAEncoder, so a "
+                "difference here is an omitted argument in create_model, not a "
+                "modelling decision -- and it makes the row compare the method "
+                "AND the regulariser."
+            )
+
+    @pytest.mark.parametrize("arm", [a for a in ALL_ARMS if a != "text_span_jepa"])
+    def test_every_arm_honours_a_configured_drop_path(self, arm):
+        """Both directions: a non-zero rate reaches the encoder, and a zero one does.
+
+        The zero case is the half that catches the `**kwargs` swallow from the
+        other side: a baseline whose constructor ignores the argument entirely
+        would pass the non-zero assertion only if the default happened to be
+        non-zero, and the two together pin the argument as load-bearing in both
+        directions.
+        """
+        with_path = drop_path_schedule(build_through_trainer(arm, drop_path_rate=0.2))
+        assert any(p > 0.0 for p in with_path), (
+            f"{arm} accepted drop_path_rate=0.2 and built no stochastic depth "
+            f"({with_path}). The baseline constructors swallow unknown keywords "
+            "in **kwargs, so accepting the argument is not evidence it was used."
+        )
+        without = drop_path_schedule(build_through_trainer(arm, drop_path_rate=0.0))
+        assert all(p == 0.0 for p in without), (
+            f"{arm} built drop-path {without} at drop_path_rate=0.0; a rate of "
+            "zero must mean no stochastic depth, or the knob is not under the "
+            "config's control"
+        )
+
+    def test_the_rate_the_config_declares_is_the_rate_every_arm_gets(self):
+        """The property stated over the whole arm set, not one arm at a time.
+
+        Parametrised per-arm versions of the same assertion can each be satisfied
+        by an arm-specific special case; this one cannot, because it reads a
+        single number out of `defaults.yaml` -- the number a run would actually
+        resolve -- and requires every arm to reproduce it.
+        """
+        import yaml
+
+        defaults_path = Path(__file__).resolve().parent.parent / "defaults.yaml"
+        with open(defaults_path, encoding="utf-8") as handle:
+            declared = yaml.safe_load(handle)["model"]["drop_path_rate"]
+
+        assert declared > 0.0, (
+            "defaults.yaml no longer declares a non-zero drop_path_rate, so this "
+            "test has nothing to hold the arms to. Re-derive the comparison "
+            "before trusting a green run here."
+        )
+        reference = drop_path_schedule(
+            build_through_trainer("text_span_jepa", drop_path_rate=declared),
+        )
+        for arm in ALL_ARMS:
+            got = drop_path_schedule(build_through_trainer(arm, drop_path_rate=declared))
+            assert got == reference, (
+                f"{arm} resolves to drop-path {got} at the declared "
+                f"drop_path_rate={declared}, against the JEPA column's {reference}"
+            )
+
+
+class TestTheTwoViewsAreNotThePublishedAugmentationPair:
+    """Defect 1: `(span-masked, clean)` is not "two augmented views".
+
+    WHAT THE CODE DOES (measured, not inferred)
+    -------------------------------------------
+    `src.train.compute_loss` hands `model.compute_loss(masked_input_ids,
+    original_input_ids, mask_positions)`. `masked_input_ids` is this repo's
+    span-masked input at the mask curriculum; `original_input_ids` is the clean
+    input. Probed through the real `SpanMaskCollator`:
+
+        view_a is the masked input: True
+        view_b is the clean input: True
+        view_a == view_b:          False
+
+    All four papers define their objective over two AUGMENTED views of the same
+    input, where the augmentation is what makes the pair different. Here one
+    view is untouched. That is a real divergence from the published method and
+    it is not repairable inside this card -- see
+    `.agent-notes/fairness.md` for what a genuine two-augmentation pipeline
+    would require (a text augmentation policy per paper, a second independent
+    draw per step, and a re-measurement of every collapse threshold in this
+    file, which were all measured under the masked/clean pair).
+
+    So this file does NOT assert the views are two augmentations, and it does
+    NOT pretend the arms are the published methods. What it asserts is the
+    weaker and true thing: the arms declare, at the point of use, that their
+    views are the trainer's masked/clean pair and not the published augmentation
+    pair. A divergence that is stated in the class's own docstring cannot be
+    read past by a reviewer, and a future edit that really did wire two
+    augmentations has to come here and change the declaration.
+    """
+
+    @pytest.mark.parametrize("name", sorted(ARMS))
+    def test_the_arm_declares_its_view_construction(self, name):
+        """`compute_loss`'s own docstring must say what the two views are.
+
+        Point of use, deliberately: the module header is where a reader who is
+        auditing the port looks, but the parameter list of the function that
+        consumes the views is where a reader who is USING the arm looks. A
+        divergence recorded only in a module docstring is one refactor of the
+        class away from being invisible.
+        """
+        import inspect
+
+        doc = inspect.getdoc(ARMS[name].compute_loss) or ""
+        # Scoped to the view_a/view_b description, not the whole docstring. An
+        # earlier draft of this test searched the whole string and passed BYOL
+        # and SimSiam on the word "masked" appearing in an unrelated sentence
+        # about `mask_positions` -- a test that can be satisfied by a word in the
+        # wrong place is not a test.
+        described = [line for line in doc.splitlines() if "view_a" in line or "view_b" in line]
+        assert described, f"{name}.compute_loss documents neither view; nothing to read"
+        joined = " ".join(described).lower()
+        assert "masked" in joined and "clean" in joined, (
+            f"{name}.compute_loss describes its views as {described!r}, without "
+            "saying they are the trainer's span-masked and clean inputs. "
+            "BYOL/Barlow Twins/VICReg/SimSiam are defined over two AUGMENTED "
+            "views of the same input; this repo hands all four a masked/clean "
+            "pair, so an arm that does not say so reads as the published method. "
+            "See .agent-notes/fairness.md."
+        )
+
+    @pytest.mark.parametrize("name", sorted(ARMS))
+    def test_the_masked_view_really_is_the_masked_one(self, name):
+        """The declaration above is checked against the trainer, not trusted.
+
+        Prose asserting "these are the masked and clean views" is worth nothing
+        if the trainer in fact hands something else. This runs the real
+        `SpanMaskCollator` and the real `src.train.compute_loss`, and captures
+        the two tensors the arm is actually called with.
+        """
+        from src.masks.span import SpanMaskCollator
+        from src.train import compute_loss
+
+        model = trainer_build(name)
+        seen = {}
+        real = model.compute_loss
+
+        def spy(view_a, view_b, mask_positions=None):
+            seen["a"] = view_a.clone()
+            seen["b"] = view_b.clone()
+            return real(view_a, view_b, mask_positions)
+
+        model.compute_loss = spy
+
+        np_random_state = torch.randint(1, TINY["vocab_size"], (4, TINY["max_seq_len"]))
+        collator = SpanMaskCollator(
+            mask_ratio=0.3,
+            span_length_range=(3, 5),
+            mask_ratio_start=0.3,
+            mask_ratio_end=0.3,
+            curriculum_steps=10000,
+            mask_token_id=0,
+            pad_id=0,
+        )
+        collated = collator([{"input_ids": np_random_state[i]} for i in range(4)])
+        masked = collated["masked_input_ids"]
+        clean = collated["original_input_ids"]
+
+        assert masked.ne(clean).any(), "the fixture produced no masked tokens"
+        compute_loss(model, masked, clean, collated["mask_positions"])
+
+        assert torch.equal(
+            seen["a"], masked
+        ), f"{name} receives view_a that is not the trainer's masked input"
+        assert torch.equal(seen["b"], clean), (
+            f"{name} receives view_b that is not the trainer's clean input. If "
+            "this now passes because a second augmentation was wired in, the "
+            "class docstrings and .agent-notes/fairness.md must be updated in the "
+            "same commit -- these arms would then BE the published methods."
+        )
+        # And the shape of the divergence, stated as an assertion so it cannot
+        # be quietly forgotten: one view is untouched, which is exactly the
+        # property that makes this not-two-augmentations.
+        assert torch.equal(
+            seen["b"], clean
+        ), "view_b must be the clean input for this file's claim to hold"
+
+    @pytest.mark.parametrize("name", sorted(ARMS))
+    def test_the_pair_is_not_two_independent_draws(self, name):
+        """Why the pair cannot be called an augmentation pair: it is nested.
+
+        In a published method the two views are independent samples of an
+        augmentation. Here the clean view is a deterministic function of the
+        masked one -- both derive from the same batch, and the clean one has
+        nothing masked at all -- so any pair of views this trainer produces
+        satisfies `mask_positions == 0`. Asserted as the property that makes
+        the naming question unavoidable rather than a matter of taste.
+        """
+        from src.masks.span import SpanMaskCollator
+
+        collator = SpanMaskCollator(
+            mask_ratio=0.3,
+            span_length_range=(3, 5),
+            mask_ratio_start=0.3,
+            mask_ratio_end=0.3,
+            curriculum_steps=10000,
+            mask_token_id=0,
+            pad_id=0,
+        )
+        ids = torch.randint(1, TINY["vocab_size"], (4, TINY["max_seq_len"]))
+        collated = collator([{"input_ids": ids[i]} for i in range(4)])
+        mask = collated["mask_positions"]
+        assert mask.sum().item() > 0, "fixture produced no masked tokens"
+        assert (
+            mask.bool() == (collated["masked_input_ids"] != collated["original_input_ids"])
+        ).all(), (
+            "the trainer's two views are related by exactly one mask; view_b is "
+            "the unmasked input, so this pair is not two independent augmentation "
+            "draws and the arms must not be described as the published methods"
+        )

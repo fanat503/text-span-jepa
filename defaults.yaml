@@ -120,7 +120,26 @@ data:
   tokenizer: gpt2
   num_workers: 2
   root_path: data/wikitext-103
-  mask_ratio: 0.35
+  # `mask_ratio` was here and has been DELETED: it could never reach the model.
+  # `src/train.py` always passes `model.mask_ratio_start`/`mask_ratio_end` to
+  # `SpanMaskCollator`, and with `curriculum_steps = 10000` the collator's
+  # `current_mask_ratio` returns the RAMP, never this flat value. Ten shipped
+  # configs set `data.mask_ratio: 0.15` believing it fixed their mask ratio; it
+  # did not, and they all ran the 0.15 -> 0.35 ramp below. Declaring a key that
+  # is silently overridden is worse than not having it: it invited ten configs
+  # to assert a mask ratio their runs did not use.
+  #
+  # The mask schedule is the `model.mask_ratio_start/end` curriculum. To change
+  # it, change that ramp -- there is now exactly one knob.
+  #
+  # `src/train.py` still passes `data_cfg.get("mask_ratio", 0.35)` to the
+  # collator, so a hand-built config dict that supplies no ramp (the fixtures in
+  # tests/test_training_e2e.py and tests/test_checkpoint_fidelity.py do exactly
+  # that) still gets a working flat ratio. Those dicts are not merged over this
+  # file, so the removal is invisible to them; they now log one 'possible typo'
+  # warning per run, which is correct -- the key is no longer part of the config
+  # schema, and a dict that sets it is stating a mask ratio the trainer will
+  # only honour if no ramp is present.
   span_length_range: [3, 10]
 
 model:

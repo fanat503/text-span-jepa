@@ -30,21 +30,25 @@
 # is inert here. That is why this file declares no mechanism keys -- the same
 # reasoning config/kaggle/data2vec_kaggle.yaml records.
 #
-# THE ONE DATA DELTA, AND WHY data.mask_ratio IS NOT IT
-# -----------------------------------------------------
+# THE ONE DATA DELTA, AND WHY THERE IS NO MASK-RATIO KEY HERE
+# ------------------------------------------------------------
 # `data.span_length_range: [1, 1]` is the BERT-style single-token corruption, and
 # it is live: `src/train.py` passes `span_length_range` to `SpanMaskCollator`
 # unconditionally, and every other data2vec/MLM config in this repo
 # (config/wikitext/data2vec_*.yaml, config/kaggle/data2vec_kaggle.yaml) sets the
 # same.
 #
-# `data.mask_ratio` is deliberately NOT set here. defaults.yaml declares
-# model.mask_ratio_start AND model.mask_ratio_end, and `src/train.py` hands those
-# to the collator as a ramp that OVERRIDES `data.mask_ratio` whenever both are
-# present -- so `data.mask_ratio` is inert in every shipped config, including the
-# `0.15` in the wikitext data2vec column. Declaring it here would add a key that
-# looks load-bearing and is not. Recorded, not fixed: the override lives in
-# src/train.py and defaults.yaml, and neither is this arm's file.
+# There is deliberately NO `data.mask_ratio` here, and there is no such key
+# anywhere. It used to exist in defaults.yaml and ten configs set it to 0.15,
+# believing that fixed their mask ratio. It did not: `src/train.py` passes
+# `model.mask_ratio_start`/`mask_ratio_end` to the collator as a ramp, and with
+# `curriculum_steps = 10000` the collator's `current_mask_ratio` returns the
+# ramp and never the flat value. Those ten configs all ran the 0.15 -> 0.35
+# curriculum. The key has been DELETED from defaults.yaml and from all ten
+# configs -- behaviour-preserving, measured step-for-step over the whole 10k-step
+# curriculum against the ramp -- so that the mask schedule has exactly one knob
+# and a config can no longer assert a ratio its run does not use. Guards:
+# tests/test_config_system.py::TestOnlyOneMaskRatioKnobIsLive.
 #
 # TRAINING BUDGET -- identical to every other arm in this directory
 # -----------------------------------------------------------------

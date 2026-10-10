@@ -140,6 +140,7 @@ class VICRegBaseline(nn.Module):
         num_heads: int = 12,
         mlp_ratio: float = 4.0,
         drop_rate: float = 0.0,
+        drop_path_rate: float = 0.0,
         projector_hidden: int | None = None,
         predictor_hidden: int | None = None,
         sim_weight: float = DEFAULT_SIM_WEIGHT,
@@ -168,6 +169,7 @@ class VICRegBaseline(nn.Module):
             num_heads=num_heads,
             mlp_ratio=mlp_ratio,
             drop_rate=drop_rate,
+            drop_path_rate=drop_path_rate,
         )
 
         def _head(width: int) -> nn.Sequential:
@@ -284,7 +286,9 @@ class VICRegBaseline(nn.Module):
         Bardes et al., so the arm is symmetric in its two inputs.
 
         Args:
-            view_a, view_b: ``(B, T)`` token indices, two views.
+            view_a: ``(B, T)`` token indices -- the trainer's SPAN-MASKED input,
+                at the `model.mask_ratio_start/end` curriculum.
+            view_b: ``(B, T)`` token indices -- the trainer's CLEAN input.
             mask_positions: accepted for the trainer's call signature and
                 ignored. No per-position target set exists in this method.
 
@@ -293,6 +297,20 @@ class VICRegBaseline(nn.Module):
             The terms are reported individually because their relative size is
             the diagnostic: an arm whose `var_vicreg` is pinned at 0 is not
             learning a representation, whatever `loss_vicreg` says.
+
+        NOT THE PUBLISHED VIEW CONSTRUCTION
+        ------------------------------------
+        Bardes et al. define VICReg over two AUGMENTED views of the same input.
+        `src.train.compute_loss` hands this arm `(masked, clean)`: one view is
+        span-masked and the other is untouched, so the pair is nested rather
+        than two independent augmentation draws. The invariance/variance/
+        covariance objective and its published weights are the published ones;
+        the view construction is this repo's, and a run of this arm is therefore
+        NOT a reproduction of VICReg as published. Wiring a real
+        two-augmentation pipeline is a science change that re-measures this
+        repository's collapse thresholds -- see `.agent-notes/fairness.md`.
+        Stated here, at the signature, so an arm that is not the published
+        method cannot read as one.
         """
         z_a, z_b = self.forward(view_a, view_b)
 
