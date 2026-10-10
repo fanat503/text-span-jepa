@@ -100,9 +100,11 @@ three arms `create_model` already knows.
 from __future__ import annotations
 
 import contextlib
+from pathlib import Path
 
 import pytest
 import torch
+import yaml
 from torch import nn
 
 from baselines.barlow_baseline import BarlowTwinsBaseline
@@ -266,6 +268,39 @@ def class_factory(cls, **kwargs):
         return cls(**TINY, **kwargs)
 
     return factory
+
+
+def trainer_build(name: str, **overrides) -> nn.Module:
+    """Build `name` through `src.train.create_model`, at `TINY`'s size.
+
+    The PRODUCTION path, deliberately: everything in `TestTrainerContract` below
+    is a claim about the trainer, and a claim about the trainer tested against a
+    hand-built class is a claim about a different object. `TINY` is reused so the
+    trainer-built model and the `build(name)` model in the same test class are
+    the same shape and their two assertions are comparable.
+
+    The model cfg uses the trainer's own key names, which are NOT the
+    constructor's: `create_model` takes `encoder_depth` where the classes take
+    `depth`. Passing the constructor spelling would silently train at the
+    `depth=12` default, which at `TINY`'s vocab is roughly forty times the work.
+    """
+    from src.train import create_model
+
+    model_cfg = {
+        "embed_dim": TINY["embed_dim"],
+        "encoder_depth": TINY["depth"],
+        "num_heads": TINY["num_heads"],
+        "mlp_ratio": 2.0,
+        "drop_rate": 0.0,
+    }
+    model_cfg.update(overrides)
+    return create_model(
+        name,
+        model_cfg,
+        vocab_size=TINY["vocab_size"],
+        max_seq_len=TINY["max_seq_len"],
+        device=torch.device("cpu"),
+    )
 
 
 # ═══════════════════════════════════════════════════════════════════
@@ -1047,20 +1082,35 @@ class TestParameterMatching:
 class TestTrainerContract:
     """What `src/train.py` requires of an arm, pinned from this side.
 
-    `src/train.py` is not editable by this file's owner, so the coupling is
-    pinned from here rather than fixed there -- the same approach
-    `tests/test_baseline_parity.py::test_train_py_logs_the_bare_call` takes.
+    The coupling is pinned from HERE even though `src/train.py` is now editable:
+    a card that owns a file tends to trust it, and the property that matters --
+    "this arm reaches its own loss, and only its own loss" -- is a property of
+    the PAIR, so it belongs in a place neither owner can quietly rewrite. Same
+    approach `tests/test_baseline_parity.py::test_train_py_logs_the_bare_call`
+    takes.
 
-    The dispatch is duck-typed and ORDER-SENSITIVE, which is the trap:
+    WHAT USED TO BE TRUE, AND WHY THE LOWER HALF OF THIS CLASS EXISTS
+    -----------------------------------------------------------------
+    The dispatch was duck-typed and ORDER-SENSITIVE:
 
         if hasattr(model, "compute_loss_with_targets"):                    -> JEPA
         elif hasattr(model, "forward") and hasattr(model, "regression_head"): -> data2vec
         elif hasattr(model, "compute_loss"):                               -> MLM
 
-    Both earlier branches are tested before the one these arms rely on. An arm
-    that owned an attribute named `regression_head` -- an innocuous name, and the
-    obvious name for a regression-style head -- would be routed to the data2vec
+    Both earlier branches are checked BEFORE the `compute_loss` branch these arms
+    depend on, and both are positive tests for an incidental attribute name. An
+    arm that owned an attribute named `regression_head` -- an innocuous name, and
+    the obvious name for a regression-style head -- would be handed data2vec's
     call signature and would fail confusingly, or worse, appear to train.
+
+    The four arms did not own it, so they happened to work. That is luck rather
+    than design, and it is why the two halves below now both exist:
+
+    * the upper tests pin what each arm MUST NOT own, which is the rule the old
+      dispatcher ran on;
+    * `test_a_decoy_regression_head_no_longer_reroutes_the_arm` pins that the rule
+      is no longer what routes anything -- `create_model` now DECLARES a
+      `loss_protocol` per arm, so attaching the decoy changes nothing.
     """
 
     @pytest.mark.parametrize("name", sorted(ARMS))
@@ -1122,9 +1172,10 @@ class TestTrainerContract:
         """`get_num_params()` must be the model's SIZE, as the other three arms.
 
         `tests/test_baseline_parity.py::TestLoggedQuantityIsOneKind` pins this
-        for the arms `create_model` knows; these arms are not wired into
-        `create_model` yet, so this pins the contract they must satisfy when they
-        are. Recounted independently of the method body.
+        for the arms `create_model` knows; these arms are wired into
+        `create_model`, so that file pins it too, and this is the copy that
+        survives `create_model` regressing. Recounted independently of the
+        method body.
         """
         model = build(name)
 
@@ -1177,6 +1228,292 @@ class TestTrainerContract:
         assert isinstance(info, dict) and info
         for key, value in info.items():
             assert isinstance(value, float), f"{name}.info[{key!r}] is {type(value)}, not float"
+
+    # ---- reachability: an arm nothing can build cannot be trained ----
+
+    @pytest.mark.parametrize("name", sorted(ARMS))
+    def test_the_arm_is_reachable_from_create_model(self, name):
+        """The headline. Implemented and reachable are different properties.
+
+        These four modules existed with full tests and were still untrainable:
+        `create_model` raised `ValueError` on every one of their names. A collapse
+        test on a class nothing constructs proves the class works; it does not
+        prove the experiment can be run, and nothing in the file would have said
+        so.
+        """
+        model = trainer_build(name)
+        assert isinstance(model, ARMS[name]), (
+            f"create_model({name!r}) returned {type(model).__name__}; the arm is "
+            "implemented but unreachable, so no run can train it"
+        )
+
+    @pytest.mark.parametrize("name", sorted(ARMS))
+    def test_the_config_name_normalises_to_a_declared_arm(self, name):
+        """`meta.model_name` in a config must survive `_normalize_model_name`.
+
+        Checked both ways, because the two tables are separate and a one-way
+        check passes when only one of them has drifted: the prefix table is what
+        a config actually meets, and `LOSS_PROTOCOLS` is what `create_model` then
+        looks the arm up in. An arm present in one and missing from the other is
+        either an unreachable arm or a dispatch table entry nothing can reach.
+        """
+        from src.train import LOSS_PROTOCOLS, _normalize_model_name
+
+        assert _normalize_model_name(name) == name
+        assert _normalize_model_name(f"{name}_small") == name, (
+            f"a suffixed config name does not normalise to {name!r}; every other "
+            "arm accepts a size suffix and these four would have to be spelled "
+            "exactly"
+        )
+        assert name in LOSS_PROTOCOLS, f"{name} has no declared loss protocol"
+
+        reachable = {
+            canonical
+            for canonical in LOSS_PROTOCOLS
+            if _normalize_model_name(f"{canonical}_small") == canonical
+        }
+        assert reachable == set(
+            LOSS_PROTOCOLS
+        ), f"prefix table and protocol table disagree: {sorted(set(LOSS_PROTOCOLS) - reachable)}"
+
+    # ---- the dispatch itself ----
+
+    @pytest.mark.parametrize("name", sorted(ARMS))
+    def test_create_model_declares_the_protocol_instead_of_inferring_it(self, name):
+        """The arm carries its routing as data, so routing cannot depend on naming.
+
+        A plain string on the module: not a buffer, not a parameter, so it is
+        absent from `state_dict()` and cannot perturb a checkpoint or a
+        `strict=True` load.
+        """
+        from src.train import LOSS_COMPUTE_LOSS
+
+        model = trainer_build(name)
+        assert model.loss_protocol == LOSS_COMPUTE_LOSS
+        assert "loss_protocol" not in model.state_dict(), (
+            "the declared protocol must not enter the checkpoint; a resume with "
+            "strict=True would then fail on an unknown key"
+        )
+
+    @pytest.mark.parametrize("name", sorted(ARMS))
+    def test_a_decoy_regression_head_no_longer_reroutes_the_arm(self, name):
+        """THE TRAP, made into a test.
+
+        `regression_head` is attached to a real, correctly-wired arm -- exactly
+        the innocuous attribute the old duck-typed chain selected on -- and the
+        arm must still reach its own loss.
+
+        Against the previous implementation this goes red with a `TypeError`
+        rather than a wrong number, because all four `forward` methods take
+        `(view_a, view_b)` and data2vec's call site passes three tensors. That is
+        the best available outcome for a test: loud, and at step 0 rather than in
+        a result table six weeks later. The silent case -- a `forward` that
+        happened to accept the arguments -- is the one this cannot catch, and is
+        exactly the case the declared protocol removes rather than tests around.
+        """
+        from src.train import compute_loss
+
+        model = trainer_build(name)
+        model.eval()
+        model.regression_head = nn.Linear(TINY["embed_dim"], TINY["embed_dim"])
+
+        ids = batch()
+        view_a, view_b = two_views(ids, 0, 0.3)
+        mask = torch.zeros_like(ids, dtype=torch.long)
+
+        loss, info, diag = compute_loss(model, view_a, view_b, mask)
+        with torch.no_grad():
+            expected, _ = model.compute_loss(view_a, view_b, mask)
+        assert torch.isclose(loss, expected), (
+            f"{name} did not reach its own loss once it owned a `regression_head`; "
+            "the dispatch is still deciding on attribute names"
+        )
+        assert isinstance(info, dict) and info, f"{name} returned no info dict to log"
+        assert diag == {}, f"{name} returned JEPA-shaped diagnostics it never filled"
+
+    # ---- BYOL's teacher: the second silent routing ----
+
+    @pytest.mark.parametrize("name", sorted(ARMS))
+    def test_only_byol_is_expected_to_hold_a_self_managed_ema(self, name):
+        """Which arms the trainer must advance a teacher on, stated as a set.
+
+        Asserted against `SELF_EMA_ARMS` rather than against the loop's source so
+        the reason is legible; `test_the_loop_reaches_ema_through_that_set` covers
+        the loop itself.
+        """
+        from src.train import SELF_EMA_ARMS
+
+        assert (name in SELF_EMA_ARMS) is (name == "byol"), (
+            f"{name} in SELF_EMA_ARMS={name in SELF_EMA_ARMS}; BYOL owns an EMA "
+            "teacher and the other three do not"
+        )
+        assert "text_span_jepa" not in SELF_EMA_ARMS, (
+            "JEPA's teacher is driven by EMATauSchedule and takes `tau` as an "
+            "argument; it is a different call and must not share this branch"
+        )
+
+    def test_byols_teacher_actually_moves_through_the_trainers_ema_call(self):
+        """The behaviour `do_ema_update(model, "byol")` is supposed to have.
+
+        The student is perturbed first, for the reason
+        `TestByolCollapse::test_the_teacher_is_ema_updated_toward_the_student`
+        records: the teacher is a `deepcopy` taken in `__init__`, so at step 0
+        the two encoders agree bitwise and an EMA that works is indistinguishable
+        from an EMA that does nothing.
+
+        Both halves are asserted. A hook that moved the STUDENT instead would
+        satisfy the gap-closing assertion alone, and would be a silent disaster:
+        the arm would train, and its teacher would be following it.
+        """
+        from src.train import do_ema_update
+
+        model = trainer_build("byol")
+        with torch.no_grad():
+            for param in model.encoder.parameters():
+                param.add_(torch.randn_like(param) * 0.1)
+
+        student_before = [p.detach().clone() for p in model.encoder.parameters()]
+        gaps_before = [
+            (s - t).norm() for s, t in zip(student_before, model.target_encoder.parameters())
+        ]
+        assert all(g > 0 for g in gaps_before), "teacher and student already agree; test is vacuous"
+
+        do_ema_update(model, "byol")
+
+        student_after = [p.detach().clone() for p in model.encoder.parameters()]
+        assert all(
+            torch.equal(a, b) for a, b in zip(student_before, student_after)
+        ), "the EMA update moved the STUDENT; the teacher is the only thing it may touch"
+        gaps_after = [
+            (s - t).norm() for s, t in zip(student_after, model.target_encoder.parameters())
+        ]
+        assert all(
+            a < b for a, b in zip(gaps_after, gaps_before)
+        ), "the teacher did not move toward the student"
+
+    def test_the_loop_reaches_ema_through_that_set(self):
+        """`main()`'s per-step EMA branch must test the SET, not a literal arm.
+
+        The one-line version of the trap. `do_ema_update` could handle BYOL and
+        the loop would still never call it, because the loop's condition is a
+        separate statement -- and the symptom is not a crash: the run trains with
+        a teacher frozen at its random initialisation, logs a falling loss, and
+        produces a model that is not the method the config names. Nothing in this
+        file could see that from the outside, which is why the call site is
+        pinned here.
+        """
+        import inspect
+        import re
+
+        import src.train as train_mod
+
+        body = inspect.getsource(train_mod.main)
+        assert re.search(r"elif\s+model_name\s+in\s+SELF_EMA_ARMS\s*:", body), (
+            "main()'s EMA branch no longer tests SELF_EMA_ARMS; an arm added to "
+            "that set would silently train without its teacher being advanced"
+        )
+
+    # ---- the optimizer ----
+
+    @pytest.mark.parametrize("name", sorted(ARMS))
+    def test_the_optimizer_holds_exactly_the_trainable_parameters(self, name):
+        """Two failures in one assertion, both of which are silent.
+
+        A FROZEN parameter in the optimizer (BYOL's teacher) can never receive a
+        gradient -- it is dead weight the optimizer carries forever. A trainable
+        parameter MISSING from it is the R18 defect this repo already fixed once:
+        the module trains, the parameter never moves, and the result is a model
+        that is quietly not the one that was configured. `get_param_groups`'s
+        catch-all branch would have produced the first for BYOL.
+        """
+        from src.train import get_param_groups
+
+        model = trainer_build(name)
+        groups = get_param_groups(model, name)
+        optimised = [p for group in groups for p in group["params"]]
+        assert len(optimised) == len(
+            {id(p) for p in optimised}
+        ), f"{name} puts the same parameter in two optimizer groups"
+        assert {id(p) for p in optimised} == {
+            id(p) for p in model.parameters() if p.requires_grad
+        }, (
+            f"{name}'s optimizer does not hold exactly its trainable parameters; "
+            "a frozen teacher or an invisible parameter is the usual cause"
+        )
+
+    @pytest.mark.parametrize("name", sorted(ARMS))
+    def test_the_encoder_keeps_the_repo_weight_decay_split(self, name):
+        """LayerNorm weights and biases must be excluded from weight decay.
+
+        Weight decay on a normalisation scale is a known optimiser defect, and
+        this repo's convention is explicit in every other arm's branch. The
+        catch-all would have decayed everything; the arms would still converge,
+        so the defect would surface as a slightly worse baseline rather than as
+        an error.
+        """
+        from src.train import get_param_groups
+
+        model = trainer_build(name)
+        groups = get_param_groups(model, name, wd=0.04)
+        owner = {id(p): group for group in groups for p in group["params"]}
+
+        for param_name, param in model.encoder.named_parameters():
+            group = owner[id(param)]
+            if ("bias" in param_name) or (len(param.shape) == 1):
+                assert group.get("weight_decay", None) == 0, (
+                    f"{name}.encoder.{param_name} is a bias or a 1-D norm weight "
+                    "and is still being weight-decayed"
+                )
+            else:
+                assert group.get("weight_decay", None) in (None, 0.04), (
+                    f"{name}.encoder.{param_name} should be decayed at the "
+                    f"requested wd, got {group.get('weight_decay')}"
+                )
+
+    # ---- config keys ----
+
+    def test_create_model_reads_only_keys_defaults_yaml_declares(self):
+        """Why these arms read no method hyperparameter from `model:`.
+
+        `_warn_unknown_config_keys` warns about any config leaf whose dotted path
+        is absent from `defaults.yaml`, unless the path is in its `extra_known`
+        set -- and `tests/test_config_system.py::test_trainer_extra_known_matches_the_trainer`
+        pins that set against its own copy, so a new exemption there fails a test
+        this file does not own. A `model.target_momentum` read therefore needs
+        three coordinated edits in three files, none of them in this card.
+
+        So it is not read: each method hyperparameter already defaults to its
+        published-paper value, and an arm built from `defaults.yaml` alone trains
+        the method as published. This test makes that a stated property instead of
+        an accident -- adding a `model_cfg.get(...)` to the branch turns it red
+        and names the two files that have to move with it.
+        """
+        import inspect
+        import re
+
+        import src.train as train_mod
+
+        with open(
+            Path(train_mod.__file__).resolve().parent.parent / "defaults.yaml", encoding="utf-8"
+        ) as handle:
+            defaults = yaml.safe_load(handle)
+        declared = set(defaults["model"])
+
+        source = inspect.getsource(train_mod.create_model)
+        start = source.index("elif model_name in SSL_BASELINE_ARMS:")
+        rest = source[start:]
+        ends = [rest.index(marker) for marker in ("\n    elif ", "\n    else:") if marker in rest]
+        branch = rest[: min(ends)] if ends else rest
+        read = set(re.findall(r'model_cfg\.get\("([a-z_]+)"', branch))
+
+        assert read, "the branch reads no model keys at all; this test is stale"
+        assert read <= declared, (
+            f"create_model reads {sorted(read - declared)}, which "
+            f"defaults.yaml does not declare. Every such key must also be added "
+            "to src/train.py's `extra_known` AND to "
+            "tests/test_config_system.py::_TRAINER_EXTRA_KNOWN, or every run of "
+            "this arm logs a 'possible typo' warning for a key it is using"
+        )
 
 
 # ═══════════════════════════════════════════════════════════════════
