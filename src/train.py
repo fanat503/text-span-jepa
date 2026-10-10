@@ -53,8 +53,69 @@ def _deep_merge(base, override):
 
 
 # ═══════════════════════════════════════════════════════════════════
-#  Model name normalization — handles config suffixes
+#  Arm registry — the one place that says what an arm IS
 # ═══════════════════════════════════════════════════════════════════
+
+# The three call signatures `compute_loss` has to choose between. They are named
+# rather than inferred, and that is the whole point of this section.
+#
+# WHAT WENT WRONG BEFORE
+# ----------------------
+# The dispatch asked, in order, "does the model have `compute_loss_with_targets`?"
+# then "does it have `forward` AND an attribute named `regression_head`?", and only
+# then fell through to `compute_loss`. Both earlier branches are POSITIVE tests for
+# an incidental attribute name, so the branch an arm landed in was a property of
+# what it happened to be called rather than of what it is. `regression_head` is in
+# particular the obvious name for a regression-style head, so an arm that adopted
+# it would have been handed data2vec's call signature -- and, because
+# `MLMBaseline` is the arm that reaches the `compute_loss` branch, the four SSL
+# baselines would all have been routed through whatever the FIRST matching arm
+# was. They happened not to own the name, so nothing broke. That is luck, and the
+# next arm to grow a head called `regression_head` inherits a silent mis-route.
+#
+# The protocol is now DECLARED per arm, in one table, by `create_model`. There is
+# exactly one call site per protocol regardless of how many arms share it.
+
+LOSS_JEPA_TARGETS = "jepa_targets"  # compute_loss_with_targets(a, b, mask, **) -> 3-tuple
+LOSS_DATA2VEC_FORWARD = "data2vec_forward"  # model(a, b, mask) -> (loss, info)
+LOSS_COMPUTE_LOSS = "compute_loss"  # model.compute_loss(a, b, mask) -> (loss, info)
+
+#: Canonical arm name (what `_normalize_model_name` returns) -> declared protocol.
+#:
+#: Keys must be exactly the set `_normalize_model_name` can return for an arm
+#: `create_model` builds. `tests/test_ssl_baselines.py::TestTrainerContract` pins
+#: that correspondence in both directions, so an arm added to `create_model`
+#: without an entry here is a failing test rather than a lucky duck-type.
+LOSS_PROTOCOLS = {
+    "text_span_jepa": LOSS_JEPA_TARGETS,
+    "data2vec": LOSS_DATA2VEC_FORWARD,
+    "mlm": LOSS_COMPUTE_LOSS,
+    "byol": LOSS_COMPUTE_LOSS,
+    "barlow": LOSS_COMPUTE_LOSS,
+    "vicreg": LOSS_COMPUTE_LOSS,
+    "simsiam": LOSS_COMPUTE_LOSS,
+}
+
+#: Arms that own an EMA teacher the trainer advances through a zero-argument
+#: `model.update_target_encoder()`, and that therefore need no `tau`.
+#:
+#: `text_span_jepa` is deliberately absent: its teacher is driven by the
+#: `EMATauSchedule` and takes `tau` as an argument, so it is a different call.
+SELF_EMA_ARMS = frozenset({"data2vec", "byol"})
+
+#: Canonical prefix -> canonical arm name, used by `_normalize_model_name`. Held
+#: as a table rather than an if-chain so the prefixes and `LOSS_PROTOCOLS` can be
+#: checked against each other by a test instead of by reading.
+_ARM_PREFIXES = {
+    "text_span_jepa": "text_span_jepa",
+    "jepa": "text_span_jepa",
+    "mlm": "mlm",
+    "data2vec": "data2vec",
+    "byol": "byol",
+    "barlow": "barlow",
+    "vicreg": "vicreg",
+    "simsiam": "simsiam",
+}
 
 
 def _normalize_model_name(raw_name):
@@ -64,15 +125,16 @@ def _normalize_model_name(raw_name):
     'mlm_small', 'data2vec_base'. We strip the suffix to get
     the canonical name that create_model() understands.
 
-    Canonical names: text_span_jepa, mlm, data2vec
+    Canonical names: the keys of `LOSS_PROTOCOLS` -- text_span_jepa, mlm,
+    data2vec, byol, barlow, vicreg, simsiam.
+
+    A name that matches no prefix is returned as-is and fails in `create_model`
+    with the list of what IS supported.
     """
     name = raw_name.strip().lower()
-    if name.startswith(("text_span_jepa", "jepa")):
-        return "text_span_jepa"
-    if name.startswith("mlm"):
-        return "mlm"
-    if name.startswith("data2vec"):
-        return "data2vec"
+    for prefix, canonical in _ARM_PREFIXES.items():
+        if name.startswith(prefix):
+            return canonical
     return name  # Return as-is, will fail in create_model with clear error
 
 
@@ -245,7 +307,12 @@ def save_checkpoint(
 
     if model_name == "text_span_jepa":
         state["mechanism_extras"] = _mechanism_extras(model)
-    elif model_name == "data2vec" and hasattr(model, "num_updates"):
+    elif model_name in SELF_EMA_ARMS and hasattr(model, "num_updates"):
+        # A self-managed teacher counts its own updates. `num_updates` is a plain
+        # int, not a tensor, so it is NOT in `model.state_dict()` and a resume
+        # would silently rewind it to 0. For BYOL this is currently cosmetic
+        # (its momentum is constant, so the counter feeds nothing); for data2vec
+        # it is not, which is why the key already existed.
         state["num_updates"] = model.num_updates
 
     if schedulers:
@@ -396,6 +463,15 @@ def load_checkpoint(
             model.load_state_dict(checkpoint["model"], strict=True)
             if ckpt_model_name == "text_span_jepa":
                 _restore_mechanism_extras(model, checkpoint.get("mechanism_extras"))
+            elif (
+                ckpt_model_name in SELF_EMA_ARMS
+                and hasattr(model, "num_updates")
+                and "num_updates" in checkpoint
+            ):
+                # Inverse of `save_checkpoint`. A checkpoint written before the key
+                # existed is NOT an error: `num_updates` simply stays at 0, which is
+                # the behaviour these arms have always had.
+                model.num_updates = checkpoint["num_updates"]
         elif ckpt_model_name == "text_span_jepa":
             logger.warning(
                 f"Checkpoint {path} predates full-state_dict writes; restoring the "
@@ -451,12 +527,68 @@ def load_checkpoint(
 
 
 # ═══════════════════════════════════════════════════════════════════
+#  The four SSL arms — BYOL, Barlow Twins, VICReg, SimSiam
+# ═══════════════════════════════════════════════════════════════════
+
+
+def _load_byol():
+    from baselines.byol_baseline import BYOLBaseline
+
+    return BYOLBaseline
+
+
+def _load_barlow():
+    from baselines.barlow_baseline import BarlowTwinsBaseline
+
+    return BarlowTwinsBaseline
+
+
+def _load_vicreg():
+    from baselines.vicreg_baseline import VICRegBaseline
+
+    return VICRegBaseline
+
+
+def _load_simsiam():
+    from baselines.simsiam_baseline import SimSiamBaseline
+
+    return SimSiamBaseline
+
+
+#: Canonical arm name -> zero-argument class loader.
+#:
+#: Resolved through callables rather than imported at module scope for the same
+#: reason every other `create_model` branch imports inside its own `elif`: a bare
+#: `import src.train` must not drag in four baseline modules and their encoder.
+SSL_BASELINE_ARMS = {
+    "byol": _load_byol,
+    "barlow": _load_barlow,
+    "vicreg": _load_vicreg,
+    "simsiam": _load_simsiam,
+}
+
+#: Which head submodules each SSL arm puts in the optimizer, in order.
+#:
+#: BYOL is the only one with a teacher; `target_encoder` and `target_projector`
+#: are deliberately absent, and that is not an oversight -- they are frozen
+#: (`requires_grad = False`), so a parameter in the optimizer that can never
+#: receive a gradient is a parameter the optimizer is silently carrying.
+#: `Data2VecTextBaseline` is handled the same way, which is the precedent.
+_SSL_HEAD_ATTRS = {
+    "byol": ("projector", "predictor"),
+    "barlow": ("projector",),
+    "vicreg": ("projector", "predictor"),
+    "simsiam": ("projector", "predictor"),
+}
+
+
+# ═══════════════════════════════════════════════════════════════════
 #  Model creation factory
 # ═══════════════════════════════════════════════════════════════════
 
 
 def create_model(model_name, model_cfg, vocab_size, max_seq_len, device):
-    """Create model by type — supports jepa, mlm, data2vec.
+    """Create model by type — supports jepa, mlm, data2vec and four SSL arms.
 
     model_name is automatically normalized from config values like
     'text_span_jepa_small' -> 'text_span_jepa'.
@@ -481,6 +613,7 @@ def create_model(model_name, model_cfg, vocab_size, max_seq_len, device):
             num_heads=model_cfg.get("num_heads", 12),
             mlp_ratio=model_cfg.get("mlp_ratio", 4.0),
             drop_rate=model_cfg.get("drop_rate", 0.1),
+            drop_path_rate=model_cfg.get("drop_path_rate", 0.0),
         ).to(device)
         # Add a .config attribute for compatibility
         model.config = type(
@@ -505,6 +638,7 @@ def create_model(model_name, model_cfg, vocab_size, max_seq_len, device):
             num_heads=model_cfg.get("num_heads", 12),
             mlp_ratio=model_cfg.get("mlp_ratio", 4.0),
             drop_rate=model_cfg.get("drop_rate", 0.0),
+            drop_path_rate=model_cfg.get("drop_path_rate", 0.0),
             average_top_k_layers=model_cfg.get("average_top_k_layers", 8),
             loss_beta=model_cfg.get("loss_beta", 0.0),
             loss_scale=model_cfg.get("loss_scale", None),
@@ -524,11 +658,86 @@ def create_model(model_name, model_cfg, vocab_size, max_seq_len, device):
                 "lambda_future": 0.5,
             },
         )()
+    elif model_name in SSL_BASELINE_ARMS:
+        # One branch for all four, because they are constructed from the SAME
+        # arguments: the shared `TextSpanJEPAEncoder` at the config's shape plus
+        # nothing else. Their head widths come from each module's
+        # `HIDDEN_MULTIPLE * embed_dim`, which is what lands them on JEPA's
+        # trainable count, so no width needs to be passed in for the parameter
+        # matching to hold.
+        #
+        # No METHOD hyperparameter is read here on purpose. Every method
+        # hyperparameter these arms take (`target_momentum`, `lambda_offdiag`,
+        # `sim_weight` / `var_weight` / `cov_weight` / `gamma`) already has its
+        # published-paper value as the constructor default, so an arm built from
+        # `defaults.yaml` alone trains the method as published. Making them
+        # settable is a `defaults.yaml` change -- which also means new entries in
+        # `_warn_unknown_config_keys`' `extra_known` and in
+        # `tests/test_config_system.py::_TRAINER_EXTRA_KNOWN`, which is kept in
+        # step with the trainer by
+        # `test_trainer_extra_known_matches_the_trainer`. That is deliberately
+        # NOT done here: exempting a key that no shipped config uses is a
+        # permanent hole in the typo detector, bought for a knob that has a
+        # correct default.
+        #
+        # `drop_path_rate` is a different category and IS read. It is not part
+        # of any of the four methods -- it is a property of the shared
+        # `TextSpanJEPAEncoder` trunk, which every arm in this repo builds. This
+        # branch used to omit it while the JEPA branch honoured it, so at the
+        # reference config the JEPA column ran stochastic depth and all six
+        # baseline columns ran `nn.Identity`: the row then measured the method
+        # AND a regulariser, which is not a comparison of methods. Omitting it
+        # here is exactly the asymmetry of the `drop_rate` argument four lines
+        # up, which IS read. Pinned by
+        # `tests/test_ssl_baselines.py::TestRegularizationParity`, which reads
+        # the built modules rather than the constructor signature because these
+        # classes swallow unknown keywords in `**kwargs`.
+        model = SSL_BASELINE_ARMS[model_name]()(
+            vocab_size=vocab_size,
+            max_seq_len=max_seq_len,
+            embed_dim=model_cfg.get("embed_dim", 768),
+            depth=model_cfg.get("encoder_depth", 12),
+            num_heads=model_cfg.get("num_heads", 12),
+            mlp_ratio=model_cfg.get("mlp_ratio", 4.0),
+            drop_rate=model_cfg.get("drop_rate", 0.0),
+            drop_path_rate=model_cfg.get("drop_path_rate", 0.0),
+        ).to(device)
     else:
         raise ValueError(
-            f"Unknown model_name: {model_name}. " f"Supported: text_span_jepa, mlm, data2vec",
+            f"Unknown model_name: {model_name}. " f"Supported: {', '.join(sorted(LOSS_PROTOCOLS))}",
         )
+
+    # Stamp the DECLARED loss protocol so `compute_loss` dispatches on what this
+    # arm IS rather than on which attribute names it happens to own. A table
+    # lookup, so an arm added to the branches above without a `LOSS_PROTOCOLS`
+    # entry raises here instead of being routed by accident at step 0.
+    model.loss_protocol = LOSS_PROTOCOLS[model_name]
     return model
+
+
+def _infer_loss_protocol(model):
+    """Best-effort protocol for a model `create_model` did not build.
+
+    This is the OLD duck-typed chain, kept verbatim and narrowed to returning one
+    of the three protocol constants. It exists for exactly two callers: models
+    constructed directly by a caller or a test (`tests/test_model.py` builds a
+    `TextSpanJEPA`, an `MLMBaseline` and a `Data2VecTextBaseline` by hand and hands
+    them to `compute_loss`), and any future arm wired in without going through
+    `create_model`.
+
+    It is a COMPATIBILITY path, not the dispatch: nothing `create_model` builds is
+    ever routed by it, so the trap it encodes -- an arm silently picked up by the
+    `regression_head` test -- cannot reach a training run. Returns None when no
+    protocol applies, which `compute_loss` turns into the same ValueError as
+    before.
+    """
+    if hasattr(model, "compute_loss_with_targets"):
+        return LOSS_JEPA_TARGETS
+    if hasattr(model, "forward") and hasattr(model, "regression_head"):
+        return LOSS_DATA2VEC_FORWARD
+    if hasattr(model, "compute_loss"):
+        return LOSS_COMPUTE_LOSS
+    return None
 
 
 def compute_loss(
@@ -542,8 +751,19 @@ def compute_loss(
     """Compute loss for any model type — unified interface.
 
     Always returns (total_loss, loss_dict, diag_dict) for consistency.
+
+    Dispatches on the DECLARED protocol (`model.loss_protocol`, stamped by
+    `create_model`), not on duck-typing. See the arm registry at the top of this
+    file for what the old order-based chain cost. The signature is unchanged
+    because two tests replace this function outright with a five-argument stub
+    (`tests/test_grad_scaler.py`, `tests/test_checkpoint_fidelity.py`) and the
+    production call sites therefore cannot grow a `model_name=` keyword.
     """
-    if hasattr(model, "compute_loss_with_targets"):
+    protocol = getattr(model, "loss_protocol", None)
+    if protocol is None:
+        protocol = _infer_loss_protocol(model)
+
+    if protocol == LOSS_JEPA_TARGETS:
         # JEPA model — returns (loss, loss_dict, diag_dict)
         return model.compute_loss_with_targets(
             masked_input_ids,
@@ -552,16 +772,15 @@ def compute_loss(
             current_step=current_step,
             total_steps=total_steps,
         )
-    elif hasattr(model, "forward") and hasattr(model, "regression_head"):
+    if protocol == LOSS_DATA2VEC_FORWARD:
         # data2vec — returns (loss, info_dict)
         loss, info = model(masked_input_ids, original_input_ids, mask_positions)
         return loss, info, {}
-    elif hasattr(model, "compute_loss"):
-        # MLM — returns (loss, info_dict)
+    if protocol == LOSS_COMPUTE_LOSS:
+        # MLM and the four SSL arms — returns (loss, info_dict)
         loss, info = model.compute_loss(masked_input_ids, original_input_ids, mask_positions)
         return loss, info, {}
-    else:
-        raise ValueError(f"Model {type(model).__name__} has no supported loss method")
+    raise ValueError(f"Model {type(model).__name__} has no supported loss method")
 
 
 def get_param_groups(model, model_name, wd=0.04):
@@ -661,6 +880,38 @@ def get_param_groups(model, model_name, wd=0.04):
             },
             {"params": list(model.regression_head.parameters()), "weight_decay": wd},
         ]
+    elif model_name in SSL_BASELINE_ARMS:
+        # Encoder with the repo's WD_exclude split, then each head at full WD.
+        # The split is the same one every other arm gets: weight decay on
+        # LayerNorm weights and biases is a known optimiser defect, and letting
+        # these four arms fall through to the `else` catch-all below would apply
+        # `weight_decay=0.04` to EVERY parameter -- a baseline trained that way is
+        # not a faithful baseline, and the defect would be invisible because the
+        # arms still converge.
+        #
+        # BYOL's frozen teacher is excluded by `_SSL_HEAD_ATTRS` naming only the
+        # online heads; see that table.
+        groups = [
+            {
+                "params": [
+                    p
+                    for n, p in model.encoder.named_parameters()
+                    if ("bias" not in n) and (len(p.shape) != 1)
+                ],
+            },
+            {
+                "params": [
+                    p
+                    for n, p in model.encoder.named_parameters()
+                    if ("bias" in n) or (len(p.shape) == 1)
+                ],
+                "WD_exclude": True,
+                "weight_decay": 0,
+            },
+        ]
+        for attr in _SSL_HEAD_ATTRS[model_name]:
+            groups.append({"params": list(getattr(model, attr).parameters()), "weight_decay": wd})
+        return groups
     else:
         return [{"params": list(model.parameters())}]
 
@@ -670,14 +921,15 @@ def do_ema_update(model, model_name, tau=None):
 
     model_name is automatically normalized.
     For JEPA: uses scheduled tau from EMATauSchedule.
-    For data2vec: uses model's internal get_annealed_decay().
+    For data2vec and BYOL: uses the model's own zero-argument update, which
+    reads its own annealed momentum internally.
     """
     model_name = _normalize_model_name(model_name)
 
     if model_name == "text_span_jepa":
         if tau is not None:
             model.update_target_encoder(tau)
-    elif model_name == "data2vec":
+    elif model_name in SELF_EMA_ARMS:
         model.update_target_encoder()
     # MLM has no EMA target — no-op
 
@@ -1496,7 +1748,13 @@ def main(args):
                 tau = ema_scheduler.step()
                 do_ema_update(model, model_name, tau)
                 ema_step += 1
-            elif model_name == "data2vec":
+            elif model_name in SELF_EMA_ARMS:
+                # Arms whose teacher is annealed internally. BYOL is here for a
+                # reason worth writing down: without this branch it trains with a
+                # teacher FROZEN AT RANDOM INITIALISATION. `do_ema_update` would
+                # handle it, but nothing would call it -- the arm still descends,
+                # still logs a falling loss, and is not BYOL. The failure is a
+                # model that only shows up as a bad number much later.
                 do_ema_update(model, model_name)
 
             mask_collator.step()

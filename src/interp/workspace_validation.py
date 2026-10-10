@@ -34,6 +34,8 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from src.interp import rng
+
 logger = logging.getLogger(__name__)
 
 _EPS = 1e-10
@@ -71,14 +73,20 @@ class TopKSAE(nn.Module):
         embed_dim: input dimension (D).
         n_features: SAE latent dimension (typically 16x-64x D).
         k: number of active features per token.
+        seed: seeds a private ``torch.Generator`` for the encoder and decoder
+            matrices, so two SAEs built with the same seed are bit-identical and
+            building one leaves the process-global RNG untouched.
 
     """
 
-    def __init__(self, embed_dim: int, n_features: int = 8192, k: int = 32):
+    def __init__(
+        self, embed_dim: int, n_features: int = 8192, k: int = 32, seed: int | None = None
+    ):
         super().__init__()
         self.embed_dim = embed_dim
         self.n_features = n_features
         self.k = k
+        self.seed = seed
         if n_features <= 0 or embed_dim <= 0:
             raise ValueError(
                 f"n_features and embed_dim must be positive, got {n_features}, {embed_dim}"
@@ -86,12 +94,22 @@ class TopKSAE(nn.Module):
         if not 1 <= k <= n_features:
             raise ValueError(f"k must be in [1, n_features={n_features}], got {k}")
 
+        # Private generator: these two matrices are the module's only
+        # randomness, and they previously came from the process-global stream,
+        # so two SAEs built in one process differed by whatever else had drawn
+        # in between. Same seed -> bit-identical decoder.
+        gen = rng.generator_for(seed, "workspace_validation.topk_sae")
+
         # Encoder: x -> features
-        self.W_enc = nn.Parameter(torch.randn(embed_dim, n_features) * (1.0 / embed_dim))
+        self.W_enc = nn.Parameter(
+            torch.randn(embed_dim, n_features, generator=gen) * (1.0 / embed_dim)
+        )
         self.b_enc = nn.Parameter(torch.zeros(n_features))
 
         # Decoder: features -> x_hat
-        self.W_dec = nn.Parameter(torch.randn(n_features, embed_dim) * (1.0 / n_features))
+        self.W_dec = nn.Parameter(
+            torch.randn(n_features, embed_dim, generator=gen) * (1.0 / n_features)
+        )
         self.b_dec = nn.Parameter(torch.zeros(embed_dim))
 
         # How many optimizer steps this SAE has actually taken. Persistent, so

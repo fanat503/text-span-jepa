@@ -35,6 +35,10 @@ Pinned contracts
     `checkpoint-latest.pth.tar`. (The one collision in the pre-guard tree was
     the three `config/kaggle/*.yaml` arms, which trained the JEPA-vs-MLM-vs-
     data2vec comparison into a single directory.)
+9.  Every baseline class under `baselines/` has an arm in `config/ablations/`
+    that BUILDS that class rather than a JEPA, and every arm in that directory
+    resolves to one training budget -- so the external-baseline rows measure the
+    method and not the schedule.
 
 CPU-only, no network, no training. Model construction for parameter counting is
 on `meta` tensors; mechanism activation uses a shrunk shape.
@@ -231,10 +235,20 @@ def _effective_batch(cfg: dict) -> int:
 
 
 # Everything a capacity sweep must hold fixed: only width and depth may move.
+#
+# `data.mask_ratio` was in this tuple and has been REMOVED, because the key no
+# longer exists: `src/train.py` always passes `model.mask_ratio_start/end` to
+# `SpanMaskCollator` and the ramp overrides the flat value in every shipped
+# config (see TestOnlyOneMaskRatioKnobIsLive). Removing it is not a weakening --
+# the mask schedule is still pinned along the ladder, by the two keys that
+# actually drive it, `model.mask_ratio_start` and `model.mask_ratio_end`, both
+# present below. What goes away is a pin on a number no run used, which read as
+# coverage and was not. `test_every_pinned_constant_actually_exists` is the
+# guard added alongside it: without that, deleting the key left this tuple
+# asserting a constant that had ceased to exist.
 LADDER_CONSTANTS = (
     "data.max_seq_len",
     "data.batch_size",
-    "data.mask_ratio",
     "optimization.grad_accum_steps",
     "optimization.epochs",
     "optimization.lr",
@@ -850,6 +864,34 @@ class TestScalingLadder:
     def test_ladder_has_four_rungs(self):
         assert len(LADDER) >= 4, f"config/scaling/*.yaml found: {LADDER}"
 
+    def test_every_pinned_constant_actually_exists(self):
+        """Guards the guard: a pinned path must RESOLVE, not merely agree.
+
+        `_get` returns the `KeyError` CLASS when a path is absent, and every
+        rung then produces the same `repr`, so `test_constant_along_the_ladder`
+        passes for a key that does not exist anywhere. That is not hypothetical:
+        `data.mask_ratio` was in `LADDER_CONSTANTS` and was deleted from
+        defaults.yaml (it could never reach the model -- the
+        `model.mask_ratio_start/end` ramp overrides it), after which the ladder
+        test reported green while asserting nothing at all.
+
+        A capacity sweep that pins a hyperparameter nobody reads is worse than
+        one that pins nothing, because the passing test is the evidence. This
+        asserts the property the other test silently assumes.
+        """
+        missing = [
+            dotted
+            for dotted in LADDER_CONSTANTS
+            if _get(_merged(f"config/scaling/{LADDER[0]}"), dotted) is KeyError
+        ]
+        assert not missing, (
+            f"LADDER_CONSTANTS pins {missing}, which no scaling rung declares "
+            "(and defaults.yaml no longer declares either). "
+            "test_constant_along_the_ladder is passing vacuously for these: a "
+            "missing key gives every rung the same `KeyError` repr. Remove the "
+            "entry, or restore the key if it is genuinely meant to be held fixed."
+        )
+
     @pytest.mark.parametrize("dotted", LADDER_CONSTANTS)
     def test_constant_along_the_ladder(self, dotted):
         values = {n: _get(_merged(f"config/scaling/{n}"), dotted) for n in LADDER}
@@ -1308,4 +1350,322 @@ class TestOneOutputDirPerRun:
             f"data2vec on one T4, one corpus, one effective batch -- so a shared "
             f"folder destroys the comparison it exists to produce. Update "
             f"KAGGLE_FOLDERS in this file when the convention changes."
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  10. External baselines: every baseline class needs an ablation arm
+# ══════════════════════════════════════════════════════════════════════
+
+BASELINE_DIR = REPO / "baselines"
+
+#: What "the same training budget" means, as dotted paths on the MERGED config.
+#:
+#: `epochs`, `max_seq_len`, the micro-batch and the accumulation are the four
+#: factors of tokens-per-step-times-steps. `max_seq_len` is here because a config
+#: that shortened it would buy the same nominal epoch count for half the tokens,
+#: which is the same defect wearing a different hat.
+#:
+#: Deliberately NOT in this list: `lr`, `weight_decay`, `warmup`. A per-method
+#: learning rate is a legitimate experimental variable -- config/wikitext/* runs
+#: its baseline columns at lr 5e-4 -- and pinning those from here would be this
+#: file choosing an experiment's schedule rather than checking one. Budget only.
+BUDGET_KEYS = (
+    "optimization.epochs",
+    "data.max_seq_len",
+    "data.batch_size",
+    "optimization.grad_accum_steps",
+)
+
+_BASELINE_MODULE_RE = re.compile(r"^(?P<arm>.+)_baseline\.py$")
+
+
+def _baseline_modules() -> list:
+    """Every `baselines/*_baseline.py`, sorted. Discovered, never restated."""
+    return sorted(p.name for p in BASELINE_DIR.glob("*_baseline.py"))
+
+
+def _arm_of(module_name: str) -> str:
+    """`byol_baseline.py` -> `byol`.
+
+    The arm name is the module name without its suffix, which is the same string
+    `_ARM_PREFIXES` and `LOSS_PROTOCOLS` key on. That is not a coincidence to be
+    papered over: it is what lets a new baseline be given an arm by following the
+    naming convention instead of by editing a table in this file.
+    """
+    m = _BASELINE_MODULE_RE.match(module_name)
+    assert m is not None, (
+        f"{module_name} does not follow the <arm>_baseline.py convention, so the "
+        f"arm name for it cannot be derived. Rename the module, or extend "
+        f"_BASELINE_MODULE_RE and say why."
+    )
+    return m.group("arm")
+
+
+BASELINE_MODULES = _baseline_modules()
+BASELINE_ARMS = {name: f"{ABLATIONS}/{_arm_of(name)}.yaml" for name in BASELINE_MODULES}
+
+
+def _baseline_classes(module_name: str) -> list:
+    """The `*Baseline` nn.Module classes DEFINED in `baselines/<module>.py`.
+
+    Read out of the module rather than restated from a table in this file, so a
+    baseline added later is covered by the guard below from the moment it lands.
+    A class merely IMPORTED into the module does not count: this answers "what is
+    implemented here", which is exactly what needs an arm of its own.
+    """
+    import importlib
+    import inspect
+
+    module = importlib.import_module(f"baselines.{module_name[: -len('.py')]}")
+    here = (BASELINE_DIR / module_name).resolve()
+    found = []
+    for _name, obj in inspect.getmembers(module, inspect.isclass):
+        if not obj.__name__.endswith("Baseline") or not issubclass(obj, torch.nn.Module):
+            continue
+        source = inspect.getsourcefile(obj)
+        if source is None or Path(source).resolve() != here:
+            continue
+        found.append(obj)
+    return found
+
+
+class TestBaselineArmsAreCompleteAndComparable:
+    """Every baseline class under `baselines/` must have an arm in this directory.
+
+    THE DEFECT THIS EXISTS FOR
+    -------------------------
+    `config/ablations/` held 40 arms and ZERO external baselines. BYOL, Barlow
+    Twins, VICReg and SimSiam were implemented, wired into `create_model` and
+    reachable by name -- and still could not be compared, because a comparison
+    needs a config and there was not one. Nothing went red when they landed,
+    because a missing experiment is not a broken one. That is the whole reason the
+    first test below exists: the next baseline has to arrive WITH an arm or fail.
+
+    THE SECOND HALF: WHAT THE ARM ACTUALLY BUILDS
+    ---------------------------------------------
+    "There is a yaml" is not "the experiment can be run". `meta.model_name` is
+    normalised by a prefix table and then dispatched, so a plausible-looking name
+    that matches no prefix raises, and -- worse -- a name that normalises to
+    `text_span_jepa` builds a JEPA and the arm looks like it ran. So the arm is
+    BUILT here and the class it produced is checked, at a shrunk shape.
+
+    THE THIRD HALF: ONE BUDGET
+    --------------------------
+    A table whose baselines get 50 epochs while a JEPA arm gets 30 measures the
+    budget, not the method. Every arm in `config/ablations/` inherits the
+    reference schedule from `defaults.yaml` and therefore resolves to one
+    (epochs, sequence length, effective batch) triple; this asserts it, so an
+    arm that declares its own budget has to argue for it in a failing test.
+    """
+
+    def test_every_baseline_module_has_an_arm(self):
+        missing = [rel for rel in BASELINE_ARMS.values() if not (REPO / rel).is_file()]
+        assert not missing, (
+            f"{len(missing)} of {len(BASELINE_ARMS)} baselines have no ablation "
+            f"arm: {missing}. An implemented baseline with no config cannot be "
+            f"compared, and nothing else in the tree notices that -- this test is "
+            f"the only thing standing between the next baseline and the state "
+            f"this directory was in. Write the arm as "
+            f"config/ablations/<module name minus '_baseline'>.yaml."
+        )
+
+    @pytest.mark.parametrize("module_name", BASELINE_MODULES)
+    def test_each_module_defines_exactly_one_baseline_class(self, module_name):
+        """So a second class in one module cannot hide behind the first's arm."""
+        classes = _baseline_classes(module_name)
+        assert len(classes) == 1, (
+            f"baselines/{module_name} defines {len(classes)} *Baseline classes "
+            f"({[c.__name__ for c in classes]}); the arm it can have is named after "
+            f"the module, so a second class would ship with no arm of its own and "
+            f"the guard above would still be green"
+        )
+
+    @pytest.mark.parametrize("module_name", BASELINE_MODULES)
+    def test_the_arm_builds_that_class_and_not_a_jepa(self, module_name):
+        from src.train import LOSS_PROTOCOLS, create_model
+
+        arm = _arm_of(module_name)
+        rel = BASELINE_ARMS[module_name]
+        (cls,) = _baseline_classes(module_name)
+
+        # Checked here so a missing arm fails with the same sentence as the
+        # completeness test above, rather than as a FileNotFoundError raised
+        # from inside the yaml loader with no mention of the class.
+        assert (REPO / rel).is_file(), f"baselines/{module_name} has no arm at {rel}"
+
+        declared = _get(_merged(rel), "meta.model_name")
+        assert _normalize_model_name(declared) == arm, (
+            f"{rel}: meta.model_name={declared!r} normalises to "
+            f"{_normalize_model_name(declared)!r}, not {arm!r}. Either it matches "
+            f"no prefix in `_ARM_PREFIXES` (and `create_model` raises), or it "
+            f"normalises to some other arm -- including `text_span_jepa`, which "
+            f"would train a JEPA and leave this arm looking like it ran."
+        )
+
+        model = create_model(
+            declared,
+            {**_get(_merged(rel), "model"), **_TINY_SHAPE},
+            _TINY_SHAPE["vocab_size"],
+            _TINY_SHAPE["max_seq_len"],
+            torch.device("cpu"),
+        )
+        assert isinstance(model, cls), (
+            f"{rel}: meta.model_name={declared!r} built a {type(model).__name__}, "
+            f"not the {cls.__name__} this arm exists to run"
+        )
+        assert not isinstance(model, TextSpanJEPA), (
+            f"{rel}: built a TextSpanJEPA. This is the failure the whole guard is "
+            f"about -- the arm trains, the loss falls, and the row is a duplicate "
+            f"of the JEPA column."
+        )
+        assert model.loss_protocol == LOSS_PROTOCOLS[arm]
+
+    def test_every_arm_in_this_directory_gets_the_same_training_budget(self):
+        """One budget for all of them, measured on the MERGED config.
+
+        Over every yaml in `config/ablations/`, not only the baseline arms: the
+        budget is a property of the TABLE. A JEPA row that quietly declared 30
+        epochs next to a 50-epoch baseline would measure the budget, and only the
+        JEPA row would look wrong to the reader of the results table.
+
+        Deliberately compares the merged config, not the file: an arm that
+        declares no `optimization:` block inherits the reference, which is the
+        property being asserted.
+        """
+        budgets = {}
+        for path in sorted((REPO / ABLATIONS).glob("*.yaml")):
+            rel = _rel(path)
+            merged = _merged(rel)
+            budgets[rel] = dict(zip(BUDGET_KEYS, (_get(merged, key) for key in BUDGET_KEYS)))
+
+        groups: dict = {}
+        for rel, budget in budgets.items():
+            groups.setdefault(repr(budget), []).append(rel)
+        # Smallest group first: when one arm deviates from the table it IS the
+        # smallest group, so that is the one a reader has to see.
+        ordered = sorted(groups.items(), key=lambda kv: len(kv[1]))
+        assert len(groups) == 1, (
+            f"{len(groups)} training budgets across {len(budgets)} arms of "
+            f"{ABLATIONS}/ on {list(BUDGET_KEYS)}: "
+            + " | ".join(
+                f"{budget} <- {len(rels)} arm(s), smallest first: {sorted(rels)[:3]}"
+                for budget, rels in ordered
+            )
+            + ". A comparison whose arms see different token budgets measures the "
+            "budget, not the method. Declare an arm's schedule only with a reason."
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  11. The mask-ratio knob: which one is live, and which is a decoy
+# ══════════════════════════════════════════════════════════════════════
+
+
+class TestOnlyOneMaskRatioKnobIsLive:
+    """Defect 2: `data.mask_ratio` was declared, set by configs, and inert.
+
+    THE MECHANISM (measured, not inferred)
+    --------------------------------------
+    `SpanMaskCollator.__init__` takes both a flat `mask_ratio` and a
+    `mask_ratio_start` / `mask_ratio_end` ramp, and resolves them like this:
+
+        self.mask_ratio_start = mask_ratio_start if mask_ratio_start is not None else mask_ratio
+        self.mask_ratio_end   = mask_ratio_end   if mask_ratio_end   is not None else mask_ratio
+
+    and `current_mask_ratio` returns the RAMP whenever `curriculum_steps > 0`,
+    falling back to `self.mask_ratio` only when there is no curriculum.
+    `src/train.py` sets `curriculum_steps = 10000` whenever both ramp endpoints
+    are present -- and `defaults.yaml` declares both. So in every shipped config
+    the ramp is live and `data.mask_ratio` is never read. Measured on the
+    shipped defaults:
+
+        defaults data.mask_ratio        : 0.35
+        defaults model.mask_ratio_start : 0.15
+        step 0     current_mask_ratio   : 0.15    <- not 0.35
+        step 4000  current_mask_ratio   : 0.23002 <- mid-ramp
+        no-ramp    current_mask_ratio   : 0.35    <- only reachable without a ramp
+
+    Ten shipped configs set `data.mask_ratio: 0.15`, believing it sets the mask
+    ratio. It does not; they all run the 0.15 -> 0.35 ramp.
+
+    WHY DELETE IT RATHER THAN WIRE IT
+    ----------------------------------
+    Wiring `data.mask_ratio` to win would mean changing the mask schedule of
+    every arm in the repo, including every published run, on the strength of a
+    key nobody had been reading. That is a science decision about what the
+    experiments were, and it is not this card's to make silently. Deleting the
+    decoy is behaviour-preserving -- measured above, no shipped run's ratio
+    changes -- and it removes the trap instead of the ambiguity.
+
+    Deleting it also STRENGTHENS `TestKeyPaths`: the key stops being a path any
+    config may use, so `_warn_unknown_config_keys` now reports a future config
+    that sets it, instead of accepting it silently. The ten configs that set it
+    are corrected to drop the line, which is what `test_no_config_sets_the_inert_key`
+    below pins -- and which is why those ten tests should be believed rather
+    than worked around: they assert that no config carries a key that cannot
+    reach the model, which is the property that was false before.
+    """
+
+    def test_data_mask_ratio_is_not_declared_in_defaults(self):
+        assert "data.mask_ratio" not in _DEFAULTS_LEAVES, (
+            "defaults.yaml declares data.mask_ratio, but src/train.py always "
+            "passes a mask_ratio_start/end ramp, so SpanMaskCollator.current_mask_"
+            "ratio returns the ramp and the value is never read. A declared key "
+            "that cannot reach the model is worse than no key: ten configs set "
+            "it to 0.15 believing that was their mask ratio. Either delete it or "
+            "make the trainer honour it -- do not leave it declared."
+        )
+
+    def test_no_config_sets_the_inert_key(self):
+        """The half that makes the deletion stick.
+
+        Deleting the defaults entry alone would leave the ten configs setting a
+        path that no longer exists, which `_warn_unknown_config_keys` would then
+        (correctly) flag on every run. This asserts they no longer do.
+        """
+        offenders = {
+            rel: _raw(rel)["data"]["mask_ratio"]
+            for rel in CONFIG_IDS
+            if isinstance(_raw(rel).get("data"), dict) and "mask_ratio" in _raw(rel)["data"]
+        }
+        assert not offenders, (
+            f"configs still set data.mask_ratio: {offenders}. The key is not in "
+            "defaults.yaml because the model.mask_ratio_start/end ramp overrides "
+            "it in every shipped config. Delete the line, or restore the key and "
+            "make the trainer read it -- but do not leave a config asserting a "
+            "mask ratio its run does not use."
+        )
+
+    def test_the_ramp_is_what_actually_drives_the_ratio(self):
+        """The property that makes the decoy a decoy, asserted on the collator.
+
+        Reads the schedule the shipped defaults produce, so this goes red if a
+        future edit makes `data.mask_ratio` live again -- at which point
+        `test_data_mask_ratio_is_not_declared_in_defaults` has to be revisited
+        rather than deleted.
+        """
+        from src.masks.span import SpanMaskCollator
+
+        start = _DEFAULTS["model"]["mask_ratio_start"]
+        end = _DEFAULTS["model"]["mask_ratio_end"]
+        collator = SpanMaskCollator(
+            mask_ratio=_DEFAULTS["data"].get("mask_ratio", 0.35),
+            span_length_range=(3, 10),
+            mask_ratio_start=start,
+            mask_ratio_end=end,
+            curriculum_steps=10000,  # what src/train.py hardcodes
+        )
+        assert collator.current_mask_ratio == pytest.approx(start), (
+            f"step 0 mask ratio is {collator.current_mask_ratio}, not the "
+            f"declared ramp start {start}; the trainer's fallback has changed "
+            "shape. Re-derive this file's claim before trusting it."
+        )
+        for _ in range(5000):
+            collator.step()
+        midpoint = start + 0.5 * (end - start)
+        assert collator.current_mask_ratio == pytest.approx(midpoint, abs=0.01), (
+            f"halfway through the curriculum the ratio is "
+            f"{collator.current_mask_ratio}, expected ~{midpoint}. The ramp is "
+            "the live knob; data.mask_ratio is not."
         )

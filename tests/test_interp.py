@@ -71,6 +71,261 @@ class TestSAE:
         assert sae.decoder.weight.isfinite().all()
 
 
+class TestSAERectangular:
+    """``latent_dim != input_dim`` is this module's DEFAULT shape, not an edge case.
+
+    ``SparseAutoencoder``'s own signature is ``input_dim=768, latent_dim=4096``
+    -- a 5.3x overexpansion, which is the ratio the TopK literature this module
+    cites (Bricken et al.) trains at. Every shape in this repo that constructs
+    the class is rectangular too. So the encoder/decoder must agree on which
+    axis carries a feature when the two dimensions differ, and they do
+    everywhere except the all-dead branch of ``resample_dead_features``::
+
+        encoder.weight is (latent_dim, input_dim) -- a FEATURE is a ROW
+        decoder.weight is (input_dim, latent_dim) -- a FEATURE is a COLUMN
+
+    That branch was written against the transpose of both. On a rectangular SAE
+    it raised ``IndexError``; on a square one the dimensions hid the mistake and
+    it instead normalised the *input* axis and left the encoder untouched. The
+    crash was the loud symptom; the wrong-axis write and the no-op encoder
+    re-init were the defect, and both survive a fix that only swaps the mask so
+    the shapes line up. These tests pin the axes, not the crash.
+    """
+
+    #: Deliberately not square, and deliberately not the same in every test, so
+    #: no test can pass by accident on a transposed tensor of equal extents.
+    D, d, k = 16, 64, 8
+
+    @staticmethod
+    def _all_dead(sae):
+        """Put ``sae`` into the all-features-dead branch without training.
+
+        Reaching the branch the way training would (k features firing per step)
+        is not reliable -- ``TopK`` picks k indices per sample but ``relu``
+        zeroes the negatives, so whether every feature has died by the first
+        resample depends on the draw. Driving the two counters directly makes
+        the branch deterministic. It touches ``_steps_since_resample``, which is
+        private, but there is no other way to schedule a resample.
+        """
+        sae._steps_since_resample = sae.resample_interval
+        sae.feature_act_count.zero_()  # act_rate 0.0 for every feature
+        sae.total_samples.fill_(1)  # -> 0.0 < 0.01, so every feature is dead
+
+    def _sae(self, **kw):
+        kw.setdefault("input_dim", self.D)
+        kw.setdefault("latent_dim", self.d)
+        kw.setdefault("k", self.k)
+        kw.setdefault("resample_interval", 1)
+        kw.setdefault("seed", 0)
+        from src.interp.sae import SparseAutoencoder
+
+        return SparseAutoencoder(**kw)
+
+    def test_rectangular_axes_agree_end_to_end(self):
+        """The control: outside the all-dead branch the axes already agree.
+
+        If this fails the defect is not localised to dead-feature resampling and
+        the other tests in this class are measuring the wrong thing.
+        """
+        import torch.nn.functional as F
+
+        sae = self._sae()
+        assert sae.encoder.weight.shape == (self.d, self.D)  # feature is a row
+        assert sae.decoder.weight.shape == (self.D, self.d)  # feature is a column
+        assert sae.feature_act_count.shape == (self.d,)  # one counter per feature
+
+        x = torch.randn(4, self.D)
+        recons, latent, loss, info = sae(x)
+        assert latent.shape == (4, self.d)
+        assert recons.shape == (4, self.D)
+        assert info["recons_loss"] == pytest.approx(F.mse_loss(recons, x).item())
+
+    def test_all_dead_resampling_runs_on_a_rectangular_encoder(self):
+        """The reported ``IndexError``, pinned as a property not as a traceback.
+
+        A guard that caught the ``IndexError`` and returned zeros would also pass
+        this, which is why the next two tests exist: they ask what the branch
+        wrote, not whether it survived.
+        """
+        sae = self._sae()
+        self._all_dead(sae)
+        sae.resample_dead_features()
+
+        # And the module is still a working SAE afterwards.
+        recons, latent, loss, _info = sae(torch.randn(4, self.D))
+        assert recons.shape == (4, self.D)
+        assert latent.shape == (4, self.d)
+        assert torch.isfinite(loss)
+
+    def test_reset_writes_the_feature_axis_of_the_decoder(self):
+        """The reset must preserve the module's own decoder invariant.
+
+        ``__init__`` normalises ``decoder.weight`` over ``dim=1`` and
+        ``SAETrainer.train_step`` does the same after every optimiser step; on a
+        ``(input_dim, latent_dim)`` tensor ``dim=1`` is the feature axis, so the
+        invariant is "one unit-norm decoder direction per feature". The reset
+        rewrites every decoder column, so the invariant has to survive it. On a
+        square SAE the old code satisfied ``dim=0`` instead, which is why this
+        rather than a shape assertion is the test that catches it.
+        """
+        sae = self._sae()
+        ones = torch.ones(self.d)
+        assert torch.allclose(
+            sae.decoder.weight.data.norm(dim=0), ones, atol=1e-5
+        ), "premise: one unit-norm decoder direction per feature at construction"
+
+        self._all_dead(sae)
+        sae.resample_dead_features(generator=torch.Generator().manual_seed(11))
+
+        assert torch.allclose(
+            sae.decoder.weight.data.norm(dim=0), ones, atol=1e-5
+        ), "reset normalised the input axis instead of the feature axis"
+
+    def test_reset_pairs_each_decoder_column_with_its_encoder_row(self):
+        """Feature j's decoder direction is the transpose of encoder row j.
+
+        This is what the old ``F.normalize(encoder.weight[:, dead].T, dim=1)``
+        was reaching for, stated on the axis that is actually the feature axis.
+        Without the pairing, a feature whose encoder row has just been redrawn
+        keeps a decoder column describing a direction its encoder no longer
+        relates to.
+        """
+        sae = self._sae()
+        self._all_dead(sae)
+        sae.resample_dead_features(generator=torch.Generator().manual_seed(11))
+
+        expected = torch.nn.functional.normalize(sae.encoder.weight.data, dim=1).t()
+        assert torch.allclose(sae.decoder.weight.data, expected, atol=1e-6)
+
+    def test_reset_actually_reinitialises_the_encoder(self):
+        """The branch's stated job is "reinitialize from random"; it must do it.
+
+        ``nn.init.xavier_uniform_(self.encoder.weight[dead_mask])`` writes into
+        the copy that boolean indexing returns, so the encoder was never touched
+        -- a silent no-op that a crash-guard would have preserved.
+
+        An explicit generator is passed rather than relying on the default: with
+        ``seed`` set, ``rng.generator_for`` derives from ``(seed, stream)`` and
+        ignores ``site``, so the implicit path redraws the *constructor's* matrix
+        and would make this test pass for the wrong reason.
+        """
+        sae = self._sae()
+        with torch.no_grad():  # a trained SAE's bias is not zero; make it so
+            sae.encoder.bias.fill_(0.37)
+        before = sae.encoder.weight.data.clone()
+
+        self._all_dead(sae)
+        sae.resample_dead_features(generator=torch.Generator().manual_seed(11))
+
+        assert not torch.equal(
+            before, sae.encoder.weight.data
+        ), "encoder re-initialisation was a no-op"
+        # Same law as the else-branch, which zeroes the bias of a reset feature.
+        assert torch.equal(sae.encoder.bias.data, torch.zeros_like(sae.encoder.bias))
+
+    def test_encoder_reset_respects_the_constructors_xavier_law(self):
+        """The reset must redraw under the same law the constructor used.
+
+        ``nn.init.xavier_uniform_`` derives its bound from the shape it is
+        handed, so a reset that drew a differently-shaped tensor would produce
+        encoder rows that are not distributed like the ones ``__init__`` drew,
+        and a dead feature would come back with different statistics from a
+        live one.
+
+        Note what this does *not* catch, which the mutation run measured rather
+        than assumed: handing ``xavier_uniform_`` a ``(n_dead, input_dim)``
+        slice is an equivalent mutant here, because this branch is only reached
+        when ``alive_mask.sum() == 0``, so ``n_dead == latent_dim`` and the
+        slice has the encoder's own shape. The original defect was not the fan
+        but that ``self.encoder.weight[mask]`` is advanced indexing and returns a
+        copy, so the draw was discarded; that is what
+        ``test_reset_actually_reinitialises_the_encoder`` pins.
+        """
+        sae = self._sae()
+        self._all_dead(sae)
+        sae.resample_dead_features(generator=torch.Generator().manual_seed(11))
+
+        bound = math.sqrt(6.0 / (self.d + self.D))  # xavier_uniform_ gain 1.0
+        assert sae.encoder.weight.data.abs().max() <= bound + 1e-6
+
+    def test_reset_comes_only_from_the_supplied_generator(self):
+        """The reset is reproducible, and a different draw gives a different SAE."""
+        g_a = torch.Generator().manual_seed(7)
+        g_b = torch.Generator().manual_seed(7)
+        g_c = torch.Generator().manual_seed(8)
+
+        def run(gen):
+            sae = self._sae()
+            self._all_dead(sae)
+            sae.resample_dead_features(generator=gen)
+            return sae.encoder.weight.data.clone(), sae.decoder.weight.data.clone()
+
+        enc_a, dec_a = run(g_a)
+        enc_b, dec_b = run(g_b)
+        enc_c, _dec_c = run(g_c)
+
+        assert torch.equal(enc_a, enc_b) and torch.equal(dec_a, dec_b)
+        assert not torch.equal(enc_a, enc_c)
+
+    def test_partial_resampling_still_works_when_rectangular(self):
+        """The some-features-alive branch is the working reference; keep it working."""
+        sae = self._sae()
+        sae._steps_since_resample = sae.resample_interval
+        sae.feature_act_count.fill_(1)  # act_rate 1.0
+        sae.total_samples.fill_(1)
+        sae.feature_act_count[3] = 0  # one dead feature
+        sae.feature_act_count[4] = 0
+
+        sae.resample_dead_features(generator=torch.Generator().manual_seed(1))
+
+        assert sae.feature_act_count.sum() == 0
+        assert sae.total_samples == 0
+        # The alive features are untouched; the decoder stays on the feature axis.
+        assert torch.allclose(sae.decoder.weight.data.norm(dim=0), torch.ones(self.d), atol=1e-5)
+
+    def test_training_preserves_the_feature_axis_of_the_decoder(self):
+        """The trainer must not undo the constructor on every optimiser step.
+
+        ``SAETrainer.train_step`` re-normalises the decoder after ``step()``. If
+        it normalises the input axis it re-imposes the constructor's old,
+        wrong-axis constraint on the top-k directions at every step and leaves
+        the feature axis free -- on a square SAE the two are indistinguishable,
+        and on a rectangular one the trainer silently undoes the constructor.
+        """
+        from src.interp.sae import SAETrainer
+
+        sae = self._sae()
+        trainer = SAETrainer(sae, lr=1e-3, device="cpu")
+        ones = torch.ones(self.d)
+
+        x = torch.randn(8, self.D)
+        for _ in range(3):
+            trainer.train_step(x)
+            assert torch.allclose(
+                sae.decoder.weight.data.norm(dim=0), ones, atol=1e-5
+            ), "a training step re-normalised the input axis instead of the feature axis"
+
+        # And the SAE still reconstructs something, i.e. the constraint it now
+        # holds is one it can actually be trained under.
+        recons, _latent, loss, _info = sae(x)
+        assert recons.shape == (8, self.D)
+        assert torch.isfinite(loss)
+
+    def test_impossible_k_is_refused_at_construction(self):
+        """``k > latent_dim`` is the same class of defect as a rectangular encoder.
+
+        ``TopKSAE`` in ``workspace_validation.py`` already refuses it in the
+        constructor; this class deferred it to ``torch.topk`` inside ``encode``,
+        where it surfaces as a bare ``RuntimeError`` from a torch internal.
+        """
+        with pytest.raises(ValueError, match="k"):
+            self._sae(input_dim=16, latent_dim=8, k=9)
+        with pytest.raises(ValueError, match="k"):
+            self._sae(k=0)
+        with pytest.raises(ValueError, match="positive"):
+            self._sae(input_dim=0, latent_dim=8, k=2)
+
+
 class TestSAETrainer:
     def test_train_step(self):
         from src.interp.sae import SAETrainer, SparseAutoencoder

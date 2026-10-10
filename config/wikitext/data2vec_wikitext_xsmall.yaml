@@ -31,7 +31,6 @@ meta:
   model_name: data2vec_xsmall
 
 data:
-  mask_ratio: 0.15
   span_length_range: [1, 1]
   num_workers: 4
 

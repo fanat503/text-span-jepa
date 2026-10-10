@@ -6,9 +6,14 @@
 # TopK activation from Gao et al. (2024) "Scaling and Evaluating Sparse Autoencoders"
 # Dead feature resampling from Anthropic's dictionary learning
 
+import math
+
 import torch
 import torch.nn.functional as F
 from torch import nn
+from torch.nn.utils import skip_init
+
+from src.interp import rng
 from src.utils.torchio import safe_torch_load
 
 
@@ -25,6 +30,31 @@ class SparseAutoencoder(nn.Module):
     Dead feature resampling: periodically reset features that haven't
     fired recently, reinitializing them from encoder weights of active
     features. Prevents feature death during training.
+
+    Axes
+    ----
+    ``nn.Linear(in, out)`` stores its weight as ``(out, in)``, so this module
+    has one feature along a *different* axis of its two matrices, and
+    ``latent_dim`` is independent of ``input_dim`` (the defaults are 768 -> 4096,
+    the overexpansion Bricken et al. train at):
+
+        encoder.weight  (latent_dim, input_dim)   a feature is a ROW
+        decoder.weight  (input_dim, latent_dim)   a feature is a COLUMN
+
+    The decoder direction of feature ``j`` is therefore ``decoder.weight[:, j]``
+    and is normalised over the input axis. Every site in this file that touches
+    a feature axis says which one it means, because a square SAE hides the
+    difference: on a ``(n, n)`` matrix ``dim=0`` and ``dim=1`` both yield unit
+    vectors and every one of these mistakes reads as working code.
+
+    Reproducibility
+    ---------------
+    Every draw -- weight init and dead-feature resampling alike -- comes from a
+    private ``torch.Generator`` (``src.interp/rng.py``), never from the
+    process-global stream. ``seed`` fixes both: two SAEs built with the same
+    seed are bit-identical, and neither perturbs the caller's RNG. With
+    ``seed=None`` the stream is derived from the run seed instead, so it varies
+    with the run but is still independent of any other consumer.
     """
 
     def __init__(
@@ -34,18 +64,34 @@ class SparseAutoencoder(nn.Module):
         k=64,
         dead_feature_threshold=1e-6,
         resample_interval=1000,
+        seed=None,
     ):
         super().__init__()
+        if input_dim <= 0 or latent_dim <= 0:
+            raise ValueError(
+                f"input_dim and latent_dim must be positive, "
+                f"got input_dim={input_dim}, latent_dim={latent_dim}"
+            )
+        # `torch.topk` would accept `k > latent_dim` only by raising from inside
+        # `encode`, one call away from the constructor that could have said so.
+        if not 1 <= k <= latent_dim:
+            raise ValueError(f"k must be in [1, latent_dim={latent_dim}], got {k}")
+
         self.input_dim = input_dim
         self.latent_dim = latent_dim
         self.k = k
         self.dead_feature_threshold = dead_feature_threshold
         self.resample_interval = resample_interval
+        self.seed = seed
 
         # Encoder: input → latent
-        self.encoder = nn.Linear(input_dim, latent_dim, bias=True)
+        # Built with `skip_init` so the stock `reset_parameters` does not draw
+        # from the process-global RNG; the weights are filled below from a
+        # private generator instead. Two SAEs built with the same seed are
+        # bit-identical, and building one leaves the caller's stream alone.
+        self.encoder = skip_init(nn.Linear, input_dim, latent_dim, bias=True)
         # Decoder: latent → input (tied bias from encoder)
-        self.decoder = nn.Linear(latent_dim, input_dim, bias=True)
+        self.decoder = skip_init(nn.Linear, latent_dim, input_dim, bias=True)
 
         # Track feature activation counts for dead feature resampling
         self.register_buffer("feature_act_count", torch.zeros(latent_dim))
@@ -53,11 +99,27 @@ class SparseAutoencoder(nn.Module):
         self._steps_since_resample = 0
 
         # Initialize: decoder columns on unit sphere (Anthropic pattern)
+        #
+        # The laws are the stock ones, driven from a private generator instead
+        # of the process-global stream: `nn.Linear.reset_parameters` is
+        # kaiming-uniform with a=sqrt(5), which is what the decoder gets before
+        # being normalised, and the encoder is then overwritten by xavier, which
+        # is what it always was. Same laws, same order, so this is a
+        # re-seeding of the existing initialisation rather than a new one.
+        init_gen = rng.generator_for(seed, "sae.init")
         with torch.no_grad():
-            nn.init.xavier_uniform_(self.encoder.weight)
+            nn.init.xavier_uniform_(self.encoder.weight, generator=init_gen)
             nn.init.zeros_(self.encoder.bias)
-            # Normalize decoder rows to unit norm
-            self.decoder.weight.data = F.normalize(self.decoder.weight.data, dim=1)
+            nn.init.kaiming_uniform_(self.decoder.weight, a=math.sqrt(5), generator=init_gen)
+            # Normalize each feature's decoder direction to unit norm. A feature
+            # is a COLUMN of `decoder.weight` (see the Axes note in the class
+            # docstring), and `recons = W_dec @ latent + b` means feature j
+            # contributes `a_j * W_dec[:, j]`, so the norm that makes a latent
+            # activation readable as the magnitude of that contribution is the
+            # column norm -- `dim=0`. Normalising over `dim=1` instead
+            # constrains each *input coordinate* across all features, which is
+            # not a property the Anthropic pattern has any use for.
+            self.decoder.weight.data = F.normalize(self.decoder.weight.data, dim=0)
             nn.init.zeros_(self.decoder.bias)
 
     def encode(self, x):
@@ -118,11 +180,23 @@ class SparseAutoencoder(nn.Module):
         self._steps_since_resample += 1
 
     @torch.no_grad()
-    def resample_dead_features(self):
+    def resample_dead_features(self, generator=None):
         """Resample dead features that haven't fired recently.
 
         From Anthropic's dictionary learning: dead features get
         reinitialized from encoder weights of the most active features.
+
+        Args:
+            generator: optional caller-owned CPU ``torch.Generator``, the sole
+                source of randomness for this call. When omitted a private
+                generator is taken from ``self.seed`` (or, if that is None,
+                derived from the run seed), so the resampling is reproducible
+                and the process-global stream is never touched.
+
+        Passing ``generator`` explicitly is what makes a *training* run
+        resume-exact: a stateful generator's position is not a tensor, so it
+        never reaches ``state_dict`` and a resume would silently replay the
+        whole resampling sequence from the start.
         """
         if self._steps_since_resample < self.resample_interval:
             return
@@ -131,6 +205,10 @@ class SparseAutoencoder(nn.Module):
 
         if self.total_samples == 0:
             return
+
+        # One generator for the whole call: the source choice and the
+        # perturbation must not come from two different streams.
+        gen = generator if generator is not None else rng.generator_for(self.seed, "sae.resample")
 
         # Find dead features: fired in < 1% of samples
         act_rate = self.feature_act_count / self.total_samples.float()
@@ -146,12 +224,25 @@ class SparseAutoencoder(nn.Module):
         # Find most active features for resampling source
         alive_mask = ~dead_mask
         if alive_mask.sum() == 0:
-            # All features dead — reinitialize from random
-            nn.init.xavier_uniform_(self.encoder.weight[:, dead_mask])
-            self.decoder.weight.data[dead_mask] = F.normalize(
-                self.encoder.weight[:, dead_mask].T,
-                dim=1,
-            )
+            # All features dead — reinitialize from random.
+            #
+            # `dead_mask` is all-True here (that is what `alive_mask.sum() == 0`
+            # means), so the dead set is the whole encoder and there is nothing
+            # to select on. That is also the only way this can be written
+            # correctly: `self.encoder.weight[dead_mask]` is advanced indexing
+            # and returns a COPY, so initialising it writes the fresh weights
+            # into a temporary that is then discarded -- the previous version
+            # did exactly that, and re-initialised nothing. Drawing the whole
+            # `(latent_dim, input_dim)` matrix also keeps Xavier's fan_in /
+            # fan_out those of the real encoder rather than of a slice.
+            nn.init.xavier_uniform_(self.encoder.weight, generator=gen)
+            nn.init.zeros_(self.encoder.bias)
+            # Rebuild the decoder from the new encoder rows so each reset
+            # feature's direction is the transpose of its encoder row, unit
+            # norm over the input axis. Keeping the two in step is the point of
+            # a reset: a feature whose encoder row is brand new must not keep a
+            # decoder column describing a direction the encoder has left behind.
+            self.decoder.weight.data.copy_(F.normalize(self.encoder.weight.data.t(), dim=0))
         else:
             # Sample from alive features
             alive_idx = alive_mask.nonzero(as_tuple=True)[0]
@@ -159,15 +250,20 @@ class SparseAutoencoder(nn.Module):
 
             for d_idx in dead_idx:
                 # Pick random alive feature
-                src = alive_idx[torch.randint(len(alive_idx), (1,)).item()]
+                src = alive_idx[torch.randint(len(alive_idx), (1,), generator=gen).item()]
                 # Copy encoder row with small perturbation
                 # encoder.weight shape: (latent_dim, input_dim), rows = features
                 self.encoder.weight.data[d_idx] = self.encoder.weight.data[
                     src.item()
-                ] + 0.02 * torch.randn_like(self.encoder.weight.data[src.item()])
+                ] + 0.02 * torch.randn_like(
+                    self.encoder.weight.data[src.item()],
+                    generator=gen,
+                )
                 self.encoder.bias.data[d_idx] = 0.0
-                # Reset decoder column (decoder shape: latent_dim, input_dim)
-                # Column d_idx of decoder corresponds to feature d_idx
+                # Reset decoder column. `decoder.weight` is (input_dim, latent_dim),
+                # so column d_idx is feature d_idx, and its norm is taken over
+                # the input axis. This branch was already correct; the all-dead
+                # branch above had the same axes transposed.
                 col = self.decoder.weight.data[:, d_idx]
                 self.decoder.weight.data[:, d_idx] = F.normalize(col, dim=0)
 
@@ -181,11 +277,18 @@ class SAETrainer:
 
     Handles: training, dead feature resampling, checkpointing,
     and metric logging (MSE, L0, explained variance).
+
+    The dead-feature resampling draws from a generator derived from
+    ``(run seed, step)``, so a resumed run reproduces the same sequence. A
+    module-global generator would not: its position is not a tensor, so it never
+    reaches ``state_dict``, and a resume would silently replay the sequence from
+    the start.
     """
 
-    def __init__(self, sae, lr=1e-3, weight_decay=1e-5, device="cpu"):
+    def __init__(self, sae, lr=1e-3, weight_decay=1e-5, device="cpu", seed=None):
         self.sae = sae.to(device)
         self.device = device
+        self.seed = seed
         self.optimizer = torch.optim.Adam(sae.parameters(), lr=lr, weight_decay=weight_decay)
         self.scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(self.optimizer, T_max=100000)
         self.step_count = 0
@@ -210,12 +313,26 @@ class SAETrainer:
         self.optimizer.step()
         self.scheduler.step()
 
-        # Resample dead features periodically
-        self.sae.resample_dead_features()
+        # Resample dead features periodically. The generator is a pure function
+        # of (run seed, step), so it survives a checkpoint round-trip without
+        # being stored: `step_count` is, and it is what the derivation reads.
+        self.sae.resample_dead_features(
+            generator=(
+                None
+                if self.seed is None
+                else rng.derive_generator("sae.trainer_resample", self.step_count)
+            ),
+        )
 
-        # Post-step: normalize decoder rows to unit norm
+        # Post-step: normalize each feature's decoder direction to unit norm, over
+        # the input axis. See the Axes note in `SparseAutoencoder`: a feature is
+        # a column of `decoder.weight`, so this is `dim=0`. It was `dim=1`,
+        # which re-imposed the constructor's input-axis normalisation over the
+        # top-k directions on every single optimiser step and left the feature
+        # axis unconstrained -- on a square SAE the two are indistinguishable,
+        # on a rectangular one the trainer undid the constructor.
         with torch.no_grad():
-            self.sae.decoder.weight.data = F.normalize(self.sae.decoder.weight.data, dim=1)
+            self.sae.decoder.weight.data = F.normalize(self.sae.decoder.weight.data, dim=0)
 
         self.step_count += 1
 
@@ -287,8 +404,22 @@ class SAETrainer:
         )
 
     def load(self, path):
-        """Load SAE checkpoint."""
+        """Load SAE checkpoint.
+
+        Restores the module *and* the optimiser, module first. ``save`` wrote
+        ``sae_state`` and this used not to read it back, so a resume handed the
+        run a fresh constructor's weights with a warm Adam state attached --
+        moment buffers describing parameters that no longer existed. The resumed
+        run then diverged from the run it was resuming at the very next step,
+        and nothing said so: ``step_count`` resumed faithfully at 5 while its
+        step 6 was not step 6 of anything.
+
+        Module first, so a shape disagreement between the checkpoint and the
+        constructed SAE raises here instead of being absorbed into a
+        half-applied optimiser state.
+        """
         ckpt = safe_torch_load(path, map_location=self.device)
+        self.sae.load_state_dict(ckpt["sae_state"])
         self.optimizer.load_state_dict(ckpt["optimizer_state"])
         self.scheduler.load_state_dict(ckpt["scheduler_state"])
         self.step_count = ckpt["step_count"]

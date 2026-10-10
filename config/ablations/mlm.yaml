@@ -1,0 +1,102 @@
+# Ablation arm: MLM (masked language modelling, BERT-style) as an EXTERNAL
+# baseline.
+#
+# WHY THIS FILE IS IN config/ablations/
+# ------------------------------------
+# This directory held 40 arms and zero external baselines: every row switched a
+# GWP mechanism off and no row trained a published SSL method. MLM and data2vec
+# existed and were reachable from `src.train.create_model`, but neither had an
+# arm HERE, so a run of this table measured twelve GWP mechanisms and nothing
+# else. `MLMBaseline` lives in `baselines/mlm_baseline.py`; this file is the arm
+# that actually runs it, on the reference shape, at the reference budget.
+#
+# HOW meta.model_name REACHES create_model
+# -----------------------------------------
+# `src.train.main` reads `args["meta"]["model_name"]`, passes it through
+# `_normalize_model_name` -- which lowercases the name and matches it against
+# the ARM PREFIX table -- and hands the canonical name to `create_model`. `mlm`
+# matches the `mlm` prefix exactly, normalises to `mlm`, and lands in the `mlm`
+# branch, which builds `MLMBaseline` from
+# model.{embed_dim, encoder_depth, num_heads, mlp_ratio, drop_rate}.
+#
+# A name that matched no prefix would be returned unchanged and raise in
+# `create_model`; a name that matched but normalised to `text_span_jepa` would
+# silently train a JEPA and this arm would look like it ran, which is why
+# tests/test_config_system.py asserts what the arm BUILDS, not what it is named.
+#
+# No `TextSpanJEPAConfig` is constructed for this arm, so no `MechanismBundle`
+# exists and every `use_*` / `lambda_*` GWP key deep-merged in from defaults.yaml
+# is inert here. That is why this file declares no mechanism keys -- the same
+# reasoning config/kaggle/mlm_kaggle.yaml records.
+#
+# THE ONE DATA DELTA, AND WHY THERE IS NO MASK-RATIO KEY HERE
+# ------------------------------------------------------------
+# `data.span_length_range: [1, 1]` is the BERT-style single-token corruption, and
+# it is live: `src/train.py` passes `span_length_range` to `SpanMaskCollator`
+# unconditionally, and every other MLM/data2vec config in this repo
+# (config/wikitext/mlm_*.yaml, config/kaggle/mlm_kaggle.yaml) sets the same.
+#
+# There is deliberately NO `data.mask_ratio` here, and there is no such key
+# anywhere. It used to exist in defaults.yaml and ten configs set it to 0.15,
+# believing that fixed their mask ratio. It did not: `src/train.py` passes
+# `model.mask_ratio_start`/`mask_ratio_end` to the collator as a ramp, and with
+# `curriculum_steps = 10000` the collator's `current_mask_ratio` returns the
+# ramp and never the flat value. Those ten configs all ran the 0.15 -> 0.35
+# curriculum. The key has been DELETED from defaults.yaml and from all ten
+# configs -- behaviour-preserving, measured step-for-step over the whole 10k-step
+# curriculum against the ramp -- so that the mask schedule has exactly one knob
+# and a config can no longer assert a ratio its run does not use. Guards:
+# tests/test_config_system.py::TestOnlyOneMaskRatioKnobIsLive.
+#
+# TRAINING BUDGET -- identical to every other arm in this directory
+# -----------------------------------------------------------------
+# 50 epochs, lr 1e-3, micro-batch 64 x accumulation 8 = 512 sequences of 512
+# tokens = 262,144 tokens per optimizer step. All of it is inherited from
+# defaults.yaml and declared nowhere in this file, so every arm in this
+# directory sees one token budget and this row differs from the JEPA rows by the
+# MODEL and not by the schedule.
+#
+# config/wikitext/mlm_*.yaml runs MLM at 30 epochs with lr 5e-4. That is the
+# WikiText CAPACITY column -- one method per column, each at its own tuned
+# schedule -- and it is a different table from this one. This file deliberately
+# does not inherit that schedule: matching this table's budget is what makes the
+# row a comparison of methods rather than of budgets. Reconciling the two
+# columns' budgets is an experiment decision, not a config-schema one.
+#
+# PARAMETER MATCHING -- stated, because it is not like-for-like
+# ------------------------------------------------------------
+# `MLMBaseline` carries an untied (embed_dim, vocab_size) output matrix that no
+# JEPA counterpart has, which puts it at about 1.28x JEPA's trainable parameters
+# where the four SSL baselines sit at 0.993x. Measured by
+# tests/test_baseline_parity.py::TestTrainableCapacityAsymmetry. This arm does
+# not "fix" it: the asymmetry is the honest cost of an MLM head, and a comparison
+# that hid it would be the comparison this arm exists to make possible.
+#
+# Guards: TestBaselineArmsAreCompleteAndComparable, TestEveryConfigRuns,
+#         TestKeyPaths, TestDeltaPurity, TestOneOutputDirPerRun
+
+_meta:
+  ablation: mlm
+  arm: baseline_mlm
+  budget: "reference 50 epochs x 512 sequences/step x 512 tokens, inherited"
+  description: "External baseline: masked language modelling, ~1.28x TextSpanJEPA trainable parameters"
+
+meta:
+  model_name: mlm
+
+data:
+  # See "THE ONE DATA DELTA" above. Single-token corruption, as published and as
+  # every other MLM config in this repo uses it.
+  span_length_range: [1, 1]
+
+# An empty mapping, and a no-op in `src.train._deep_merge`: it states that this
+# arm inherits the reference schedule rather than leaving the reader to infer it.
+# It is what makes the budget paragraph above true of the merged config rather
+# than of an intention -- see TestBaselineArmsAreCompleteAndComparable.
+optimization: {}
+
+logging:
+  # One directory per run, as everywhere else in the repo, and distinct from
+  # config/wikitext/mlm-*/ and config/kaggle/mlm/. Guard:
+  # TestOneOutputDirPerRun::test_every_config_resolves_to_a_distinct_output_folder.
+  folder: output/ablations/mlm/

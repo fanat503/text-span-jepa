@@ -1,0 +1,95 @@
+# Ablation arm: data2vec (Baevski et al., ICML 2022) as an EXTERNAL baseline.
+#
+# WHY THIS FILE IS IN config/ablations/
+# ------------------------------------
+# This directory held 40 arms and zero external baselines: every row switched a
+# GWP mechanism off and no row trained a published SSL method. MLM and data2vec
+# existed and were reachable from `src.train.create_model`, but neither had an
+# arm HERE, so a run of this table measured twelve GWP mechanisms and nothing
+# else. `Data2VecTextBaseline` lives in `baselines/data2vec_baseline.py`; this
+# file is the arm that actually runs it, on the reference shape, at the
+# reference budget.
+#
+# HOW meta.model_name REACHES create_model
+# -----------------------------------------
+# `src.train.main` reads `args["meta"]["model_name"]`, passes it through
+# `_normalize_model_name` -- which lowercases the name and matches it against
+# the ARM PREFIX table -- and hands the canonical name to `create_model`.
+# `data2vec` matches the `data2vec` prefix exactly, normalises to `data2vec`, and
+# lands in the `data2vec` branch, which builds `Data2VecTextBaseline` from
+# model.{embed_dim, encoder_depth, num_heads, mlp_ratio, drop_rate} plus its own
+# EMA and head keys (all declared once in defaults.yaml).
+#
+# A name that matched no prefix would be returned unchanged and raise in
+# `create_model`; a name that matched but normalised to `text_span_jepa` would
+# silently train a JEPA and this arm would look like it ran, which is why
+# tests/test_config_system.py asserts what the arm BUILDS, not what it is named.
+#
+# No `TextSpanJEPAConfig` is constructed for this arm, so no `MechanismBundle`
+# exists and every `use_*` / `lambda_*` GWP key deep-merged in from defaults.yaml
+# is inert here. That is why this file declares no mechanism keys -- the same
+# reasoning config/kaggle/data2vec_kaggle.yaml records.
+#
+# THE ONE DATA DELTA, AND WHY THERE IS NO MASK-RATIO KEY HERE
+# ------------------------------------------------------------
+# `data.span_length_range: [1, 1]` is the BERT-style single-token corruption, and
+# it is live: `src/train.py` passes `span_length_range` to `SpanMaskCollator`
+# unconditionally, and every other data2vec/MLM config in this repo
+# (config/wikitext/data2vec_*.yaml, config/kaggle/data2vec_kaggle.yaml) sets the
+# same.
+#
+# There is deliberately NO `data.mask_ratio` here, and there is no such key
+# anywhere. It used to exist in defaults.yaml and ten configs set it to 0.15,
+# believing that fixed their mask ratio. It did not: `src/train.py` passes
+# `model.mask_ratio_start`/`mask_ratio_end` to the collator as a ramp, and with
+# `curriculum_steps = 10000` the collator's `current_mask_ratio` returns the
+# ramp and never the flat value. Those ten configs all ran the 0.15 -> 0.35
+# curriculum. The key has been DELETED from defaults.yaml and from all ten
+# configs -- behaviour-preserving, measured step-for-step over the whole 10k-step
+# curriculum against the ramp -- so that the mask schedule has exactly one knob
+# and a config can no longer assert a ratio its run does not use. Guards:
+# tests/test_config_system.py::TestOnlyOneMaskRatioKnobIsLive.
+#
+# TRAINING BUDGET -- identical to every other arm in this directory
+# -----------------------------------------------------------------
+# 50 epochs, lr 1e-3, micro-batch 64 x accumulation 8 = 512 sequences of 512
+# tokens = 262,144 tokens per optimizer step. All of it is inherited from
+# defaults.yaml and declared nowhere in this file, so every arm in this
+# directory sees one token budget and this row differs from the JEPA rows by the
+# MODEL and not by the schedule.
+#
+# config/wikitext/data2vec_*.yaml runs data2vec at lr 5e-4 / wd 0.01. That is
+# the WikiText CAPACITY column -- one method per column, each at its own tuned
+# schedule -- and it is a different table from this one. This file deliberately
+# does not inherit that schedule: matching this table's budget is what makes the
+# row a comparison of methods rather than of budgets. Reconciling the two
+# columns' budgets is an experiment decision, not a config-schema one.
+#
+# Guards: TestBaselineArmsAreCompleteAndComparable, TestEveryConfigRuns,
+#         TestKeyPaths, TestDeltaPurity, TestOneOutputDirPerRun
+
+_meta:
+  ablation: data2vec
+  arm: baseline_data2vec
+  budget: "reference 50 epochs x 512 sequences/step x 512 tokens, inherited"
+  description: "External baseline: data2vec, EMA-teacher self-distillation on the shared encoder"
+
+meta:
+  model_name: data2vec
+
+data:
+  # See "THE ONE DATA DELTA" above. Single-token corruption, as published and as
+  # every other data2vec/MLM config in this repo uses it.
+  span_length_range: [1, 1]
+
+# An empty mapping, and a no-op in `src.train._deep_merge`: it states that this
+# arm inherits the reference schedule rather than leaving the reader to infer it.
+# It is what makes the budget paragraph above true of the merged config rather
+# than of an intention -- see TestBaselineArmsAreCompleteAndComparable.
+optimization: {}
+
+logging:
+  # One directory per run, as everywhere else in the repo, and distinct from
+  # config/wikitext/data2vec-*/ and config/kaggle/data2vec/. Guard:
+  # TestOneOutputDirPerRun::test_every_config_resolves_to_a_distinct_output_folder.
+  folder: output/ablations/data2vec/

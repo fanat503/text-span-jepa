@@ -178,6 +178,18 @@ class RepresentationComparator:
             "cka": cka,
             "linguistic_features": ling_features,
             "n_samples": jepa_reps.size(0),
+            # Same refusal `run_comparison.describe_comparison_design` makes,
+            # for the same reason. `geometry` carries a `jepa_better` boolean
+            # per metric and nothing else: one checkpoint per arm, one corpus,
+            # no interval, no p-value. The booleans are point comparisons on a
+            # single draw, and the majority of them is not a verdict -- under
+            # fair coins P(3 of 4) = 0.3125.
+            "verdict_supported": False,
+            "verdict_reason": (
+                "one checkpoint per arm and one corpus: no seed or corpus "
+                "variance is observable, so no `jepa_better` boolean here is "
+                "evidence of an architectural difference"
+            ),
         }
 
         return report
@@ -235,16 +247,17 @@ def extract_linguistic_features(tokens):
     if not tokens:
         return features
 
+    # `t[0]` is indexed before any length guard in the original, so an empty
+    # token string raised IndexError -- measured on
+    # extract_linguistic_features(["The", ""]). The length test has to come
+    # first in the comprehension, which is what `if t` below does.
     features["is_upper"] = (
         1.0 if (len(tokens) > 0 and len(tokens[0]) > 0 and tokens[0][0].isupper()) else 0.0
     )
     features["n_tokens"] = float(len(tokens))
     features["avg_token_len"] = sum(len(t) for t in tokens) / max(len(tokens), 1)
     features["has_digit"] = 1.0 if any(c.isdigit() for t in tokens for c in t) else 0.0
-    features["frac_upper"] = sum(1 for t in tokens if t[0].isupper() if len(t) > 0) / max(
-        len(tokens),
-        1,
-    )
+    features["frac_upper"] = sum(1 for t in tokens if t and t[0].isupper()) / max(len(tokens), 1)
     features["has_punct"] = 1.0 if any(not t.isalnum() for t in tokens) else 0.0
 
     return features

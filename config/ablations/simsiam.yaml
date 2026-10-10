@@ -1,0 +1,89 @@
+# Ablation arm: SimSiam (Chen & He, 2021) as an EXTERNAL baseline.
+#
+# WHY THIS FILE IS IN config/ablations/
+# ------------------------------------
+# This directory held 40 arms and zero external baselines: every row switched a
+# GWP mechanism off and no row trained a published SSL method, so "GWP beats
+# prior art" could not be measured from this tree at all. `SimSiamBaseline`
+# lives in `baselines/simsiam_baseline.py` and is reachable from
+# `src.train.create_model`; this file is the arm that actually runs it, on the
+# reference shape, at the reference budget.
+#
+# HOW meta.model_name REACHES create_model
+# -----------------------------------------
+# `src.train.main` reads `args["meta"]["model_name"]`, passes it through
+# `_normalize_model_name` -- which lowercases the name and matches it against
+# the ARM PREFIX table -- and hands the canonical name to `create_model`.
+# `simsiam` matches the `simsiam` prefix exactly, normalises to `simsiam`, and
+# lands in the `SSL_BASELINE_ARMS` branch, which builds `SimSiamBaseline` from
+# model.{embed_dim, encoder_depth, num_heads, mlp_ratio, drop_rate}.
+#
+# A name that matched no prefix would be returned unchanged and raise in
+# `create_model`; a name that matched but normalised to `text_span_jepa` would
+# silently train a JEPA and this arm would look like it ran, which is why
+# tests/test_config_system.py asserts what the arm BUILDS, not what it is named.
+#
+# No `TextSpanJEPAConfig` is constructed for this arm, so no `MechanismBundle`
+# exists and every `use_*` / `lambda_*` GWP key deep-merged in from defaults.yaml
+# is inert here. That is why this file declares no mechanism keys -- the same
+# reasoning config/kaggle/mlm_kaggle.yaml records.
+#
+# METHOD NOTES
+# ------------
+# SimSiam is the only one of the four with NO EMA teacher at all: its
+# stop-gradient is `torch.no_grad()` around the target branch, so it is not in
+# `SELF_EMA_ARMS` and the trainer never calls an EMA update for it. That
+# asymmetry is pinned by
+# tests/test_ssl_baselines.py::test_only_byol_is_expected_to_hold_a_self_managed_ema.
+#
+# TRAINING BUDGET -- identical to every other arm in this directory
+# -----------------------------------------------------------------
+# 50 epochs, lr 1e-3, micro-batch 64 x accumulation 8 = 512 sequences of 512
+# tokens = 262,144 tokens per optimizer step. All of it is inherited from
+# defaults.yaml and declared nowhere in this file, so every arm in this
+# directory sees one token budget and this row differs from the JEPA rows by the
+# MODEL and not by the schedule. config/wikitext/mlm_*.yaml runs MLM at 30
+# epochs: that is the capacity-column comparison, a different table, and the two
+# are not mixed.
+#
+# WHAT THE TWO VIEWS ACTUALLY ARE -- THIS ARM IS NOT PUBLISHED SIMSIAM
+# -------------------------------------------------------------------
+# `src.train.compute_loss` hands `masked_input_ids` and `original_input_ids` to
+# `compute_loss`, so SimSiam's two views here are this repo's span-masked input
+# at the reference mask curriculum (0.15 -> 0.35) and the clean input -- NOT the
+# two augmented views Chen & He define the method over (in the paper, two random
+# resized crops). One view is untouched, so the pair is nested rather than two
+# augmentation draws.
+#
+# Stated here and, at the point of use, in `SimSiamBaseline.compute_loss`'s own
+# docstring: a row labelled "SimSiam" that is not SimSiam-as-published is
+# exactly what a reviewer calls an unfair comparison, and the fix is not to
+# rename the row but to stop it reading as the published method. Wiring a genuine
+# two-augmentation pipeline is a science change -- a text augmentation policy per
+# paper, an independent second draw per step, and a re-measurement of every
+# collapse threshold in tests/test_ssl_baselines.py, all of which were measured
+# under the masked/clean pair. See `.agent-notes/fairness.md`.
+# Guard: TestTheTwoViewsAreNotThePublishedAugmentationPair.
+#
+# Guards: TestBaselineArmsAreCompleteAndComparable, TestEveryConfigRuns,
+#         TestKeyPaths, TestDeltaPurity, TestOneOutputDirPerRun
+
+_meta:
+  ablation: simsiam
+  arm: baseline_simsiam
+  budget: "reference 50 epochs x 512 sequences/step x 512 tokens, inherited"
+  description: "External baseline: SimSiam, parameter-matched to 0.993x TextSpanJEPA at the reference shape"
+
+meta:
+  model_name: simsiam
+
+# An empty mapping, and a no-op in `src.train._deep_merge`: it states that this
+# arm inherits the reference schedule rather than leaving the reader to infer it.
+# It is what makes the budget paragraph above true of the merged config rather
+# than of an intention -- see TestBaselineArmsAreCompleteAndComparable.
+optimization: {}
+
+logging:
+  # One directory per run, as everywhere else in the repo. Guard:
+  # TestOneOutputDirPerRun::test_every_config_resolves_to_a_distinct_output_folder.
+  folder: output/ablations/simsiam/
