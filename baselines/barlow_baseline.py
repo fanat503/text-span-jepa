@@ -143,6 +143,7 @@ class BarlowTwinsBaseline(nn.Module):
         num_heads: int = 12,
         mlp_ratio: float = 4.0,
         drop_rate: float = 0.0,
+        drop_path_rate: float = 0.0,
         hidden: int | None = None,
         lambda_offdiag: float = DEFAULT_LAMBDA,
         **kwargs,
@@ -162,6 +163,7 @@ class BarlowTwinsBaseline(nn.Module):
             num_heads=num_heads,
             mlp_ratio=mlp_ratio,
             drop_rate=drop_rate,
+            drop_path_rate=drop_path_rate,
         )
 
         # Non-affine BatchNorm: zero parameters, so the head's parameter count is
@@ -241,9 +243,24 @@ class BarlowTwinsBaseline(nn.Module):
         `tests/test_ssl_baselines.py` asserts that it collapses.
 
         Args:
-            view_a, view_b: ``(B, T)`` token indices, two views.
+            view_a: ``(B, T)`` token indices -- the trainer's SPAN-MASKED
+                input, at the `model.mask_ratio_start/end` curriculum.
+            view_b: ``(B, T)`` token indices -- the trainer's CLEAN input.
             mask_positions: accepted for the trainer's call signature and
                 ignored. No per-position target set exists in this method.
+
+        NOT THE PUBLISHED VIEW CONSTRUCTION
+        ------------------------------------
+        Zbontar et al. define Barlow Twins over two AUGMENTED views of the same
+        input. `src.train.compute_loss` hands this arm `(masked, clean)`: one
+        view is span-masked and the other is untouched, so the pair is nested
+        rather than two independent augmentation draws. The cross-correlation
+        objective and `lambda_offdiag` are the published ones; the view
+        construction is this repo's, and a run of this arm is therefore NOT a
+        reproduction of Barlow Twins as published. Wiring a real two-augmentation
+        pipeline is a science change that re-measures this repository's collapse
+        thresholds -- see `.agent-notes/fairness.md`. Stated here, at the
+        signature, so an arm that is not the published method cannot read as one.
 
         Returns:
             ``(loss, info)`` with `loss_barlow`, the two halves separately, and

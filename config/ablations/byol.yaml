@@ -37,13 +37,23 @@
 # epochs: that is the capacity-column comparison, a different table, and the two
 # are not mixed.
 #
-# WHAT THE TWO VIEWS ACTUALLY ARE
-# -------------------------------
+# WHAT THE TWO VIEWS ACTUALLY ARE -- THIS ARM IS NOT PUBLISHED BYOL
+# -----------------------------------------------------------------
 # `src.train.compute_loss` hands `masked_input_ids` and `original_input_ids` to
-# `compute_loss`, so BYOL's two views are this repo's span-masked input at the
-# reference mask curriculum (0.15 -> 0.35) and the clean input -- not the
-# paper's image augmentation. Recorded rather than papered over; changing it
-# means changing src/train.py, which this arm does not own.
+# `compute_loss`, so BYOL's two views here are this repo's span-masked input at
+# the reference mask curriculum (0.15 -> 0.35) and the clean input -- NOT the
+# two independent augmented views Grill et al. define the method over. One view
+# is untouched, so the pair is nested rather than two augmentation draws.
+#
+# Stated here and, at the point of use, in `BYOLBaseline.compute_loss`'s own
+# docstring: a row labelled "BYOL" that is not BYOL-as-published is exactly what
+# a reviewer calls an unfair comparison, and the fix is not to rename the row
+# but to stop it reading as the published method. Wiring a genuine
+# two-augmentation pipeline is a science change -- a text augmentation policy per
+# paper, an independent second draw per step, and a re-measurement of every
+# collapse threshold in tests/test_ssl_baselines.py, all of which were measured
+# under the masked/clean pair. See `.agent-notes/fairness.md`.
+# Guard: TestTheTwoViewsAreNotThePublishedAugmentationPair.
 #
 # Guards: TestBaselineArmsAreCompleteAndComparable, TestEveryConfigRuns,
 #         TestKeyPaths, TestDeltaPurity, TestOneOutputDirPerRun

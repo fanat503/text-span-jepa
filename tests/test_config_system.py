@@ -235,10 +235,20 @@ def _effective_batch(cfg: dict) -> int:
 
 
 # Everything a capacity sweep must hold fixed: only width and depth may move.
+#
+# `data.mask_ratio` was in this tuple and has been REMOVED, because the key no
+# longer exists: `src/train.py` always passes `model.mask_ratio_start/end` to
+# `SpanMaskCollator` and the ramp overrides the flat value in every shipped
+# config (see TestOnlyOneMaskRatioKnobIsLive). Removing it is not a weakening --
+# the mask schedule is still pinned along the ladder, by the two keys that
+# actually drive it, `model.mask_ratio_start` and `model.mask_ratio_end`, both
+# present below. What goes away is a pin on a number no run used, which read as
+# coverage and was not. `test_every_pinned_constant_actually_exists` is the
+# guard added alongside it: without that, deleting the key left this tuple
+# asserting a constant that had ceased to exist.
 LADDER_CONSTANTS = (
     "data.max_seq_len",
     "data.batch_size",
-    "data.mask_ratio",
     "optimization.grad_accum_steps",
     "optimization.epochs",
     "optimization.lr",
@@ -853,6 +863,34 @@ LADDER_BY_SIZE = sorted(
 class TestScalingLadder:
     def test_ladder_has_four_rungs(self):
         assert len(LADDER) >= 4, f"config/scaling/*.yaml found: {LADDER}"
+
+    def test_every_pinned_constant_actually_exists(self):
+        """Guards the guard: a pinned path must RESOLVE, not merely agree.
+
+        `_get` returns the `KeyError` CLASS when a path is absent, and every
+        rung then produces the same `repr`, so `test_constant_along_the_ladder`
+        passes for a key that does not exist anywhere. That is not hypothetical:
+        `data.mask_ratio` was in `LADDER_CONSTANTS` and was deleted from
+        defaults.yaml (it could never reach the model -- the
+        `model.mask_ratio_start/end` ramp overrides it), after which the ladder
+        test reported green while asserting nothing at all.
+
+        A capacity sweep that pins a hyperparameter nobody reads is worse than
+        one that pins nothing, because the passing test is the evidence. This
+        asserts the property the other test silently assumes.
+        """
+        missing = [
+            dotted
+            for dotted in LADDER_CONSTANTS
+            if _get(_merged(f"config/scaling/{LADDER[0]}"), dotted) is KeyError
+        ]
+        assert not missing, (
+            f"LADDER_CONSTANTS pins {missing}, which no scaling rung declares "
+            "(and defaults.yaml no longer declares either). "
+            "test_constant_along_the_ladder is passing vacuously for these: a "
+            "missing key gives every rung the same `KeyError` repr. Remove the "
+            "entry, or restore the key if it is genuinely meant to be held fixed."
+        )
 
     @pytest.mark.parametrize("dotted", LADDER_CONSTANTS)
     def test_constant_along_the_ladder(self, dotted):
@@ -1516,4 +1554,118 @@ class TestBaselineArmsAreCompleteAndComparable:
             )
             + ". A comparison whose arms see different token budgets measures the "
             "budget, not the method. Declare an arm's schedule only with a reason."
+        )
+
+
+# ══════════════════════════════════════════════════════════════════════
+#  11. The mask-ratio knob: which one is live, and which is a decoy
+# ══════════════════════════════════════════════════════════════════════
+
+
+class TestOnlyOneMaskRatioKnobIsLive:
+    """Defect 2: `data.mask_ratio` was declared, set by configs, and inert.
+
+    THE MECHANISM (measured, not inferred)
+    --------------------------------------
+    `SpanMaskCollator.__init__` takes both a flat `mask_ratio` and a
+    `mask_ratio_start` / `mask_ratio_end` ramp, and resolves them like this:
+
+        self.mask_ratio_start = mask_ratio_start if mask_ratio_start is not None else mask_ratio
+        self.mask_ratio_end   = mask_ratio_end   if mask_ratio_end   is not None else mask_ratio
+
+    and `current_mask_ratio` returns the RAMP whenever `curriculum_steps > 0`,
+    falling back to `self.mask_ratio` only when there is no curriculum.
+    `src/train.py` sets `curriculum_steps = 10000` whenever both ramp endpoints
+    are present -- and `defaults.yaml` declares both. So in every shipped config
+    the ramp is live and `data.mask_ratio` is never read. Measured on the
+    shipped defaults:
+
+        defaults data.mask_ratio        : 0.35
+        defaults model.mask_ratio_start : 0.15
+        step 0     current_mask_ratio   : 0.15    <- not 0.35
+        step 4000  current_mask_ratio   : 0.23002 <- mid-ramp
+        no-ramp    current_mask_ratio   : 0.35    <- only reachable without a ramp
+
+    Ten shipped configs set `data.mask_ratio: 0.15`, believing it sets the mask
+    ratio. It does not; they all run the 0.15 -> 0.35 ramp.
+
+    WHY DELETE IT RATHER THAN WIRE IT
+    ----------------------------------
+    Wiring `data.mask_ratio` to win would mean changing the mask schedule of
+    every arm in the repo, including every published run, on the strength of a
+    key nobody had been reading. That is a science decision about what the
+    experiments were, and it is not this card's to make silently. Deleting the
+    decoy is behaviour-preserving -- measured above, no shipped run's ratio
+    changes -- and it removes the trap instead of the ambiguity.
+
+    Deleting it also STRENGTHENS `TestKeyPaths`: the key stops being a path any
+    config may use, so `_warn_unknown_config_keys` now reports a future config
+    that sets it, instead of accepting it silently. The ten configs that set it
+    are corrected to drop the line, which is what `test_no_config_sets_the_inert_key`
+    below pins -- and which is why those ten tests should be believed rather
+    than worked around: they assert that no config carries a key that cannot
+    reach the model, which is the property that was false before.
+    """
+
+    def test_data_mask_ratio_is_not_declared_in_defaults(self):
+        assert "data.mask_ratio" not in _DEFAULTS_LEAVES, (
+            "defaults.yaml declares data.mask_ratio, but src/train.py always "
+            "passes a mask_ratio_start/end ramp, so SpanMaskCollator.current_mask_"
+            "ratio returns the ramp and the value is never read. A declared key "
+            "that cannot reach the model is worse than no key: ten configs set "
+            "it to 0.15 believing that was their mask ratio. Either delete it or "
+            "make the trainer honour it -- do not leave it declared."
+        )
+
+    def test_no_config_sets_the_inert_key(self):
+        """The half that makes the deletion stick.
+
+        Deleting the defaults entry alone would leave the ten configs setting a
+        path that no longer exists, which `_warn_unknown_config_keys` would then
+        (correctly) flag on every run. This asserts they no longer do.
+        """
+        offenders = {
+            rel: _raw(rel)["data"]["mask_ratio"]
+            for rel in CONFIG_IDS
+            if isinstance(_raw(rel).get("data"), dict) and "mask_ratio" in _raw(rel)["data"]
+        }
+        assert not offenders, (
+            f"configs still set data.mask_ratio: {offenders}. The key is not in "
+            "defaults.yaml because the model.mask_ratio_start/end ramp overrides "
+            "it in every shipped config. Delete the line, or restore the key and "
+            "make the trainer read it -- but do not leave a config asserting a "
+            "mask ratio its run does not use."
+        )
+
+    def test_the_ramp_is_what_actually_drives_the_ratio(self):
+        """The property that makes the decoy a decoy, asserted on the collator.
+
+        Reads the schedule the shipped defaults produce, so this goes red if a
+        future edit makes `data.mask_ratio` live again -- at which point
+        `test_data_mask_ratio_is_not_declared_in_defaults` has to be revisited
+        rather than deleted.
+        """
+        from src.masks.span import SpanMaskCollator
+
+        start = _DEFAULTS["model"]["mask_ratio_start"]
+        end = _DEFAULTS["model"]["mask_ratio_end"]
+        collator = SpanMaskCollator(
+            mask_ratio=_DEFAULTS["data"].get("mask_ratio", 0.35),
+            span_length_range=(3, 10),
+            mask_ratio_start=start,
+            mask_ratio_end=end,
+            curriculum_steps=10000,  # what src/train.py hardcodes
+        )
+        assert collator.current_mask_ratio == pytest.approx(start), (
+            f"step 0 mask ratio is {collator.current_mask_ratio}, not the "
+            f"declared ramp start {start}; the trainer's fallback has changed "
+            "shape. Re-derive this file's claim before trusting it."
+        )
+        for _ in range(5000):
+            collator.step()
+        midpoint = start + 0.5 * (end - start)
+        assert collator.current_mask_ratio == pytest.approx(midpoint, abs=0.01), (
+            f"halfway through the curriculum the ratio is "
+            f"{collator.current_mask_ratio}, expected ~{midpoint}. The ramp is "
+            "the live knob; data.mask_ratio is not."
         )

@@ -613,6 +613,7 @@ def create_model(model_name, model_cfg, vocab_size, max_seq_len, device):
             num_heads=model_cfg.get("num_heads", 12),
             mlp_ratio=model_cfg.get("mlp_ratio", 4.0),
             drop_rate=model_cfg.get("drop_rate", 0.1),
+            drop_path_rate=model_cfg.get("drop_path_rate", 0.0),
         ).to(device)
         # Add a .config attribute for compatibility
         model.config = type(
@@ -637,6 +638,7 @@ def create_model(model_name, model_cfg, vocab_size, max_seq_len, device):
             num_heads=model_cfg.get("num_heads", 12),
             mlp_ratio=model_cfg.get("mlp_ratio", 4.0),
             drop_rate=model_cfg.get("drop_rate", 0.0),
+            drop_path_rate=model_cfg.get("drop_path_rate", 0.0),
             average_top_k_layers=model_cfg.get("average_top_k_layers", 8),
             loss_beta=model_cfg.get("loss_beta", 0.0),
             loss_scale=model_cfg.get("loss_scale", None),
@@ -664,7 +666,7 @@ def create_model(model_name, model_cfg, vocab_size, max_seq_len, device):
         # trainable count, so no width needs to be passed in for the parameter
         # matching to hold.
         #
-        # No extra `model_cfg` keys are read here on purpose. Every method
+        # No METHOD hyperparameter is read here on purpose. Every method
         # hyperparameter these arms take (`target_momentum`, `lambda_offdiag`,
         # `sim_weight` / `var_weight` / `cov_weight` / `gamma`) already has its
         # published-paper value as the constructor default, so an arm built from
@@ -677,6 +679,19 @@ def create_model(model_name, model_cfg, vocab_size, max_seq_len, device):
         # NOT done here: exempting a key that no shipped config uses is a
         # permanent hole in the typo detector, bought for a knob that has a
         # correct default.
+        #
+        # `drop_path_rate` is a different category and IS read. It is not part
+        # of any of the four methods -- it is a property of the shared
+        # `TextSpanJEPAEncoder` trunk, which every arm in this repo builds. This
+        # branch used to omit it while the JEPA branch honoured it, so at the
+        # reference config the JEPA column ran stochastic depth and all six
+        # baseline columns ran `nn.Identity`: the row then measured the method
+        # AND a regulariser, which is not a comparison of methods. Omitting it
+        # here is exactly the asymmetry of the `drop_rate` argument four lines
+        # up, which IS read. Pinned by
+        # `tests/test_ssl_baselines.py::TestRegularizationParity`, which reads
+        # the built modules rather than the constructor signature because these
+        # classes swallow unknown keywords in `**kwargs`.
         model = SSL_BASELINE_ARMS[model_name]()(
             vocab_size=vocab_size,
             max_seq_len=max_seq_len,
@@ -685,6 +700,7 @@ def create_model(model_name, model_cfg, vocab_size, max_seq_len, device):
             num_heads=model_cfg.get("num_heads", 12),
             mlp_ratio=model_cfg.get("mlp_ratio", 4.0),
             drop_rate=model_cfg.get("drop_rate", 0.0),
+            drop_path_rate=model_cfg.get("drop_path_rate", 0.0),
         ).to(device)
     else:
         raise ValueError(

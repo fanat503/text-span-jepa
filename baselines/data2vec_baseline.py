@@ -63,6 +63,7 @@ class Data2VecTextBaseline(nn.Module):
         depth: int = 12,
         num_heads: int = 12,
         mlp_ratio: float = 4.0,
+        drop_path_rate: float = 0.0,
         average_top_k_layers: int = 8,
         loss_beta: float = 0.0,
         loss_scale: float | None = None,
@@ -93,6 +94,7 @@ class Data2VecTextBaseline(nn.Module):
             depth=depth,
             num_heads=num_heads,
             mlp_ratio=mlp_ratio,
+            drop_path_rate=drop_path_rate,
         )
 
         self.target_encoder = copy.deepcopy(self.encoder)
