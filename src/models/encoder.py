@@ -29,6 +29,76 @@ class DropPath(nn.Module):
         return x.div(keep_prob) * random_tensor
 
 
+class QKNorm(nn.Module):
+    """QK-normalisation: RMS-normalise ``q`` and ``k`` per head, before the dot product.
+
+    Added from the RoboJEPA literature scan (docs/RESEARCH_BACKLOG.md item 1,
+    arXiv:2610.10515: "We found QK-normalization to be of particular importance
+    for training stability when scaling the dataset size and the model size.").
+
+    WHY THIS IS NOT A DUPLICATE OF `norm_layer`
+    -------------------------------------------
+    The blocks here are PRE-norm: `Block.forward` applies `self.norm1` to the
+    residual stream *before* `self.attn` projects it into q/k/v. That LayerNorm
+    bounds the block INPUT. It does not bound the attention LOGITS, which grow
+    with `||W_q x|| * ||W_k x||` and therefore with the projection weights --
+    the thing that actually grows during a long run and produces the saturated
+    softmax (ViT-22B / Gemma-2 "attention logit growth"). Normalising q and k
+    after projection removes that dependence entirely: the logit is a pure
+    cosine, so its magnitude is fixed by `head_dim` alone.
+
+    WHY RMS AND NOT LAYERNORM, AND WHY NO LEARNABLE GAIN
+    ---------------------------------------------------
+    1. Order. QK-norm is defined on the post-projection q/k and must be applied
+       BEFORE any rotation is added to them. This module has no positional
+       rotation to order against -- see the note on RoPE below.
+    2. RMS (not LayerNorm) because RMS is the cheaper of the two and, with no
+       mean-subtraction, preserves the sign of every component of q and k,
+       which a cosine on a zero-mean vector does not.
+    3. NO learnable gain, deliberately. A per-channel gain `g` would preserve
+       scale invariance (g does not depend on the token), but it would add
+       2 * head_dim parameters per head-set, and this repo compares arms that
+       are parameter-matched by construction. As written, `use_qk_norm=True` and
+       `use_qk_norm=False` have IDENTICAL parameter counts and IDENTICAL
+       state_dicts, so the ablation isolates the normalisation and nothing else.
+       `tests/test_qk_norm.py` pins that property.
+
+    THE RoPE ORDERING, STATED EXPLICITLY
+    -----------------------------------
+    The brief for this change requires q/k to be RMS-normalised BEFORE RoPE is
+    added, because normalising after a rotation only partially undoes it: the
+    rotation mixes coordinates of different magnitude into the RMS, so the
+    result is still scale-dependent, and the error is invisible to any shape
+    check. This codebase HAS NO RoPE -- `TextSpanJEPLEncoder` uses a learned
+    absolute `pos_embedding`, and `grep -rn "rotary|RoPE|rotate_half" src/`
+    returns nothing. Positional information is therefore added to the token
+    embedding, i.e. before the qkv projection, so q and k are normalised here
+    with no rotation anywhere in the path. The ordering requirement is satisfied
+    vacuously. Adding RoPE is a separate backlog item and is on the
+    "does not transfer" list for this modality (no views, sequence positions
+    only), so it is NOT introduced here -- doing so would be scope creep into
+    another worker's file.
+    """
+
+    def __init__(self, eps: float = 1e-6):
+        super().__init__()
+        self.eps = eps
+
+    def forward(self, q: torch.Tensor, k: torch.Tensor):
+        """Normalise the head dimension (last axis) of q and k.
+
+        Args:
+            q, k: (B, num_heads, N, head_dim)
+
+        Returns:
+            (q_hat, k_hat), same shapes, each with RMS exactly 1 per head-vector.
+
+        """
+        q = q * torch.rsqrt(q.pow(2).mean(-1, keepdim=True) + self.eps)
+        k = k * torch.rsqrt(k.pow(2).mean(-1, keepdim=True) + self.eps)
+        return q, k
+
+
 class Attention(nn.Module):
     """Multi-head self-attention for bidirectional encoder."""
 
@@ -40,23 +110,33 @@ class Attention(nn.Module):
         qk_scale=None,
         attn_drop=0.0,
         proj_drop=0.0,
+        use_qk_norm=False,
+        qk_norm_eps=1e-6,
     ):
         super().__init__()
         self.num_heads = num_heads
-        head_dim = dim // num_heads
+        self.head_dim = dim // num_heads
+        head_dim = self.head_dim
         self.scale = qk_scale or head_dim**-0.5
         self.qkv = nn.Linear(dim, dim * 3, bias=qkv_bias)
         self.attn_drop = nn.Dropout(attn_drop)
         self.proj = nn.Linear(dim, dim)
         self.proj_drop = nn.Dropout(proj_drop)
+        # `None` (not an Identity) when off, so the disabled arm's state_dict is
+        # byte-identical to the pre-QK-norm model and old checkpoints load.
+        self.qk_norm = QKNorm(eps=qk_norm_eps) if use_qk_norm else None
 
-    def forward(self, x):
-        B, N, C = x.shape
-        # Micro-opt: fused reshape+permute avoids extra copy
-        qkv = (
-            self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
-        )
-        q, k, v = qkv.unbind(0)  # micro-opt: unbind instead of indexing (avoids contiguity issues)
+    def _attend(self, q, k, v):
+        """Attention over pre-split (B, num_heads, N, head_dim) tensors.
+
+        Split out from `forward` so a test can drive the logits with q/k of a
+        chosen magnitude. Scale invariance of the logits is a property of this
+        function's inputs, and it cannot be observed through `forward` -- the
+        pre-norm LayerNorm already hides the input's scale, so an
+        end-to-end scaling test passes with QK-norm off and proves nothing.
+        """
+        B, _H, N, _D = q.shape
+        C = self.num_heads * self.head_dim
         # Micro-opt: use scaled_dot_product_attention when available (PyTorch 2.0+)
         if hasattr(F, "scaled_dot_product_attention"):
             x = F.scaled_dot_product_attention(
@@ -65,12 +145,23 @@ class Attention(nn.Module):
                 v,
                 dropout_p=self.attn_drop.p if self.training else 0.0,
             )
-            x = x.transpose(1, 2).reshape(B, N, C)
-        else:
-            attn = (q @ k.transpose(-2, -1)) * self.scale
-            attn = attn.softmax(dim=-1)
-            attn = self.attn_drop(attn)
-            x = (attn @ v).transpose(1, 2).reshape(B, N, C)
+            return x.transpose(1, 2).reshape(B, N, C)
+        attn = (q @ k.transpose(-2, -1)) * self.scale
+        attn = attn.softmax(dim=-1)
+        attn = self.attn_drop(attn)
+        return (attn @ v).transpose(1, 2).reshape(B, N, C)
+
+    def forward(self, x):
+        B, N, C = x.shape
+        # Micro-opt: fused reshape+permute avoids extra copy
+        qkv = (
+            self.qkv(x).reshape(B, N, 3, self.num_heads, C // self.num_heads).permute(2, 0, 3, 1, 4)
+        )
+        q, k, v = qkv.unbind(0)  # micro-opt: unbind instead of indexing (avoids contiguity issues)
+        if self.qk_norm is not None:
+            # Per head, before the dot product. See QKNorm for the RoPE ordering.
+            q, k = self.qk_norm(q, k)
+        x = self._attend(q, k, v)
         x = self.proj(x)
         x = self.proj_drop(x)
         return x
@@ -115,6 +206,8 @@ class Block(nn.Module):
         drop_path=0.0,
         act_layer=nn.GELU,
         norm_layer=nn.LayerNorm,
+        use_qk_norm=False,
+        qk_norm_eps=1e-6,
     ):
         super().__init__()
         self.norm1 = norm_layer(dim)
@@ -125,6 +218,8 @@ class Block(nn.Module):
             qk_scale=qk_scale,
             attn_drop=attn_drop,
             proj_drop=drop,
+            use_qk_norm=use_qk_norm,
+            qk_norm_eps=qk_norm_eps,
         )
         self.drop_path = DropPath(drop_path) if drop_path > 0.0 else nn.Identity()
         self.norm2 = norm_layer(dim)
@@ -165,6 +260,8 @@ class TextSpanJEPLEncoder(nn.Module):
         norm_layer=None,
         init_std=0.02,
         gradient_checkpointing=False,
+        use_qk_norm=False,
+        qk_norm_eps=1e-6,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -194,6 +291,8 @@ class TextSpanJEPLEncoder(nn.Module):
                     attn_drop=attn_drop_rate,
                     drop_path=dpr[i],
                     norm_layer=norm_layer,
+                    use_qk_norm=use_qk_norm,
+                    qk_norm_eps=qk_norm_eps,
                 )
                 for i in range(depth)
             ],
