@@ -51,6 +51,11 @@ class TextSpanJEPAConfig:
         self.drop_rate = kwargs.get("drop_rate", 0.0)
         self.attn_drop_rate = kwargs.get("attn_drop_rate", 0.0)
         self.drop_path_rate = kwargs.get("drop_path_rate", 0.1)
+        # QK-normalisation: RMS-normalise q and k per head inside the attention
+        # blocks. RoboJEPA (arXiv 2610.10515) reports it "of particular importance
+        # for training stability when scaling the dataset size and the model size".
+        # Defaults to false, so no shipped config or recorded number changes.
+        self.use_qk_norm = kwargs.get("use_qk_norm", False)
         self.gradient_checkpointing = kwargs.get("gradient_checkpointing", False)
 
         # Predictor
@@ -383,6 +388,7 @@ class TextSpanJEPA(TrainingStateGuard):
             drop_rate=config.drop_rate,
             attn_drop_rate=config.attn_drop_rate,
             drop_path_rate=config.drop_path_rate,
+            use_qk_norm=config.use_qk_norm,
             gradient_checkpointing=config.gradient_checkpointing,
         )
 

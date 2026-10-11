@@ -154,6 +154,14 @@ model:
   # Fixed across the scaling ladder. drop-path is a regulariser; letting it
   # track model size makes a capacity curve uninterpretable.
   drop_path_rate: 0.1
+  # QK-normalisation: RMS-normalise q and k per head, applied BEFORE any RoPE
+  # would be added. RoboJEPA (arXiv 2610.10515) reports it of particular
+  # importance for training stability when scaling the dataset size and the model
+  # size. It lives here, with the encoder-architecture flags, and NOT in the
+  # use_<mech> GWP block: QK-norm is not one of the twelve mechanisms, and
+  # test_all_mechanisms_length_is_stable pins that count. Default false, so no
+  # shipped config or recorded number changes silently.
+  use_qk_norm: false
   gradient_checkpointing: false
 
   # ── Predictor ─────────────────────────────────────────────────────
