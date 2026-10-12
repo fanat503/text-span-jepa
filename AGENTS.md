@@ -162,6 +162,37 @@ the two tests above rather than re-reading the prose.
 
 ## Boundaries for parallel agents
 
+## Self-improvement rules (read every tick, not once)
+
+Derived from a paper that ablated a coding-agent harness - arXiv:2609.20804,
+"An Empirical Study of Harness Design for Coding Agents", 176 settings, 4 models.
+Not a JEPA paper, but it is an empirical account of what makes *this* kind of
+agent harness work, and every rule below is paired with a failure it explains in
+this campaign. Full reasoning: `docs/SELF_IMPROVEMENT_RULES.md`.
+
+1. **A prompt is bounded context, not a container.** 1800 characters is the
+   ceiling; the full contract goes in a file (TASKS.md, a card) and the prompt
+   points at it. Every dispatch abort in this campaign happened above ~2200
+   characters, and none below ~1800. This rule cost more lost dispatch attempts
+   than anything else on the list.
+2. **Offload before summarising.** Any fact needed later - a measured number, a
+   branch head, a command's output - goes to a grep-able file first. A fact that
+   lives only in the transcript will be paid for twice.
+3. **Recovery machinery must show something recovers through it.** Otherwise it
+   is a pile with a justification. Test it before keeping it.
+4. **The ledger is scaffolding; check values, never counts.** A count of 33
+   passes just as happily on 33 wrong rows, which is the exact bug that was
+   shipped twice.
+5. **File content goes through the write tool; never push content through the
+   shell.** Three files were corrupted this way, one of them a 304-line proof
+   collapsed to a single line.
+6. **Every verification claim carries its mutation verdict.** "Green" is not
+   evidence; "restoring X makes these N tests go red" is.
+7. **Check a gate's coverage by diffing what should be covered against what it
+   checks.** Running a gate only tells you the stages you wrote pass. Diffing
+   tests/ against gate.sh found 19 files - 785 assertions - that ran only in CI.
+
+
 One owner per file. Real collision hotspots in this repo — if two tasks need
 any of these, they **cannot** run concurrently:
 

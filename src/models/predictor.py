@@ -10,11 +10,35 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 
+from .encoder import QKNorm
+
 
 class PredictorBlock(nn.Module):
-    """Lightweight transformer block for the predictor — from I-JEPA."""
+    """Lightweight transformer block for the predictor — from I-JEPA.
 
-    def __init__(self, dim, num_heads, mlp_ratio=4.0, qkv_bias=True, drop=0.0):
+    `use_qk_norm` inserts per-head RMS normalisation of q and k between the
+    projection and the dot product. See `src.models.encoder.QKNorm` for what it
+    is and why it is not the pre-norm LayerNorm that is already here.
+
+    `nn.MultiheadAttention` fuses the qkv projection, so there is no hook
+    between projection and dot product. The fused module is therefore kept as
+    the parameter holder (`in_proj_weight`/`in_proj_bias`/`out_proj`, which
+    `_fix_init_weight` and every saved checkpoint depend on) and the QK-norm arm
+    re-does the projection by hand. That is why the disabled arm is still the
+    original single `self.attn(h, h, h, ...)` call, bit for bit: the ablation's
+    control is not a reimplementation of the recipe, it IS the recipe.
+    """
+
+    def __init__(
+        self,
+        dim,
+        num_heads,
+        mlp_ratio=4.0,
+        qkv_bias=True,
+        drop=0.0,
+        use_qk_norm=False,
+        qk_norm_eps=1e-6,
+    ):
         super().__init__()
         self.norm1 = nn.LayerNorm(dim)
         self.attn = nn.MultiheadAttention(dim, num_heads, dropout=drop, batch_first=True)
@@ -24,10 +48,44 @@ class PredictorBlock(nn.Module):
             nn.GELU(),
             nn.Linear(int(dim * mlp_ratio), dim),
         )
+        self.head_dim = dim // num_heads
+        self.qk_norm = QKNorm(eps=qk_norm_eps) if use_qk_norm else None
+
+    def _attend_qk_norm(self, h):
+        """Multi-head attention with QK-norm, over a (B, T, C) input.
+
+        `nn.MultiheadAttention.in_proj_weight` packs the projections in the
+        order [q, k, v] (see the PyTorch reference for
+        `torch.nn.functional.multi_head_attention_forward`), so a `chunk(3)` on
+        the projection output is the same split the fused kernel does. The
+        per-head RMS normalisation happens on the (B, num_heads, T, head_dim)
+        view, i.e. AFTER the projection and BEFORE the dot product — which is
+        the order the QK-norm brief requires, and the only order that makes the
+        logits scale-invariant.
+        """
+        B, T, C = h.shape
+        qkv = F.linear(h, self.attn.in_proj_weight, self.attn.in_proj_bias)
+        # qkv packs [q, k, v]; reshape to heads.
+        q, k, v = (
+            t.reshape(B, T, self.attn.num_heads, self.head_dim).permute(0, 2, 1, 3)
+            for t in qkv.chunk(3, dim=-1)
+        )
+        q, k = self.qk_norm(q, k)
+        out = F.scaled_dot_product_attention(
+            q,
+            k,
+            v,
+            dropout_p=self.attn.dropout if self.training else 0.0,
+        )
+        out = out.permute(0, 2, 1, 3).reshape(B, T, C)
+        return self.attn.out_proj(out)
 
     def forward(self, x):
         h = self.norm1(x)
-        h, _ = self.attn(h, h, h, need_weights=False)
+        if self.qk_norm is None:
+            h, _ = self.attn(h, h, h, need_weights=False)
+        else:
+            h = self._attend_qk_norm(h)
         x = x + h
         x = x + self.mlp(self.norm2(x))
         return x
@@ -58,6 +116,8 @@ class TextSpanJEPApredictor(nn.Module):
         num_refine_steps=3,
         refine_step_size=0.1,
         init_std=0.02,
+        use_qk_norm=False,
+        qk_norm_eps=1e-6,
     ):
         super().__init__()
         self.embed_dim = embed_dim
@@ -94,7 +154,13 @@ class TextSpanJEPApredictor(nn.Module):
         # Predictor transformer blocks (I-JEPA pattern)
         self.predictor_blocks = nn.ModuleList(
             [
-                PredictorBlock(dim=predictor_embed_dim, num_heads=num_heads, mlp_ratio=mlp_ratio)
+                PredictorBlock(
+                    dim=predictor_embed_dim,
+                    num_heads=num_heads,
+                    mlp_ratio=mlp_ratio,
+                    use_qk_norm=use_qk_norm,
+                    qk_norm_eps=qk_norm_eps,
+                )
                 for _ in range(depth)
             ],
         )
