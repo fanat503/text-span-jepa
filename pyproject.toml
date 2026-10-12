@@ -45,3 +45,9 @@ extend-exclude = [".agent-notes"]
 [tool.black]
 line-length = 100
 target-version = ["py39"]
+# `.agent-notes/` holds campaign scratch - the one-shot probe scripts a worker
+# writes to take a measurement and then reports in prose. It is evidence, not
+# source, and it is already excluded from ruff. Excluding it from black too, so
+# a worker's scratch file cannot fail CI's format check while the source is
+# clean. Black takes a single regex STRING here, not a list.
+extend-exclude = "agent-notes/"
