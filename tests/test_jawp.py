@@ -905,3 +905,212 @@ class TestPredictiveRank:
             z_pred = torch.randn(32, 32) * torch.rand(1).item()
             info = jawp.compute_predictive_rank(z_pred)
             assert 0.0 <= info["rank_utilization"] <= 1.0
+
+
+class TestPredictiveRelevanceDirection:
+    """`predictive_relevance` must read what its name and every consumer say.
+
+    The quantity is the workspace's share of the prediction-residual energy,
+    complemented so that it is a QUALITY score in [0, 1]:
+
+        w   = ||Q^T (z_pred - z_target)||_F^2 / ||z_pred - z_target||_F^2
+        rel = 1 - w
+
+    Both terms must be normalised over the SAME axis. They used to be a mean
+    over N*k and a mean over N*D respectively, so their ratio carried a D/k
+    factor and the reported number was `max(0, 1 - (D/k)*w)`: the same
+    direction, wrong scale. The zero threshold landed at w = k/D (chance
+    level, 0.094 at D=64, k=6) instead of at w = 1, so the metric read 0.0
+    for any workspace holding even a chance-level share of the residual.
+
+    That made the "collapses to 0" reading cited at `proofs/wsd.md:30`,
+    `proofs/wsd.md:222`, `proofs/jawp.md:264`, `src/models/jawp.py` and
+    `src/models/wsd.py` unfalsifiable: it was already 0 before the workspace
+    could have died.
+
+    DIRECTION (the part that must never regress): rel FALLS as the workspace
+    gets harder to predict, so 1.0 means the workspace prediction is exact
+    and 0.0 means the workspace holds ALL the unexplained energy. Every
+    consumer and `tests/test_host_reads.py::test_jawp_guarded_branches_still_fire`
+    (zero residual -> 1.0) already assume this direction.
+    """
+
+    @staticmethod
+    def _residual_with_share(w, D=64, k=6, N=256, seed=0):
+        """A residual whose energy share inside span(Q) is exactly `w`.
+
+        Builds an orthonormal Q and an orthonormal complement U, then mixes
+        the two components so `||Q^T r||^2 / ||r||^2 == w`. Both parts are
+        scaled to unit energy first, so the realised share is w exactly and
+        not w in expectation.
+        """
+        gen = torch.Generator().manual_seed(seed)
+        Q = torch.linalg.qr(torch.randn(D, k, generator=gen, dtype=torch.float64))[0]
+        # Orthonormal basis of span(Q)^perp.
+        R = torch.randn(D, D - k, generator=gen, dtype=torch.float64)
+        R = R - Q @ (Q.T @ R)
+        U = torch.linalg.qr(R)[0][:, : D - k]
+
+        z_target = torch.randn(N, D, generator=gen, dtype=torch.float64)
+        inside = torch.randn(N, k, generator=gen, dtype=torch.float64)
+        outside = torch.randn(N, D - k, generator=gen, dtype=torch.float64)
+        inside = inside / inside.norm() * (w**0.5)
+        outside = outside / outside.norm() * ((1.0 - w) ** 0.5)
+        return Q, z_target, z_target + (inside @ Q.T + outside @ U.T)
+
+    @classmethod
+    def _relevance_at_share(cls, w, D=64, k=6, seed=0):
+        """Run the module on a residual of share `w` and return (w, info)."""
+        from src.models.jawp import JAWPModule
+
+        Q, z_target, z_pred = cls._residual_with_share(w, D, k, seed=seed)
+        jawp = JAWPModule(embed_dim=D, k_start=k, k_end=k, curriculum_steps=0).double()
+        with torch.no_grad():
+            jawp.workspace_Q.copy_(Q)
+        _loss, info = jawp.compute_loss(z_pred, z_target, step=10_000)
+        r = z_pred - z_target
+        realised = float(((r @ Q) ** 2).sum() / (r**2).sum())
+        return realised, info
+
+    def test_direction_is_high_when_the_workspace_prediction_is_exact(self):
+        """Residual entirely OUTSIDE span(Q) -> workspace prediction is exact.
+
+        The workspace then holds none of the unexplained energy, so the
+        score must read at its MAXIMUM. This is the case
+        `test_host_reads.py:524` already pins at 1.0 (a zero residual).
+        """
+        realised, info = self._relevance_at_share(0.0)
+        assert realised < 1e-9, f"construction failed, share={realised}"
+        assert (
+            info["loss_workspace"] < 1e-9
+        ), f"workspace prediction should be exact, got {info['loss_workspace']}"
+        assert info["predictive_relevance"] == 1.0, (
+            "exact workspace prediction must read the MAXIMUM relevance, got "
+            f"{info['predictive_relevance']}"
+        )
+
+    def test_direction_is_zero_when_the_workspace_holds_all_the_error(self):
+        """Residual entirely INSIDE span(Q) -> the workspace is useless.
+
+        `loss_workspace` is at its worst here and the workspace carries all
+        of the unexplained energy, so the score must read its MINIMUM. This
+        is the reading every consumer gives 0.
+        """
+        realised, info = self._relevance_at_share(1.0)
+        assert realised > 1 - 1e-9, f"construction failed, share={realised}"
+        assert info["predictive_relevance"] < 1e-9, (
+            "a workspace holding all the residual energy must read ZERO relevance, got "
+            f"{info['predictive_relevance']}"
+        )
+
+    def test_score_falls_as_the_workspace_residual_grows(self):
+        """The score is monotonically decreasing in the workspace error.
+
+        This is the property the whole set of citations depends on: a
+        workspace that gets harder to predict must never read HIGHER.
+        """
+        shares = [0.0, 0.1, 0.3, 0.5, 0.7, 0.9]
+        readings = []
+        for w in shares:
+            realised, info = self._relevance_at_share(w, seed=1)
+            readings.append(info["predictive_relevance"])
+            assert abs(realised - w) < 1e-6, f"construction drifted: {realised} != {w}"
+        for (w_a, a), (w_b, b) in zip(zip(shares, readings), zip(shares[1:], readings[1:])):
+            assert b <= a + 1e-9, (
+                f"relevance must not RISE as the workspace residual grows: "
+                f"w={w_a} -> {a:.6f}, w={w_b} -> {b:.6f}"
+            )
+
+    def test_chance_level_share_is_not_scored_as_zero(self):
+        """A workspace holding exactly a CHANCE share must not read 0.0.
+
+        This is the D/k bug pinned directly. `k/D` of the residual energy
+        inside a k-dimensional workspace is what a RANDOM subspace gets, so
+        it says nothing about the workspace having died. The old
+        `max(0, 1 - (D/k)*w)` scored exactly this at 0.0, which is why
+        "relevance collapses to 0" was uninformative.
+        """
+        D, k = 64, 6
+        chance = k / D
+        realised, info = self._relevance_at_share(chance, D=D, k=k, seed=2)
+        assert abs(realised - chance) < 1e-6, f"construction drifted: {realised}"
+        assert info["predictive_relevance"] > 0.5, (
+            f"a chance-level share ({chance:.4f}) must not read as a dead workspace, got "
+            f"{info['predictive_relevance']}"
+        )
+
+    def test_score_is_the_workspace_share_not_a_dimension_ratio(self):
+        """The score equals `1 - w`, so it does not depend on D/k.
+
+        Pinned by holding the share fixed and varying `D/k`: the same
+        residual share must score the same regardless of how many
+        background dimensions it is spread across. Under `1 - (D/k)*w`
+        these differ by the ratio.
+        """
+        readings = {}
+        for D, k in ((64, 6), (64, 32), (128, 4)):
+            w = 0.25
+            realised, info = self._relevance_at_share(w, D=D, k=k, seed=3)
+            assert abs(realised - w) < 1e-6, f"construction drifted at D={D}, k={k}"
+            readings[(D, k)] = info["predictive_relevance"]
+        values = list(readings.values())
+        assert max(values) - min(values) < 1e-6, (
+            "the score must not depend on D/k; it read "
+            f"{ {f'D={d},k={kk}': round(v, 6) for (d, kk), v in readings.items()} }"
+        )
+
+    def test_score_is_in_the_unit_interval(self):
+        """The score is a [0, 1] quality score, as its name promises."""
+        for w in (0.0, 0.25, 0.5, 0.75, 1.0):
+            _realised, info = self._relevance_at_share(w, seed=4)
+            assert (
+                0.0 <= info["predictive_relevance"] <= 1.0
+            ), f"relevance out of [0,1] at w={w}: {info['predictive_relevance']}"
+
+    def test_score_tracks_the_reported_workspace_loss(self):
+        """The score and `loss_workspace` must move together.
+
+        Two independent constructions: one that concentrates the error in
+        the workspace and one that keeps it out. The score is only a
+        meaningful diagnostic if the two agree about which is worse.
+        """
+        good_realised, good = self._relevance_at_share(0.05, seed=5)
+        bad_realised, bad = self._relevance_at_share(0.95, seed=5)
+        assert good["loss_workspace"] < bad["loss_workspace"], (
+            f"constructed wrong: loss_workspace {good['loss_workspace']} !< "
+            f"{bad['loss_workspace']}"
+        )
+        assert good["predictive_relevance"] > bad["predictive_relevance"], (
+            f"score must track the loss: {good['predictive_relevance']} !> "
+            f"{bad['predictive_relevance']}"
+        )
+
+    def test_score_is_invariant_to_the_overall_error_scale(self):
+        """Scaling the whole residual must not move the score.
+
+        The metric is a RATIO of two energies of the same residual, so any
+        common scale factor cancels. A metric that moved under rescaling
+        would be reporting the loss magnitude, not the split.
+
+        The scales stay above the module's pre-existing `bg_pred_error >
+        1e-10` guard. Below it the module takes the "residual is zero" branch
+        and reports 1.0 by design (pinned at
+        `tests/test_host_reads.py::test_jawp_guarded_branches_still_fire`),
+        so scale-invariance is a claim about the ratio, not about the guard.
+        """
+        from src.models.jawp import JAWPModule
+
+        D, k = 64, 6
+        Q, z_target, z_pred = self._residual_with_share(0.3, D, k, seed=6)
+        jawp = JAWPModule(embed_dim=D, k_start=k, k_end=k, curriculum_steps=0).double()
+        with torch.no_grad():
+            jawp.workspace_Q.copy_(Q)
+        scores = []
+        for scale in (0.1, 1.0, 10.0):
+            _loss, info = jawp.compute_loss(
+                z_target + (z_pred - z_target) * scale, z_target, 10_000
+            )
+            scores.append(info["predictive_relevance"])
+        assert (
+            max(scores) - min(scores) < 1e-9
+        ), f"the score must be scale-invariant, read {scores} for scales (0.1, 1, 10)"

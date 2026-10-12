@@ -216,7 +216,18 @@ class WorkspaceSyncDrift(TrainingStateGuard):
             # Q-gradients is negative on 12/12 consecutive steps (mean
             # ~ -0.47), and the crossover is lambda_wsd ~ 0.42 -- above the
             # 0.01 default and the 0.1 ablation, so the grid is safe today.
-            # Above the crossover, jawp_predictive_relevance collapses to 0.
+            #
+            # NOTE on a claim that used to sit here: "Above the crossover,
+            # jawp_predictive_relevance collapses to 0." That was read off a
+            # metric which compared a mean over the N*k workspace residual
+            # against a mean over the N*D full residual, so it carried a
+            # D/k factor and read 0.0 for any workspace holding a CHANCE-level
+            # share (k/D) of the residual. It measured the normalisation, not
+            # the workspace. `jawp.compute_loss` now normalises both terms on
+            # one axis; the antagonism above is unaffected (it is a
+            # gradient-cosine measurement, independent of that diagnostic),
+            # but the relevance numbers quoted in proofs/wsd.md have NOT been
+            # re-measured against the corrected metric.
             #
             # Mutation check: flipping this line to eigenvectors[:, :self.k]
             # (bottom-k, i.e. "just make them agree") passes all 105 tests in
