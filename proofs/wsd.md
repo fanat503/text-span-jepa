@@ -211,24 +211,49 @@ chance is $k/D = 0.094$.
 
 | `lambda_wsd` | `ov_top` | `jawk_pca_alignment` | `jawk_predictive_relevance` | total loss |
 |---|---|---|---|---|
-| 0.0 | 0.0494 | 0.0633 | 0.3251 | 1.151 |
-| 0.001 | 0.0497 | 0.0634 | 0.3249 | 1.162 |
-| 0.01 | 0.0525 | 0.0637 | 0.3237 | 1.266 |
-| 0.1 | 0.0913 | 0.0703 | 0.2991 | 2.267 |
-| 1.0 | 0.3705 | 0.1837 | **0.0000** | 9.095 |
-| 10.0 | 0.3866 | 0.2005 | **0.0000** | 75.227 |
+| 0.0 | 0.0494 | 0.0633 | **SUPERSEDED — see below** | 1.151 |
+| 0.001 | 0.0497 | 0.0634 | **SUPERSEDED — see below** | 1.162 |
+| 0.01 | 0.0525 | 0.0637 | **SUPERSEDED — see below** | 1.266 |
+| 0.1 | 0.0913 | 0.0703 | **SUPERSEDED — see below** | 2.267 |
+| 1.0 | 0.3705 | 0.1837 | **SUPERSEDED — see below** | 9.095 |
+| 10.0 | 0.3866 | 0.2005 | **SUPERSEDED — see below** | 75.227 |
 
 `span(Q)` is measurably dragged toward the top-variance target subspace, and at
 $\lambda \ge 1$ JAWP's own predictive-relevance diagnostic collapses to zero —
 the workspace stops being predictable at all. The conflict is not academic.
 
+### The `jawk_predictive_relevance` column above is INVALID — do not cite it
+
+**Status: OPEN — the owner's call.** Those figures were measured with the
+pre-repair metric, which carried a spurious `D/k` in its ratio and therefore sat
+at chance level rather than at total failure. The conclusion *drawn* from them —
+that the workspace stops being predictable at high `lambda_wsd` — may still be
+true, but this table no longer supports it, and the "collapses to `0.0000`"
+figures in particular were an artefact of the scaling.
+
+Read `0.0000` as **"the diagnostic read zero because it was mis-scaled"**, not
+as "the diagnostic read zero because the workspace died". `ov_top` is the
+surviving evidence for the antagonism, and it is real.
+
+Repair: re-run the sweep with the corrected metric. That needs a training run,
+which is forbidden on this box, so it is blocked until the owner runs it. The
+figures are marked rather than deleted because the table looks like measured
+evidence and a reader without the history would cite it.
+
+
 ### Which weights are actually shipped
 
-- `defaults.yaml:241` `lambda_wsd: 0.01`, `defaults.yaml:237` `use_wsd: true`.
-- **Every** runnable config sets `use_wsd: false`: `config/scaling/*.yaml`,
-  `config/wikitext/*`, `config/tinystories/*`, `config/kaggle/*`,
-  `config/ablations/{none,sigreg_only,no_wsd}.yaml`.
-- The only config that enables it is `config/ablations/wsd_on.yaml`
+**Corrected.** An earlier version of this section said "every runnable config
+sets `use_wsd: false`". That is wrong, and a TASK-41 audit corrected it against
+the real deep-merge: **56 of 68 configs resolve `use_wsd: true`**, including
+`defaults.yaml` and every leave-one-out ablation row. So the antagonism is
+**live in the ablation grid the paper will run**, not latent. It is not dominant
+only because the shipped `lambda_wsd` of `0.01` sits roughly 42x below the
+measured crossover of ~0.42.
+
+- `defaults.yaml` sets `use_wsd: true` and `lambda_wsd: 0.01`. Line numbers
+  drift; grep rather than trusting a number written into a proof.
+- The only arm that raises it is `config/ablations/wsd_on.yaml`
   (`use_wsd: true`, `lambda_wsd: 0.1`) — 4x below the measured crossover.
 
 So the antagonism is **live but sub-threshold in the grid**, and **latent in
