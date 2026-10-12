@@ -247,6 +247,15 @@ does reach `workspace_Q` in the same backward pass as JAWP. The measured
 gradient opposition at `proofs/wsd.md:186-199` is a gradient-cosine measurement
 and does not depend on any of the diagnostics above.
 
+**D-WSD-7 — two sections of the proof document have no implementation at all.**
+The "Constructive Bound via STA" section (`wsd.md:107-112`) states
+`d_Gr ≤ ‖Σ_online − Σ_target‖₂/δ`, and the "Connection to EMA Scheduling" section
+(`wsd.md:114-115`) claims the drift "enabl[es] adaptive `τ` scheduling". Neither
+is implemented: there is no `Σ_online` anywhere in `wsd.py` or in WSD's path in
+`jepa.py`, and `ema_beta` is assigned once at `wsd.py:156` and never written
+again. `wsd_steady_state_error` (D-WSD-1) does not substitute for the first —
+it is the running-drift EMA, not a spectral-gap ratio.
+
 ### Could not determine
 
 The measured crossover `λ_wsd ≈ 0.42` is scale- and schedule-specific
@@ -990,6 +999,13 @@ D=64, k=6. `ρ_Q` in `wsr.md:20` has no such divisor.
 or configs — an ablation over the workspace dimension will show the diagnostic
 shrinking for arithmetic reasons.
 
+**D-WSR-6 — Theorem 3's statement contradicts its own proof.** The Statement
+(`wsr.md:80`) says `ρ_Q = ρ_spectral + ρ_directional`, an **equality**. The
+proof's Step 3 (`wsr.md:95`) derives `ρ_Q ≤ ρ_spectral + ρ_directional`, an
+inequality, "by the triangle inequality on the norm". Even with the correct
+decomposition implemented (which it is not — D-WSR-2), the two reported
+components would not be certified to sum to the headline.
+
 ### What holds up
 
 The Grassmann tangent projection. `grad_grassmann = G − Q(QᵀG)` (`wsr.py:216-217`)
@@ -1008,6 +1024,13 @@ Scan table. `MECH-DIV-n` is the local tag; the middle column is the one-line for
 **Type**: `H` = a hypothesis of a stated theorem fails in the code;
 `P` = an error internal to the proof document; `S` = a number's stated meaning
 does not match what the module computes.
+
+Four further findings are tagged in the body but deliberately **not** listed
+here, because they are corrections rather than divergences: **D-JAWP-4** (the
+α-term's `Q`-detachment is a documented design decision, not an oversight),
+**D-PCR-2** and **D-SPC-2** (both documents correctly retracted their
+unsupported claims in place), and **D-PUC-5** (a note against the "EMA proxies"
+pattern, which does not describe PUC's default path).
 
 | ID | Mech | Type | Divergence | Where |
 |---|---|---|---|---|
