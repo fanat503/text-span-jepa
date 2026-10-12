@@ -1,0 +1,27 @@
+fix(jawp): normalise predictive_relevance onto a single axis
+
+The diagnostic read max(0, 1 - (D/k)*w), not 1 - w. `ws_pred_error` was a
+mean over the (N, k) workspace residual and `bg_pred_error` a mean over the
+(N, D) full residual, so their ratio carried a spurious D/k factor. The zero
+threshold therefore sat at w = k/D (chance level, 0.094 at D=64, k=6) instead
+of at w = 1, and any workspace holding even a chance-level share of the
+residual read exactly 0.0.
+
+That is what made the "predictive_relevance collapses to 0" reading cited at
+proofs/wsd.md:30, proofs/wsd.md:222, proofs/jawp.md:264, jawp.py and wsd.py
+uninformative: it fired long before the workspace could have collapsed.
+
+Both terms are now normalised over the same N*D axis, so the score is the
+workspace's share of the residual energy and spans the full [0, 1].
+
+The DIRECTION is unchanged, and was verified to be correct before changing
+it: all five prose consumers and tests/test_host_reads.py:524 (zero residual
+-> 1.0) already read low = dead, which is exactly what 1 - w produces.
+Flipping the sign would have contradicted all six. See
+.agent-notes/relevance.md for the decision and the evidence.
+
+Diagnostic only: total_loss, dL/dz_pred and dL/dQ are unchanged, and the
+metric is computed inside the existing torch.no_grad() block.
+
+Mutation-verified: reintroducing the N*k mean turns 2 direction tests red;
+flipping the sign to max(0, w) turns 5 red, including both endpoints.

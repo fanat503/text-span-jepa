@@ -74,10 +74,24 @@
 #
 #  Measured on the running model (D=64, k=6): cos(dL_JAWP/dQ, dL_WSD/dQ) is
 #  negative on 12/12 consecutive steps (mean ~ -0.47) and ||dL_WSD/dQ|| is
-#  ~2.4x ||dL_JAWP/dQ||, i.e. the crossover is lambda_wsd ~ 0.42. Above it,
-#  jawp_predictive_relevance collapses to 0 and the workspace stops being
-#  predictable at all. Every runnable config ships use_wsd: false and the one
-#  ablation that enables it uses lambda_wsd: 0.1, below the crossover.
+#  ~2.4x ||dL_JAWP/dQ||, i.e. the crossover is lambda_wsd ~ 0.42.
+#
+#  The "jawp_predictive_relevance collapses to 0 above the crossover" claim
+#  that used to sit here, and that is repeated at proofs/wsd.md:30, :222 and
+#  proofs/jawp.md:264, is NOT evidence of a collapsed workspace. That metric
+#  was `max(0, 1 - (D/k)*w)`: it compared a mean over the N*k workspace
+#  residual against a mean over the N*D full residual, so it carried a
+#  spurious D/k factor and read 0.0 for any workspace holding a CHANCE-level
+#  share (k/D = 0.094) of the residual — long before the workspace could have
+#  collapsed. It is now `1 - w` on a single axis (see `compute_loss`), which
+#  reads 0.0 only when the workspace holds ALL the unexplained energy. The
+#  gradient-cosine measurements above are independent of that diagnostic and
+#  are unaffected; the antagonism itself is still an open question, and the
+#  numbers that "collapse" was read off have not been re-measured against the
+#  corrected metric. Do not treat them as settled either way.
+#
+#  Every runnable config ships use_wsd: false and the one ablation that
+#  enables it uses lambda_wsd: 0.1, below the crossover.
 #
 #  This is an OPEN SCIENCE DECISION, not a bug: the two mechanisms optimise
 #  different quantities (residual spectrum vs target variance) and either may
@@ -453,14 +467,45 @@ class JAWPModule(nn.Module):
             off_diag.fill_diagonal_(0)
             ortho_offdiag_t = off_diag.abs().mean().clamp(0, 1)
 
-            # Predictive relevance: workspace prediction quality vs full.
+            # Predictive relevance: how well the workspace is predicted,
+            # relative to the residual as a whole.
+            #
+            #   w   = ||Q^T (z_pred - z_target)||_F^2 / ||z_pred - z_target||_F^2
+            #   rel = 1 - w
+            #
+            # `w` is the share of the residual ENERGY inside span(Q), so
+            # `rel` is a quality score in [0, 1]: 1.0 when the workspace
+            # prediction is exact (the residual is orthogonal to span(Q), so
+            # there is nothing left to predict there) and 0.0 when the
+            # workspace holds ALL the unexplained energy. For orthonormal Q
+            # Cauchy-Schwarz bounds w <= 1, so no clamp is needed; the
+            # `max(0.0, ...)` below only guards the non-orthonormal case.
+            #
+            # BOTH terms are normalised on the SAME axis (the full N*D
+            # residual), which is what makes their ratio a share. They used
+            # to be a `.mean()` over the (N, k) workspace residual and a
+            # `.mean()` over the (N, D) full residual, so the ratio carried
+            # a spurious D/k factor and the score was `max(0, 1 - (D/k)*w)`.
+            # Same direction, wrong scale: the zero threshold sat at
+            # w = k/D (chance level, 0.094 at D=64, k=6) instead of at w = 1,
+            # so any workspace holding even a chance-level share of the
+            # residual read exactly 0.0. That is what made the "relevance
+            # collapses to 0" reading cited at `proofs/wsd.md:30`,
+            # `proofs/wsd.md:222` and `proofs/jawp.md:264` uninformative:
+            # it fired before the workspace could have collapsed.
+            #
             # `pred_rel_div` and `pred_rel_ok` are read separately so the
             # `1.0 - ratio` and `max(0.0, ...)` steps still run in float64 on
             # the host, as they did when each was its own `.item()`. Selecting
             # the branch on device avoids the sync that `bg_pred_error.item()
             # > 1e-10` cost.
             bg_pred_error = ((z_pred_flat - z_target_flat) ** 2).mean()
-            ws_pred_error = ((pred_ws_d - target_ws_d) ** 2).mean()
+            ws_pred_energy = ((pred_ws_d - target_ws_d) ** 2).sum()
+            # Same denominator as `bg_pred_error` (N*D), so the ratio is a
+            # dimensionless share rather than an N*k over an N*D comparison.
+            # `z_pred_flat.numel()` is N*D; `bg_pred_error.numel()` would be
+            # 1, because a `.mean()` reduces to a 0-dim scalar.
+            ws_pred_error = ws_pred_energy / z_pred_flat.numel()
             pred_rel_div = ws_pred_error / bg_pred_error
             pred_rel_ok = (bg_pred_error > 1e-10).to(pred_rel_div.dtype)
 

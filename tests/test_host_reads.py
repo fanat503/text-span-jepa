@@ -384,7 +384,10 @@ def _ref_jawp_info(jawp, z_pred, z_target, step):
         od.fill_diagonal_(0)
         ortho = 1.0 - od.abs().mean().clamp(0, 1).item()
         bg = ((zpf - ztf) ** 2).mean()
-        ws = ((p - t) ** 2).mean()
+        # Same denominator as the module: `z_pred_flat.numel()` is N*D, not the
+        # N*k of `ws`'s own mean. Using a `.mean()` here left a spurious D/k in
+        # the ratio, which is what made the zero threshold sit at chance level.
+        ws = ((p - t) ** 2).sum() / zpf.numel()
         rel = max(0.0, 1.0 - (ws / bg).item()) if bg.item() > 1e-10 else 1.0
         # pca alignment, the old host-side policy
         try:
