@@ -1,0 +1,50 @@
+docs(METRICS): a measured inventory of the twelve mechanisms' 153 diagnostics
+
+Every grade comes from driving the metric with synthetic inputs built so the
+quantity its NAME refers to genuinely varies, and recording the range. A zero
+range across such a sweep is DEGENERATE, and that verdict is the measurement's,
+not a reading of the source.
+
+153 metrics. 104 MEANINGFUL (68.0%), 23 DEGENERATE, 26 MIS-SCALED/TAUTOLOGICAL.
+UNTESTED is orthogonal: 31 names never appear under tests/, 16 of them graded
+MEANINGFUL. Counts are derived by .agent-notes/m_inventory.py, not typed.
+
+The 49 failures are four disjoint buckets, each one mechanical cause: 22 config
+echoes and schedules, 1 constant wearing a bound's name, 10 exact duplicates
+(verified by identity, several to 0.0 difference), and 16 that move and mislead.
+
+All five defects named in the theory audit reproduced:
+wsd_steady_state_error == wsd_running_drift to 1.4e-17 over 60 (interval, step)
+pairs; wsd_lambda_estimate is 1/sync_interval; wsd_drift reports 0.000000 for a
+non-orthonormal Q. jawp_predictive_relevance is fixed this wave and the fix is
+re-verified: 1.000 -> 0.000, monotone in the residual share w. min_gap_ratio is
+still never read; jawp_active_k is a pure function of step.
+
+New, found by the same method: cmc_overlap_ratio is |Omega|/(B*T) and at the
+shipped mask_ratio 0.15..0.35 the min_overlap_ratio=0.2 gate skips 6 of 6
+combinations, so CMC does not run at the defaults; spc_band_losses is identical
+to spc_band_residuals; spc_uniform_loss is mean(spc_band_residuals);
+swip.condition_number is identical to anisotropy_ratio and bg_variance_fraction
+is 1 - ws_variance_fraction; puc_overconfidence is deficit/target_entropy;
+jawp.bg_fraction is 1 - wip_score and rank_utilization is eff_rank/k;
+cmc_loss and cmc_per_position_loss are one expression at cmc.py:476 and :481;
+pcr.compute_cascade_capacity_bound is a constant; 69 of the 90 keys the host
+emits are double-prefixed (wsd_wsd_drift); and rdc, puc, gac, cmc and sta all
+return a shorter key set on their early-return path, so info[k] raises KeyError
+in the first warmup_steps of a run.
+
+Three metrics were RESCUED from a first-pass "degenerate" verdict after a fairer
+input made them move, and the doc says which and why: spc_weight_entropy,
+spc_n_significant_bands and spc_spectral_tilt (isotropic residuals were the
+wrong probe), PCR's improvement/refinement diagnostics (zero-init heads are
+untrained, not degenerate), and spc_band_predictability.
+
+Gate: tools/rt.py tests/test_model.py --slow tests/test_interp.py -> 283 passed,
+4 warnings in 22.50s. That gate is green while wsd_steady_state_error is
+bit-identical to wsd_running_drift and spc_band_losses to spc_band_residuals; no
+mutation experiment was run, because that needs src/ edits outside this task's
+boundary.
+
+No training. No config resolved. Only docs/METRICS.md and .agent-notes/ touched.
+
+Co-Authored-By: Claude Opus 4.8 (1M context) <noreply@anthropic.com>

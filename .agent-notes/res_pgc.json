@@ -1,0 +1,740 @@
+{
+ "puc": {
+  "puc_loss": {
+   "values": [
+    0.0,
+    0.0,
+    0.10013549355341525,
+    0.1013510249530442,
+    0.10243172906671974,
+    0.10303139376426267
+   ],
+   "note": "same spectra",
+   "min": 0.0,
+   "max": 0.10303139376426267,
+   "range": 0.10303139376426267,
+   "n_numeric": 6,
+   "constant": false
+  },
+  "puc_entropy": {
+   "values": [
+    98.31979599665098,
+    93.65062906101704,
+    90.37848675417028,
+    86.48878627535764,
+    83.03053311159587,
+    81.11160607945853
+   ],
+   "note": "same spectra",
+   "min": 81.11160607945853,
+   "max": 98.31979599665098,
+   "range": 17.208189917192456,
+   "n_numeric": 6,
+   "constant": false
+  },
+  "puc_target_entropy": {
+   "values": [
+    90.81206612509905,
+    90.81206612509905,
+    90.81206612509905,
+    90.81206612509905
+   ],
+   "note": "prediction spectrum: iso / mild / strong / v.strong",
+   "min": 90.81206612509905,
+   "max": 90.81206612509905,
+   "range": 0.0,
+   "n_numeric": 4,
+   "constant": true
+  },
+  "puc_entropy_deficit": {
+   "values": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "note": "prediction spectrum: iso / mild / strong / v.strong",
+   "min": 0.0,
+   "max": 0.0,
+   "range": 0.0,
+   "n_numeric": 4,
+   "constant": true
+  },
+  "puc_overconfidence": {
+   "values": [
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "note": "prediction spectrum: iso / mild / strong / v.strong",
+   "min": 0.0,
+   "max": 0.0,
+   "range": 0.0,
+   "n_numeric": 4,
+   "constant": true
+  },
+  "puc_warmup_factor": {
+   "values": [
+    0.0,
+    0.002,
+    0.5,
+    0.998,
+    1.0,
+    1.0,
+    1.0
+   ],
+   "note": "step 0..2000",
+   "min": 0.0,
+   "max": 1.0,
+   "range": 1.0,
+   "n_numeric": 7,
+   "constant": false
+  },
+  "puc_min_eigenvalue": {
+   "values": [
+    0.7514688576850433,
+    0.7536773243834767,
+    0.7538637344256568,
+    0.7538809068195267
+   ],
+   "note": "prediction spectrum: iso / mild / strong / v.strong",
+   "min": 0.7514688576850433,
+   "max": 0.7538809068195267,
+   "range": 0.0024120491344833406,
+   "n_numeric": 4,
+   "constant": false
+  },
+  "puc_max_eigenvalue": {
+   "values": [
+    2.8023243404415754,
+    13.102600657066489,
+    141.98660509157938,
+    3541.8470752363723
+   ],
+   "note": "prediction spectrum: iso / mild / strong / v.strong",
+   "min": 2.8023243404415754,
+   "max": 3541.8470752363723,
+   "range": 3539.044750895931,
+   "n_numeric": 4,
+   "constant": false
+  },
+  "puc_log_det": {
+   "values": [
+    14.701126143242817,
+    25.405314018258387,
+    39.70132383794004,
+    59.00115278275427
+   ],
+   "note": "prediction spectrum: iso / mild / strong / v.strong",
+   "min": 14.701126143242817,
+   "max": 59.00115278275427,
+   "range": 44.30002663951145,
+   "n_numeric": 4,
+   "constant": false
+  },
+  "puc_n_components": {
+   "values": [
+    64,
+    64,
+    64,
+    64
+   ],
+   "note": "prediction spectrum: iso / mild / strong / v.strong",
+   "min": 64,
+   "max": 64,
+   "range": 0,
+   "n_numeric": 4,
+   "constant": true
+  },
+  "puc_carries_grad": {
+   "values": [
+    false,
+    false,
+    false,
+    false
+   ],
+   "note": "prediction spectrum: iso / mild / strong / v.strong",
+   "constant": true
+  },
+  "puc_entropy vs TRUE differential entropy (error)": {
+   "values": [
+    18.03040091918612,
+    24.23435051288422,
+    31.719218073997865,
+    49.03580144186418,
+    90.62805409776331,
+    178.66173868377405
+   ],
+   "note": "spectrum decay 0..8",
+   "min": 18.03040091918612,
+   "max": 178.66173868377405,
+   "range": 160.63133776458793,
+   "n_numeric": 6,
+   "constant": false
+  },
+  "puc_carries_grad (loss non-zero)": {
+   "values": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "note": "same",
+   "min": 0.0,
+   "max": 0.0,
+   "range": 0.0,
+   "n_numeric": 6,
+   "constant": true
+  },
+  "puc_carries_grad (grad-carrying input)": {
+   "values": [
+    1.0,
+    0.0
+   ],
+   "note": "differentiable ON vs inert EMA path",
+   "min": 0.0,
+   "max": 1.0,
+   "range": 1.0,
+   "n_numeric": 2,
+   "constant": false
+  },
+  "puc_n_components vs D": {
+   "values": [
+    32,
+    64,
+    64,
+    64
+   ],
+   "note": "embed_dim 32..256 \u2014 does it track the 'of D' in its name?",
+   "min": 32,
+   "max": 64,
+   "range": 32,
+   "n_numeric": 4,
+   "constant": false
+  },
+  "puc_carries_grad (gate open)": {
+   "values": [
+    0.0,
+    0.0,
+    0.0
+   ],
+   "note": "three spectra; True only when the loss is non-zero AND the differentiable path is on",
+   "min": 0.0,
+   "max": 0.0,
+   "range": 0.0,
+   "n_numeric": 3,
+   "constant": true
+  }
+ },
+ "gac": {
+  "gac_loss": {
+   "values": [
+    0.0,
+    1.6014454792807668e-05,
+    3.20114340062049e-05,
+    5.729998523762513e-05,
+    6.387487258005008e-05
+   ],
+   "note": "starved fraction 0 / .25 / .5 / .9 / 1.0",
+   "min": 0.0,
+   "max": 6.387487258005008e-05,
+   "range": 6.387487258005008e-05,
+   "n_numeric": 5,
+   "constant": false
+  },
+  "gac_n_starved": {
+   "values": [
+    0,
+    16,
+    32,
+    57,
+    64
+   ],
+   "note": "starved fraction 0 / .25 / .5 / .9 / 1.0",
+   "min": 0,
+   "max": 64,
+   "range": 64,
+   "n_numeric": 5,
+   "constant": false
+  },
+  "gac_starved_fraction": {
+   "values": [
+    0.0,
+    0.25,
+    0.5,
+    0.890625,
+    1.0
+   ],
+   "note": "starved fraction 0 / .25 / .5 / .9 / 1.0",
+   "min": 0.0,
+   "max": 1.0,
+   "range": 1.0,
+   "n_numeric": 5,
+   "constant": false
+  },
+  "gac_warmup_factor": {
+   "values": [
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0
+   ],
+   "note": "starved fraction 0 / .25 / .5 / .9 / 1.0",
+   "min": 1.0,
+   "max": 1.0,
+   "range": 0.0,
+   "n_numeric": 5,
+   "constant": true
+  },
+  "gac_mean_grad_norm": {
+   "values": [
+    1.0,
+    0.75000025,
+    0.5000005000000001,
+    0.109375890625,
+    1e-06
+   ],
+   "note": "starved fraction 0 / .25 / .5 / .9 / 1.0",
+   "min": 1e-06,
+   "max": 1.0,
+   "range": 0.999999,
+   "n_numeric": 5,
+   "constant": false
+  },
+  "gac_min_grad_norm": {
+   "values": [
+    1.0,
+    1e-06,
+    1e-06,
+    1e-06,
+    1e-06
+   ],
+   "note": "starved fraction 0 / .25 / .5 / .9 / 1.0",
+   "min": 1e-06,
+   "max": 1.0,
+   "range": 0.999999,
+   "n_numeric": 5,
+   "constant": false
+  },
+  "gac_max_grad_norm": {
+   "values": [
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1e-06
+   ],
+   "note": "starved fraction 0 / .25 / .5 / .9 / 1.0",
+   "min": 1e-06,
+   "max": 1.0,
+   "range": 0.999999,
+   "n_numeric": 5,
+   "constant": false
+  },
+  "gac_running_starved_fraction": {
+   "values": [
+    0.0,
+    0.0025,
+    0.005,
+    0.008906250000000001,
+    0.01
+   ],
+   "note": "starved fraction 0 / .25 / .5 / .9 / 1.0",
+   "min": 0.0,
+   "max": 0.01,
+   "range": 0.01,
+   "n_numeric": 5,
+   "constant": false
+  },
+  "gac_warmup": {
+   "values": [
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "note": "starved fraction 0 / .25 / .5 / .9 / 1.0",
+   "constant": true
+  },
+  "gac_warmup_factor / gac_warmup vs step": {
+   "values": [
+    [
+     "KEY-ABSENT",
+     true
+    ],
+    [
+     0.001,
+     false
+    ],
+    [
+     0.5,
+     false
+    ],
+    [
+     0.999,
+     false
+    ],
+    [
+     1.0,
+     false
+    ],
+    [
+     1.0,
+     false
+    ]
+   ],
+   "note": "step 0..2000",
+   "constant": false
+  },
+  "gac_loss vs batch size": {
+   "values": [
+    6.315210437076737e-05,
+    6.375791707071553e-05,
+    6.381248502804668e-05,
+    6.323402474549355e-05,
+    6.30884955244985e-05
+   ],
+   "note": "batch 1..16, identical starved set",
+   "min": 6.30884955244985e-05,
+   "max": 6.381248502804668e-05,
+   "range": 7.239895035481768e-07,
+   "n_numeric": 5,
+   "constant": false
+  },
+  "gac_loss * batch_size": {
+   "values": [
+    6.315210437076737e-05,
+    0.00012751583414143106,
+    0.0002552499401121867,
+    0.0005058721979639484,
+    0.001009415928391976
+   ],
+   "note": "if the theorem's per-dim energy were right, this would be flat",
+   "min": 6.315210437076737e-05,
+   "max": 0.001009415928391976,
+   "range": 0.0009462638240212086,
+   "n_numeric": 5,
+   "constant": false
+  },
+  "gac_n_starved across alternating gradient patterns": {
+   "values": [
+    1,
+    0,
+    1,
+    0,
+    1,
+    0
+   ],
+   "note": "alternating all-starved / none-starved",
+   "min": 0,
+   "max": 1,
+   "range": 1,
+   "n_numeric": 6,
+   "constant": false
+  }
+ },
+ "cmc": {
+  "cmc_loss": {
+   "values": [
+    0.0,
+    0.6197099853725462,
+    15.492749634313652,
+    61.97099853725461,
+    1549.2749634313652
+   ],
+   "note": "prediction disagreement 0..5",
+   "min": 0.0,
+   "max": 1549.2749634313652,
+   "range": 1549.2749634313652,
+   "n_numeric": 5,
+   "constant": false
+  },
+  "cmc_per_position_loss": {
+   "values": [
+    0.0,
+    0.6197099853725462,
+    15.492749634313652,
+    61.97099853725461,
+    1549.2749634313652
+   ],
+   "note": "prediction disagreement 0..5",
+   "min": 0.0,
+   "max": 1549.2749634313652,
+   "range": 1549.2749634313652,
+   "n_numeric": 5,
+   "constant": false
+  },
+  "cmc_max_inconsistency": {
+   "values": [
+    0.0,
+    0.925961655935184,
+    23.149041398379595,
+    92.59616559351838,
+    2314.9041398379595
+   ],
+   "note": "prediction disagreement 0..5",
+   "min": 0.0,
+   "max": 2314.9041398379595,
+   "range": 2314.9041398379595,
+   "n_numeric": 5,
+   "constant": false
+  },
+  "cmc_overlap_count": {
+   "values": [
+    64,
+    64,
+    64,
+    64,
+    64
+   ],
+   "note": "prediction disagreement 0..5",
+   "min": 64,
+   "max": 64,
+   "range": 0,
+   "n_numeric": 5,
+   "constant": true
+  },
+  "cmc_overlap_ratio": {
+   "values": [
+    0.5,
+    0.5,
+    0.5,
+    0.5,
+    0.5
+   ],
+   "note": "prediction disagreement 0..5",
+   "min": 0.5,
+   "max": 0.5,
+   "range": 0.0,
+   "n_numeric": 5,
+   "constant": true
+  },
+  "cmc_running_consistency": {
+   "values": [
+    0.0,
+    0.006197099853725462,
+    0.15492749634313652,
+    0.6197099853725461,
+    15.492749634313652
+   ],
+   "note": "prediction disagreement 0..5",
+   "min": 0.0,
+   "max": 15.492749634313652,
+   "range": 15.492749634313652,
+   "n_numeric": 5,
+   "constant": false
+  },
+  "cmc_skipped": {
+   "values": [
+    false,
+    false,
+    false,
+    false,
+    false
+   ],
+   "note": "prediction disagreement 0..5",
+   "constant": true
+  },
+  "|cmc_loss - cmc_per_position_loss|": {
+   "values": [
+    0.0,
+    0.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "note": "same",
+   "min": 0.0,
+   "max": 0.0,
+   "range": 0.0,
+   "n_numeric": 5,
+   "constant": true
+  },
+  "cmc_overlap_count vs true overlap": {
+   "values": [
+    0,
+    12,
+    32,
+    64,
+    96,
+    128
+   ],
+   "note": "true both-masked positions 0..T",
+   "min": 0,
+   "max": 128,
+   "range": 128,
+   "n_numeric": 6,
+   "constant": false
+  },
+  "cmc_overlap_ratio vs true overlap": {
+   "values": [
+    0.0,
+    0.09375,
+    0.25,
+    0.5,
+    0.75,
+    1.0
+   ],
+   "note": "true both-masked positions 0..T",
+   "min": 0.0,
+   "max": 1.0,
+   "range": 1.0,
+   "n_numeric": 6,
+   "constant": false
+  },
+  "cmc_loss on SKIP paths": {
+   "values": [
+    0.0
+   ],
+   "note": "predictions 10.0 apart, masks overlap nothing",
+   "min": 0.0,
+   "max": 0.0,
+   "range": 0.0,
+   "n_numeric": 1,
+   "constant": true
+  },
+  "compute_downstream_stability_bound": {
+   "values": [
+    0.0,
+    0.0001,
+    0.01,
+    0.1,
+    1.0,
+    10.0
+   ],
+   "note": "cmc_loss 0..100",
+   "min": 0.0,
+   "max": 10.0,
+   "range": 10.0,
+   "n_numeric": 6,
+   "constant": false
+  },
+  "compute_representation_variance_bound": {
+   "values": [
+    1.0,
+    1.000000005,
+    1.00005,
+    1.005,
+    1.5,
+    51.0
+   ],
+   "note": "cmc_loss 0..100",
+   "min": 1.0,
+   "max": 51.0,
+   "range": 50.0,
+   "n_numeric": 6,
+   "constant": false
+  },
+  "cmc_skipped under shipped mask ratios": {
+   "values": [
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    0.0,
+    0.0,
+    1.0,
+    1.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "note": "16 (m1, m2) pairs from defaults.yaml",
+   "min": 0.0,
+   "max": 1.0,
+   "range": 1.0,
+   "n_numeric": 24,
+   "constant": false
+  },
+  "cmc_overlap_ratio under shipped mask ratios": {
+   "values": [
+    0.03125,
+    0.1015625,
+    0.1484375,
+    0.1796875,
+    0.0390625,
+    0.125,
+    0.203125,
+    0.2421875,
+    0.0546875,
+    0.15625,
+    0.265625,
+    0.3046875,
+    0.0859375,
+    0.265625,
+    0.4609375,
+    0.546875,
+    0.125,
+    0.359375,
+    0.625,
+    0.765625,
+    0.140625,
+    0.4140625,
+    0.8046875,
+    1.0
+   ],
+   "note": "same",
+   "min": 0.03125,
+   "max": 1.0,
+   "range": 0.96875,
+   "n_numeric": 24,
+   "constant": false
+  },
+  "cmc_overlap_ratio (repo span masks, shipped ratios)": {
+   "values": [
+    0.046875,
+    0.09375,
+    0.140625,
+    0.125,
+    0.140625,
+    0.1640625,
+    0.2734375,
+    0.3125,
+    0.4609375
+   ],
+   "note": "9 (r1, r2) pairs from defaults.yaml mask_ratio_start/end",
+   "min": 0.046875,
+   "max": 0.4609375,
+   "range": 0.4140625,
+   "n_numeric": 9,
+   "constant": false
+  },
+  "cmc_skipped (repo span masks, shipped ratios)": {
+   "values": [
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    0.0,
+    0.0,
+    0.0
+   ],
+   "note": "same",
+   "min": 0.0,
+   "max": 1.0,
+   "range": 1.0,
+   "n_numeric": 9,
+   "constant": false
+  }
+ }
+}

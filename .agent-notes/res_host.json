@@ -1,0 +1,15 @@
+{
+ "host": {
+  "double-prefixed info keys": {
+   "values": [
+    69.0
+   ],
+   "note": "MechanismBundle.forward with all 11 forward-path mechanisms on",
+   "min": 69.0,
+   "max": 69.0,
+   "range": 0.0,
+   "n_numeric": 1,
+   "constant": true
+  }
+ }
+}
