@@ -271,6 +271,35 @@ model:
   # Stability theorem (Cauchy-Schwarz) — predictions agree across masks.
   use_cmc: true
   cmc_second_mask_ratio: null
+  # Read by `CrossMaskConsistency` as |Omega| / |M1| -- the overlap as a
+  # fraction of the PRIMARY MASK, not as a fraction of all positions. For two
+  # independent masks at fraction `p`, |Omega|/(B*T) = p^2 while |Omega|/|M1| =
+  # p, so this is a test on the SECOND MASK'S RATIO, not on p^2.
+  #
+  # Measured against the `model.mask_ratio_start/end` = 0.15 -> 0.35 ramp above,
+  # with the repo's own span masks (span_length_range, data section):
+  #
+  #     p     |Omega|/(B*T)   gate |Omega|/|M1|   steps skipped
+  #     0.15        0.027            0.180           18/25
+  #     0.20        0.045            0.228            3/25
+  #     0.25        0.069            0.275            0/25
+  #     0.30        0.093            0.315            0/25
+  #     0.35        0.127            0.369            0/25
+  #
+  # So CMC RUNS at the shipped defaults for the great majority of the
+  # curriculum and is shut only on the first leg of the ramp, while the mask
+  # ratio is below ~0.20 (roughly the first quarter of `jawk_curriculum_steps`).
+  # That is the curriculum doing its job, not a dead mechanism, and lowering
+  # this threshold would only buy those steps while admitting the degenerate
+  # tiny-`second_mask_ratio` cases the gate exists to reject.
+  #
+  # Two diagnostics are reported and they are NOT interchangeable:
+  # `cmc_overlap_ratio` is |Omega|/(B*T), `cmc_gate_ratio` is |Omega|/|M1| and
+  # is the number compared against this threshold. An earlier version reported
+  # the first form on the skip branch and the second on the run branch under
+  # one name, which read as a permanently shut gate. Do not merge them again.
+  # `tests/test_config_system.py::TestCMCIsLiveAtTheShippedDefaults` and
+  # `tests/test_cmc.py::TestCMCLiveness` hold both halves of this.
   cmc_min_overlap_ratio: 0.2
   cmc_mode: interval
   cmc_interval: 10
