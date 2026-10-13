@@ -263,8 +263,27 @@ class CrossMaskConsistency(nn.Module):
         embed_dim: embedding dimension D.
         second_mask_ratio: ratio of tokens to mask in secondary mask.
             If None, uses same ratio as primary mask.
-        min_overlap_ratio: minimum overlap ratio to compute loss.
-            If overlap < min_overlap_ratio * num_masked, skip CMC.
+        min_overlap_ratio: minimum overlap ratio to compute loss. The ratio is
+            |Ω| / |M1| — the overlap as a fraction of the PRIMARY MASK, not as
+            a fraction of all positions. Skip CMC when it falls below this.
+
+            WHAT IT PROTECTS, and what it does not. For two independent masks
+            drawn at fraction `p`, |Ω|/(B·T) = p² but |Ω|/|M1| = p, so this
+            threshold is a test on the SECOND MASK'S RATIO, not on p². At the
+            shipped `model.mask_ratio_start/end` = 0.15 → 0.35 ramp it opens at
+            p ≈ 0.20 and is clear thereafter (measured |Ω|/|M1| ≈ 0.18 → 0.37
+            across the ramp; see `.agent-notes/cmc-measurements.md`).
+
+            What it therefore guards is the opposite end: a `second_mask_ratio`
+            set far below the primary's, where the overlap collapses to a few
+            positions and the 1/|Ω| mean becomes a one-sample estimate. It is
+            NOT a guard against the mechanism being inert — nothing about this
+            threshold can make it inert, and lowering it below the ramp's own
+            start would only admit those degenerate cases. What made it *look*
+            inert was the diagnostic, not the gate: `cmc_overlap_ratio` used to
+            report the p² form on the skip branch and the p form on the run
+            branch, under one name. Both forms are now reported separately, as
+            `cmc_overlap_ratio` and `cmc_gate_ratio`.
         mode: "always", "interval", or "reuse_encoder".
         interval: compute CMC every `interval` steps (for "interval" mode).
         stop_grad_primary: if True, stop gradient through primary prediction.
@@ -417,90 +436,92 @@ class CrossMaskConsistency(nn.Module):
 
         Returns:
             loss: scalar tensor (≥ 0).
-            info: dict with diagnostics.
+            info: dict with diagnostics. THE SAME KEYS ON EVERY BRANCH, each
+                with one meaning — see the block comment above `skip_reason`.
 
         """
         B, T, _D = z_pred_primary.shape
+        device = z_pred_primary.device
 
-        # Count overlap positions
-        overlap_count = overlap_mask.sum()
-        (overlap_mask.sum(dim=1) > 0).sum()  # batches with overlap
+        overlap_count = int(overlap_mask.sum())
+
+        # ── TWO overlap fractions, because they are TWO quantities ──────────
+        #
+        # `cmc_overlap_ratio`  = |Ω| / (B·T)   — the overlap as a FRACTION OF
+        #   ALL POSITIONS. This is the diagnostic: how much of the sequence is
+        #   doubly masked at all. It is also what `src/train.py` writes under
+        #   the same name, so the module and the host now agree.
+        #
+        # `cmc_gate_ratio`     = |Ω| / |M1|   — the overlap as a FRACTION OF THE
+        #   PRIMARY MASK, where `|M1|` counts positions carrying a nonzero
+        #   prediction. This is the number `min_overlap_ratio` is compared
+        #   against, and it is the only one of the two that decides whether the
+        #   loss is computed.
+        #
+        # They are not interchangeable. For two independent masks at fraction
+        # `p`, |Ω|/(B·T) = p² while |Ω|/|M1| = p, so at the shipped ramp
+        # (0.15 → 0.35) they read ≈0.02–0.13 and ≈0.18–0.37 respectively. A
+        # reader who compared the FIRST against `min_overlap_ratio = 0.2`
+        # would conclude the gate is permanently shut; it is not.
+        #
+        # Reporting both is the fix. Collapsing them into one key is what made
+        # the mechanism's liveness unreadable from the log.
+        overlap_fraction = overlap_count / max(B * T, 1)
+        n_predicted = int((z_pred_primary.abs().sum(dim=-1) > 0).sum())
+        gate_ratio = overlap_count / max(n_predicted, 1)
 
         if overlap_count == 0:
-            # No overlap — skip CMC (return zero loss)
-            zero = torch.tensor(0.0, device=z_pred_primary.device)
-            return zero, {
-                "cmc_loss": 0.0,
-                "cmc_overlap_count": 0,
-                "cmc_overlap_ratio": 0.0,
-                "cmc_per_position_loss": 0.0,
-                "cmc_max_inconsistency": 0.0,
-                "cmc_skipped": True,
-            }
-
-        # Check minimum overlap ratio
-        overlap_count.float() / max(B, 1)
-        primary_masked = (z_pred_primary.abs().sum(dim=-1) > 0).float()  # approximate
-        overlap_ratio = overlap_count.float() / max(primary_masked.sum(), 1)
-
-        if overlap_ratio < self.min_overlap_ratio and overlap_ratio > 0:
-            # Insufficient overlap — skip (but still log)
-            zero = torch.tensor(0.0, device=z_pred_primary.device)
-            return zero, {
-                "cmc_loss": 0.0,
-                "cmc_overlap_count": overlap_count.item(),
-                "cmc_overlap_ratio": overlap_ratio.item(),
-                "cmc_per_position_loss": 0.0,
-                "cmc_max_inconsistency": 0.0,
-                "cmc_skipped": True,
-                "cmc_skip_reason": "insufficient_overlap",
-            }
-
-        # Optionally stop gradient through primary prediction
-        if self.stop_grad_primary:
-            z1 = z_pred_primary.detach()
+            skip_reason = "no_overlap"
+        elif gate_ratio < self.min_overlap_ratio:
+            skip_reason = "insufficient_overlap"
         else:
-            z1 = z_pred_primary
+            skip_reason = ""
 
-        z2 = z_pred_secondary
+        if skip_reason:
+            # Skip: no signal, but every diagnostic is still reported, so a
+            # step where CMC did not run is distinguishable from a step where
+            # it ran and found perfect agreement (`cmc_loss` is 0.0 on both).
+            loss = torch.zeros((), device=device)
+            per_pos_loss = 0.0
+            max_inconsistency = 0.0
+        else:
+            # Optionally stop gradient through primary prediction
+            z1 = z_pred_primary.detach() if self.stop_grad_primary else z_pred_primary
+            z2 = z_pred_secondary
 
-        # Compute per-position inconsistency: ||z1[t] - z2[t]||²
-        diff = z1 - z2  # (B, T, D)
-        per_pos_sq = (diff**2).sum(dim=-1)  # (B, T)
+            # Per-position inconsistency ||z1[t] - z2[t]||², masked to Ω
+            diff = z1 - z2  # (B, T, D)
+            masked_sq = (diff**2).sum(dim=-1) * overlap_mask.float()  # (B, T)
 
-        # Mask to overlap positions only
-        overlap_float = overlap_mask.float()  # (B, T)
-        masked_sq = per_pos_sq * overlap_float  # (B, T)
+            # Mean over overlap positions
+            denom = max(overlap_count, 1)
+            loss = masked_sq.sum() / denom
 
-        # Mean over overlap positions
-        loss = masked_sq.sum() / max(overlap_count.float(), 1.0)
+            with torch.no_grad():
+                # Per-position mean loss (overlap only) and the WORST position,
+                # which is what the stability theorem wants and the mean is not.
+                per_pos_loss = (masked_sq.sum() / denom).item()
+                max_inconsistency = masked_sq.max().item()
 
-        # Diagnostics
-        with torch.no_grad():
-            # Per-position mean loss (over overlap)
-            per_pos_loss = masked_sq.sum() / max(overlap_count.float(), 1.0)
+                alpha = 0.01
+                self.running_consistency.mul_(1 - alpha).add_(alpha * loss.item())
+                self.running_overlap_ratio.mul_(1 - alpha).add_(alpha * overlap_fraction)
+                self.total_cmc_steps.add_(1)
 
-            # Max inconsistency (worst position)
-            # Set non-overlap to 0 before taking max
-            max_inconsistency = masked_sq.max()
-
-            # Mean overlap ratio
-            overlap_per_batch = overlap_mask.sum(dim=1).float()  # (B,)
-            mean_overlap_ratio = overlap_per_batch.mean() / max(T, 1)
-
-            # Update running statistics
-            alpha = 0.01
-            self.running_consistency.mul_(1 - alpha).add_(alpha * loss.item())
-            self.running_overlap_ratio.mul_(1 - alpha).add_(alpha * mean_overlap_ratio.item())
-            self.total_cmc_steps.add_(1)
-
+        # ONE return, so the key set cannot drift between branches. A consumer
+        # that reads every key it saw once will not KeyError on a step where
+        # CMC skipped, which is precisely when it would be reading the log to
+        # find out whether CMC ran.
         info = {
-            "cmc_loss": loss.item(),
-            "cmc_overlap_count": overlap_count.item(),
-            "cmc_overlap_ratio": mean_overlap_ratio.item(),
-            "cmc_per_position_loss": per_pos_loss.item(),
-            "cmc_max_inconsistency": max_inconsistency.item(),
-            "cmc_skipped": False,
+            "cmc_loss": float(loss.detach()),
+            "cmc_overlap_count": overlap_count,
+            "cmc_overlap_ratio": overlap_fraction,
+            "cmc_gate_ratio": gate_ratio,
+            "cmc_gate_open": skip_reason == "",
+            "cmc_skip_reason": skip_reason,
+            "cmc_per_position_loss": per_pos_loss,
+            "cmc_max_inconsistency": max_inconsistency,
+            "cmc_skipped": bool(skip_reason),
             "cmc_running_consistency": self.running_consistency.item(),
         }
 

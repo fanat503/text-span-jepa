@@ -4,13 +4,20 @@
 
 import math
 import sys
+from pathlib import Path
 
 import pytest
 import torch
+import yaml
 
 sys.path.insert(0, ".")
 
 from src.models.cmc import CrossMaskConsistency
+
+_REPO = Path(__file__).resolve().parent.parent
+with open(_REPO / "defaults.yaml") as _fh:
+    _DEFAULTS = yaml.safe_load(_fh)
+_SHIPPED_MODEL = _DEFAULTS["model"]
 
 
 class TestCMCCore:
@@ -415,6 +422,22 @@ class TestCMCConfig:
         assert cmc.stop_grad_primary is True
         assert cmc.min_overlap_ratio == 0.2
 
+    def test_constructor_default_matches_the_shipped_config(self):
+        """The dataclass default and `defaults.yaml` must not drift apart.
+
+        They are two declarations of one number. Nothing else ties them, and
+        the gate threshold is the single value that decides whether CMC runs,
+        so a drift here is a mechanism that silently changes behaviour when
+        nobody is looking.
+        """
+        assert CrossMaskConsistency(embed_dim=768).min_overlap_ratio == (
+            _SHIPPED_MODEL["cmc_min_overlap_ratio"]
+        ), (
+            "CrossMaskConsistency's `min_overlap_ratio` default no longer equals "
+            "defaults.yaml's cmc_min_overlap_ratio. One of the two must change "
+            "with the other."
+        )
+
     def test_custom_config(self):
         """Custom CMC config works."""
         cmc = CrossMaskConsistency(
@@ -483,6 +506,382 @@ class TestCMCIntegration:
 
         # Refined should be more consistent (lower CMC loss)
         assert loss_refined.item() < loss_base.item(), "PCR refinement should improve consistency"
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+#  The liveness invariant
+# ═══════════════════════════════════════════════════════════════════════════
+#
+#  THE DEFECT THIS EXISTS TO STOP
+# -------------------------------
+#  An audit read `cmc_overlap_ratio` off the log, saw 0.047...0.164, compared it
+#  against `min_overlap_ratio = 0.2`, and concluded CMC was dead at the shipped
+#  defaults — "the gate skips 6 of 6", "every ablation arm relying on it is
+#  measuring nothing".
+#
+#  That conclusion was wrong, and it was wrong because of THIS file's subject
+#  rather than because of the gate. `cmc_overlap_ratio` reported two different
+#  quantities under one name: |Omega|/(B*T) on the branch that ran the loss, and
+#  |Omega|/|M1| on the branch that skipped it. The gate compares against the
+#  second form. For two independent masks at fraction `p`, |Omega|/(B*T) = p²
+#  while |Omega|/|M1| = p — so the audit compared p² to a threshold that is
+#  tested against p, and p² is below 0.2 for every mask ratio this repo ships
+#  below 0.45. The mechanism was running the whole time.
+#
+#  A wrong audit finding is annoying. A mechanism that can report itself as
+#  dead while it is alive is the defect class this repo treats as worse, because
+#  nothing in the log can tell the two apart and nothing in the suite would have
+#  gone red either way.
+#
+#  So: the loss must be NONZERO at the shipped configuration, and every branch
+#  must say which of the two ratios it is reporting.
+
+
+def _tiny_model(max_seq_len=128):
+    """A real `TextSpanJEPA` carrying the SHIPPED CMC configuration.
+
+    Every CMC hyperparameter is read out of `defaults.yaml` rather than
+    restated, so this test cannot drift away from what the repo actually
+    ships. Only the model SHAPE is shrunk.
+    """
+    from src.models.jepa import TextSpanJEPA, TextSpanJEPAConfig
+
+    return TextSpanJEPA(
+        TextSpanJEPAConfig(
+            vocab_size=64,
+            embed_dim=32,
+            depth=1,
+            num_heads=2,
+            mlp_ratio=2.0,
+            predictor_embed_dim=16,
+            predictor_depth=1,
+            max_seq_len=max_seq_len,
+            future_warmup_steps=0,
+            use_jawp=False,
+            use_cgn=False,
+            use_swip=False,
+            use_pcr=False,
+            use_spc=False,
+            use_wsd=False,
+            use_cmc=_SHIPPED_MODEL["use_cmc"],
+            cmc_second_mask_ratio=_SHIPPED_MODEL["cmc_second_mask_ratio"],
+            cmc_min_overlap_ratio=_SHIPPED_MODEL["cmc_min_overlap_ratio"],
+            cmc_mode=_SHIPPED_MODEL["cmc_mode"],
+            cmc_interval=_SHIPPED_MODEL["cmc_interval"],
+            lambda_cmc=_SHIPPED_MODEL["lambda_cmc"],
+            use_gac=False,
+            use_sta=False,
+            use_puc=False,
+            use_rdc=False,
+            use_wsr=False,
+        )
+    )
+
+
+# The ramp's own endpoints.
+_RAMP = (_SHIPPED_MODEL["mask_ratio_start"], _SHIPPED_MODEL["mask_ratio_end"])
+
+# B*T matters and is not arbitrary. `cmc_gate_ratio` is |Omega|/|M1|, a RATIO OF
+# TWO RANDOM COUNTS, so its spread shrinks as 1/sqrt(B*T): measured sd is 0.054
+# at 8x64 and 0.036 at 16x128 for the same p. The gate is reliably open at
+# p >= 0.25 once B*T >= 1024 (0/60 draws shut at 16x128 for p in 0.25/0.30/0.35)
+# and a coin flip at p = 0.20 and below at every shape. 16x128 is therefore the
+# smallest shape where "the gate is open" is a property rather than a coin flip;
+# at the shipped 64x512 the same points read 0/40 shut with min 0.2393.
+_LIVE_B, _LIVE_T = 16, 128
+_LIVE_RATIOS = (0.25, 0.30, 0.35)
+_DEAD_RATIOS = (0.15, 0.20)
+
+
+def _two_pass(model, ratio, seed, B=_LIVE_B, T=_LIVE_T):
+    """Drive the real `compute_cmc_between_passes` bridge at one mask ratio.
+
+    This is the path `src/train.py:1575-1627` takes: a primary forward with
+    mask m1, a secondary forward with a fresh mask m2 drawn at the same ratio,
+    then the bridge that scatters both compact slot predictions into full
+    sequence space and intersects the masks.
+    """
+    torch.manual_seed(seed)
+    ids = torch.randint(1, 64, (B, T))
+    m1 = CrossMaskConsistency.generate_second_mask(
+        seq_len=T, batch_size=B, mask_ratio=ratio, step=2 * seed
+    )
+    m2 = model.cmc.generate_second_mask(
+        seq_len=T, batch_size=B, mask_ratio=ratio, step=2 * seed + 1
+    )
+    model.compute_loss_with_targets(ids, ids, m1, 0, 100)
+    primary = model._cmc_pass
+    model.compute_loss_with_targets(ids, ids, m2, 0, 100)
+    return model.compute_cmc_between_passes(primary, model._cmc_pass)
+
+
+def _module_at(ratio, seed, cmc, B=_LIVE_B, T=_LIVE_T):
+    """Drive `CrossMaskConsistency.forward` on two real masks, no model.
+
+    `z_pred_primary` is built to be nonzero only where m1 masked, which is what
+    the host path produces: `compute_cmc_between_passes` scatters COMPACT slot
+    predictions into a zero-filled (B,T,D), so `|M1|` is the count of valid
+    primary slots, not `B*T`. Building it any other way would silently test a
+    different denominator — which is how this whole misdiagnosis started.
+
+    Returns `(loss, info)`.
+    """
+    torch.manual_seed(seed)
+    m1 = CrossMaskConsistency.generate_second_mask(
+        seq_len=T, batch_size=B, mask_ratio=ratio, step=2 * seed
+    )
+    m2 = CrossMaskConsistency.generate_second_mask(
+        seq_len=T, batch_size=B, mask_ratio=ratio, step=2 * seed + 1
+    )
+    z1 = torch.zeros(B, T, 8)
+    z1[m1.bool()] = torch.randn(int(m1.sum()), 8)
+    z2 = torch.randn(B, T, 8)
+    overlap = CrossMaskConsistency.compute_overlap_mask(m1, m2)
+    return cmc(z1, z2, overlap)
+
+
+def _shipped_cmc():
+    return CrossMaskConsistency(
+        embed_dim=8,
+        second_mask_ratio=_SHIPPED_MODEL["cmc_second_mask_ratio"],
+        min_overlap_ratio=_SHIPPED_MODEL["cmc_min_overlap_ratio"],
+        mode=_SHIPPED_MODEL["cmc_mode"],
+        interval=_SHIPPED_MODEL["cmc_interval"],
+    )
+
+
+class TestCMCRunsAtTheShippedDefaults:
+    """CMC's loss must be nonzero at the configuration the repo ships.
+
+    THE MINIMUM ASSERTION THE CARD ASKS FOR. If this goes red, CMC is inert
+    under `defaults.yaml` and every ablation arm that relies on it is
+    measuring nothing — which is precisely what the audit believed had already
+    happened.
+    """
+
+    def test_the_gate_is_open_across_the_upper_shipped_ramp(self):
+        """At p >= 0.25 CMC runs on every draw, with a positive loss.
+
+        The shipped ramp is `mask_ratio_start` -> `mask_ratio_end`, i.e.
+        0.15 -> 0.35, and `cmc_gate_ratio` tracks `p` (measured 0.276 / 0.330 /
+        0.375 at 16x128 over 60 draws each, against a 0.2 threshold, minimum
+        observed 0.2068). At those points a skip means something is broken, not
+        that the curriculum is light.
+
+        The 0.15-0.20 leg is asserted separately in
+        `test_the_low_leg_skips_by_reporting_not_by_going_silent`, because
+        there the gate really is shut and asserting otherwise would be the same
+        lie told in the other direction.
+        """
+        cmc = _shipped_cmc()
+        for ratio in _LIVE_RATIOS:
+            for seed in range(40):
+                loss, info = _module_at(ratio, seed, cmc)
+                assert info["cmc_gate_open"], (
+                    f"CMC did not run at the shipped defaults at mask_ratio={ratio} "
+                    f"(seed {seed}): gate_ratio={info['cmc_gate_ratio']:.4f} < "
+                    f"min_overlap_ratio={_SHIPPED_MODEL['cmc_min_overlap_ratio']}, "
+                    f"skip_reason={info['cmc_skip_reason']!r}. The gate is shut at a "
+                    "mask ratio this repo ships, so the mechanism is inert here "
+                    "and every arm relying on it measures nothing."
+                )
+                assert loss.item() > 0.0, (
+                    f"CMC ran but produced a zero loss at mask_ratio={ratio} "
+                    f"(seed {seed}). A zero loss from two different masks means "
+                    "the predictions are identical, not that the mechanism "
+                    "contributes nothing -- the two are indistinguishable from "
+                    "the loss alone, which is why `cmc_skipped` is reported."
+                )
+
+    def test_cmc_loss_is_nonzero_through_the_real_bridge(self):
+        """The same property, end to end, on the host path.
+
+        `src/train.py:1575-1627` never calls `CrossMaskConsistency` directly;
+        it calls `TextSpanJEPA.compute_cmc_between_passes`. A module-level
+        green therefore proves nothing about whether the shipped training loop
+        produces a gradient, so this drives the actual bridge.
+        """
+        model = _tiny_model(_LIVE_T)
+        model.train()
+        for ratio in _LIVE_RATIOS:
+            for seed in range(3):
+                loss, info = _two_pass(model, ratio, seed)
+                assert info["cmc_gate_open"], (
+                    f"the host bridge skipped CMC at mask_ratio={ratio} (seed "
+                    f"{seed}): gate_ratio={info['cmc_gate_ratio']:.4f} < "
+                    f"min_overlap_ratio={_SHIPPED_MODEL['cmc_min_overlap_ratio']}"
+                )
+                assert loss.item() > 0.0, (
+                    f"the host bridge produced a zero CMC loss at mask_ratio="
+                    f"{ratio} (seed {seed})"
+                )
+
+    def test_the_loss_carries_gradient_to_the_secondary_pass(self):
+        """Nonzero loss must also mean nonzero gradient.
+
+        A loss that is a detached constant reads as a live number in the log
+        while contributing nothing to the update — the same defect class one
+        step further down. Asserted through the real bridge, not the module.
+        """
+        model = _tiny_model(_LIVE_T)
+        model.train()
+        loss, _info = _two_pass(model, 0.35, seed=0)
+        assert loss.requires_grad, "CMC's loss came back detached from the graph"
+        loss.backward()
+        grads = [p.grad for p in model.parameters() if p.grad is not None]
+        assert grads, "CMC's loss.backward() reached no parameter at all"
+        assert max(g.abs().max().item() for g in grads) > 0.0
+
+    def test_the_low_leg_skips_by_reporting_not_by_going_silent(self):
+        """Where the gate IS shut, the skip must be legible and countable.
+
+        Below p = 0.25 the gate ratio mean (0.18 at 0.15, 0.23 at 0.20)
+        straddles the 0.2 threshold, so CMC genuinely skips there — 41/60
+        draws at 0.15 and 11/60 at 0.20, measured. That is the curriculum
+        working, not a bug. But a skip that reports itself as `cmc_loss = 0.0`
+        with no reason is indistinguishable from perfect agreement, which is
+        how this mechanism came to be audited as dead.
+        """
+        cmc = _shipped_cmc()
+        thresh = _SHIPPED_MODEL["cmc_min_overlap_ratio"]
+        for ratio, expect_skip_dominant in ((0.15, True), (0.20, False)):
+            ran = skipped = 0
+            for seed in range(40):
+                loss, info = _module_at(ratio, seed, cmc)
+                if info["cmc_skipped"]:
+                    skipped += 1
+                    assert info["cmc_skip_reason"] in (
+                        "no_overlap",
+                        "insufficient_overlap",
+                    ), (
+                        f"CMC skipped at mask_ratio={ratio} without a usable reason "
+                        f"(got {info['cmc_skip_reason']!r})"
+                    )
+                    assert not info["cmc_gate_open"]
+                    assert info["cmc_gate_ratio"] < thresh
+                    assert loss.item() == 0.0
+                else:
+                    ran += 1
+                    assert info["cmc_gate_open"], (
+                        "CMC ran and did not say so: the third state, which is "
+                        "the one this test exists to forbid."
+                    )
+            assert ran > 0 and skipped > 0, (
+                f"at mask_ratio={ratio} the gate is straddling the {thresh} "
+                f"threshold and must produce both outcomes; got ran={ran} "
+                f"skipped={skipped} over 40 draws. The operating point moved — "
+                "re-measure and update the table in defaults.yaml."
+            )
+            if expect_skip_dominant:
+                assert skipped > ran, (
+                    f"at mask_ratio={ratio} the gate should shut more often than "
+                    f"it opens (measured 41/60); got skipped={skipped} ran={ran}"
+                )
+
+
+class TestCMCOverlapDiagnostics:
+    """The two overlap fractions are different numbers and are named so.
+
+    `cmc_overlap_ratio` is |Omega|/(B*T). `cmc_gate_ratio` is |Omega|/|M1| and is
+    the one compared against `min_overlap_ratio`. Reporting both under one name
+    is what produced the false "CMC does not run at the defaults" finding, so
+    the distinction is now pinned rather than described in a comment.
+    """
+
+    def _fixture(self, n_predicted, n_overlap, B=4, T=32):
+        z1 = torch.zeros(B, T, 8)
+        z1[:, :n_predicted] = torch.randn(B, n_predicted, 8)
+        z2 = torch.randn(B, T, 8)
+        overlap = torch.zeros(B, T, dtype=torch.long)
+        overlap[:, :n_overlap] = 1
+        cmc = CrossMaskConsistency(
+            embed_dim=8, min_overlap_ratio=_SHIPPED_MODEL["cmc_min_overlap_ratio"]
+        )
+        return cmc(z1, z2, overlap)
+
+    def test_overlap_ratio_is_the_fraction_of_all_positions(self):
+        """On EVERY branch — including the skip branches.
+
+        Pinned on the skip branches deliberately. That is where the regression
+        lived: `cmc_overlap_ratio` reported |Omega|/(B*T) when the loss ran and
+        |Omega|/|M1| when it did not, under one name. A reader comparing the
+        skip-branch value against `min_overlap_ratio` was reading p against a
+        threshold meant for a ratio of masks, and a reader comparing the
+        run-branch value was reading p². Both readings came from one key.
+        """
+        for n_overlap in (0, 4, 12):
+            _loss, info = self._fixture(n_predicted=20, n_overlap=n_overlap)
+            expected = n_overlap * 4 / (4 * 32)
+            assert info["cmc_overlap_ratio"] == pytest.approx(expected, abs=1e-9), (
+                f"cmc_overlap_ratio must be |Omega|/(B*T) = {expected:.6f} on every "
+                f"branch (n_overlap={n_overlap}), got {info['cmc_overlap_ratio']:.6f}"
+            )
+
+    def test_gate_ratio_is_the_fraction_of_the_primary_mask(self):
+        """On every branch, and always present.
+
+        `cmc_gate_ratio` is the quantity `min_overlap_ratio` is compared
+        against. Reporting it only on the run branch would make the diagnostic
+        available exactly when the reader needs it least.
+        """
+        for n_overlap in (0, 4, 12):
+            _loss, info = self._fixture(n_predicted=20, n_overlap=n_overlap)
+            expected = n_overlap * 4 / (20 * 4)
+            assert info["cmc_gate_ratio"] == pytest.approx(expected, abs=1e-9), (
+                f"cmc_gate_ratio must be |Omega|/|M1| = {expected:.6f} on every "
+                f"branch (n_overlap={n_overlap}), got {info['cmc_gate_ratio']:.6f}"
+            )
+
+    def test_gate_open_agrees_with_the_threshold_everywhere(self):
+        """`cmc_gate_open` must be the threshold test, not a separate opinion.
+
+        Ties the reported boolean to the number it claims to summarise, so a
+        future edit cannot make the flag and the ratio disagree.
+        """
+        thresh = _SHIPPED_MODEL["cmc_min_overlap_ratio"]
+        for n_overlap in (0, 4, 12):
+            _loss, info = self._fixture(n_predicted=20, n_overlap=n_overlap)
+            expected_open = n_overlap > 0 and info["cmc_gate_ratio"] >= thresh
+            assert info["cmc_gate_open"] is expected_open, (
+                f"cmc_gate_open={info['cmc_gate_open']} disagrees with "
+                f"gate_ratio={info['cmc_gate_ratio']:.4f} vs threshold {thresh} "
+                f"at n_overlap={n_overlap}"
+            )
+            assert info["cmc_skipped"] is (not expected_open)
+            assert bool(info["cmc_skip_reason"]) is (not expected_open)
+
+    def test_the_two_diagnostics_are_not_the_same_number(self):
+        """They differ by |M1|/(B*T), i.e. by the mask ratio.
+
+        Pinned because collapsing them is the specific regression that made the
+        mechanism unreadable: at the shipped ramp they read ~0.02-0.13 and
+        ~0.18-0.41 respectively, so a reader who used the first against the
+        0.2 threshold would conclude the gate was permanently shut.
+        """
+        _loss, info = self._fixture(n_predicted=20, n_overlap=12)
+        assert info["cmc_overlap_ratio"] != pytest.approx(info["cmc_gate_ratio"]), (
+            "cmc_overlap_ratio and cmc_gate_ratio came out equal, so this test "
+            "is no longer exercising the distinction. The real host path "
+            "scatters compact slot predictions into a zero-filled (B,T,D), so "
+            "|M1| < B*T and the two genuinely differ."
+        )
+
+    def test_info_key_set_is_identical_on_every_branch(self):
+        """A consumer must not KeyError exactly when it needs the diagnostics.
+
+        `cmc_running_consistency` was present on the run and insufficient-overlap
+        branches and absent on the no-overlap branch — so the one step where a
+        reader most wants to know what happened was the one that raised.
+        """
+        _l1, no_overlap = self._fixture(n_predicted=20, n_overlap=0)
+        _l2, insufficient = self._fixture(n_predicted=20, n_overlap=4)
+        _l3, ran = self._fixture(n_predicted=20, n_overlap=12)
+        sets = [set(no_overlap), set(insufficient), set(ran)]
+        assert sets[0] == sets[1] == sets[2], (
+            f"CMC returns different keys per branch: "
+            f"no_overlap={sorted(sets[0])}, insufficient={sorted(sets[1])}, "
+            f"ran={sorted(sets[2])}"
+        )
 
 
 if __name__ == "__main__":
