@@ -1669,3 +1669,154 @@ class TestOnlyOneMaskRatioKnobIsLive:
             f"{collator.current_mask_ratio}, expected ~{midpoint}. The ramp is "
             "the live knob; data.mask_ratio is not."
         )
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  12. CMC's overlap gate: reachable at the shipped ramp, and not by accident
+# ══════════════════════════════════════════════════════════════════════════════
+
+
+class TestCMCOverlapGateIsReachableAtTheShippedRamp:
+    """An audit concluded CMC was inert at the defaults. It was not, and the
+    arithmetic that says so is pinned here.
+
+    THE MISDIAGNOSIS
+    ----------------
+    `docs/METRICS.md` recorded that `cmc_overlap_ratio` reads 0.047...0.164 at
+    the shipped mask ratios against a `min_overlap_ratio` of 0.2, and concluded
+    the gate "skips 6 of 6" — CMC does not run at the defaults. That is a
+    false conclusion reached from a correct observation, and the gap between
+    the two is one denominator.
+
+    `src/models/cmc.py` compares the threshold against
+
+        cmc_gate_ratio = |Omega| / |M1|          <- fraction of the PRIMARY MASK
+
+    while the key the audit read reports
+
+        cmc_overlap_ratio = |Omega| / (B*T)      <- fraction of ALL POSITIONS
+
+    For two independent masks at fraction `p`, |Omega|/(B*T) = p² and
+    |Omega|/|M1| = p. Across the shipped 0.15 -> 0.35 ramp those read ~0.02-0.13
+    and ~0.18-0.38 respectively (measured, 16x128, 40 draws per point). p² is
+    below 0.2 for every mask ratio this repo ships below ~0.45, so comparing the
+    first quantity against the threshold says "dead" at every configuration in
+    the repo — including the ones where CMC demonstrably runs.
+
+    These tests pin both halves: that the shipped threshold IS reachable, so
+    the gate must not be "fixed" by tuning it, and that p² is NOT, so nobody
+    re-derives the same false conclusion from the same number.
+    """
+
+    _B, _T, _DRAWS = 16, 128, 12
+
+    @classmethod
+    def _gate_ratios(cls, ratio):
+        """|Omega|/|M1| and |Omega|/(B*T) at one mask ratio, over _DRAWS draws.
+
+        B*T is not arbitrary: the gate ratio is a ratio of two random counts, so
+        its spread shrinks as 1/sqrt(B*T) — measured sd 0.054 at 8x64 against
+        0.036 at 16x128. 16x128 is where "the gate is open" stops being a coin
+        flip. At the shipped 64x512 the same points read 0/40 shut.
+        """
+        from src.models.cmc import CrossMaskConsistency
+
+        gate, frac = [], []
+        for draw in range(cls._DRAWS):
+            m1 = CrossMaskConsistency.generate_second_mask(
+                seq_len=cls._T, batch_size=cls._B, mask_ratio=ratio, step=draw
+            )
+            m2 = CrossMaskConsistency.generate_second_mask(
+                seq_len=cls._T, batch_size=cls._B, mask_ratio=ratio, step=9000 + draw
+            )
+            om = float((m1 * m2).sum())
+            gate.append(om / max(float(m1.sum()), 1.0))
+            frac.append(om / (cls._B * cls._T))
+        return gate, frac
+
+    def test_the_shipped_threshold_is_reached_inside_the_shipped_ramp(self):
+        """CMC must be able to run at the configuration this repo ships.
+
+        If the ramp's own endpoint could not clear the threshold, every run
+        using these defaults would train with CMC contributing nothing — the
+        inert-mechanism defect class — and the fix would be a config change,
+        not a diagnostic one.
+        """
+        thresh = _DEFAULTS["model"]["cmc_min_overlap_ratio"]
+        end = _DEFAULTS["model"]["mask_ratio_end"]
+        gate, _frac = self._gate_ratios(end)
+        assert min(gate) > thresh, (
+            f"at the ramp endpoint mask_ratio_end={end} the gate ratio reads "
+            f"{min(gate):.4f} at worst against cmc_min_overlap_ratio={thresh}. "
+            "CMC would be shut for the whole curriculum at the shipped "
+            "defaults, so every arm relying on it measures nothing. Raise "
+            "mask_ratio_end or lower cmc_min_overlap_ratio -- and if you lower "
+            "it, check the gate still rejects a tiny second_mask_ratio."
+        )
+
+    def test_the_gate_opens_across_the_upper_half_of_the_ramp(self):
+        """Not only reachable at the endpoint: open at every point >= 0.25."""
+        thresh = _DEFAULTS["model"]["cmc_min_overlap_ratio"]
+        start, end = (
+            _DEFAULTS["model"]["mask_ratio_start"],
+            _DEFAULTS["model"]["mask_ratio_end"],
+        )
+        for ratio in (0.25, 0.30, end):
+            gate, _frac = self._gate_ratios(ratio)
+            assert min(gate) > thresh, (
+                f"gate ratio fell to {min(gate):.4f} at mask_ratio={ratio} "
+                f"(mean {sum(gate) / len(gate):.4f}) against threshold {thresh}"
+            )
+        assert start < 0.25 < end, (
+            "the shipped ramp no longer straddles 0.25, so this file's claim "
+            "about which leg is live no longer describes it. Re-derive before "
+            "trusting the assertions above."
+        )
+
+    def test_the_square_of_the_mask_ratio_cannot_reach_the_threshold(self):
+        """The auditor's arithmetic, pinned as a fact rather than a reading.
+
+        |Omega|/(B*T) = p² stays below 0.2 across the entire shipped ramp. That
+        is WHY the mechanism was wrongly declared dead: a reader who compared
+        that number against `min_overlap_ratio` was comparing two quantities
+        that differ by a factor of the mask ratio itself. It is also why
+        `cmc_overlap_ratio` and `cmc_gate_ratio` must never be merged back into
+        one key -- if they were, the merged key would sit below the threshold at
+        every shipped configuration and the next reader would repeat this.
+        """
+        thresh = _DEFAULTS["model"]["cmc_min_overlap_ratio"]
+        start, end = (
+            _DEFAULTS["model"]["mask_ratio_start"],
+            _DEFAULTS["model"]["mask_ratio_end"],
+        )
+        for ratio in (start, 0.20, 0.25, 0.30, end):
+            _gate, frac = self._gate_ratios(ratio)
+            assert max(frac) < thresh, (
+                f"|Omega|/(B*T) reached {max(frac):.4f} at mask_ratio={ratio}, "
+                f"which is at or above cmc_min_overlap_ratio={thresh}. The whole "
+                "argument in this class's docstring is that p² is structurally "
+                "unreachable across this ramp; if that has stopped being true, "
+                "the two ratios can no longer be told apart by inspection and "
+                "this class needs rewriting rather than deleting."
+            )
+
+    def test_the_two_ratios_are_distinct_shipped_keys(self):
+        """The names that carry the two quantities must both exist.
+
+        A cheap structural guard: if either key is renamed, this goes red
+        before a reader has to notice.
+        """
+        from src.models.cmc import CrossMaskConsistency
+
+        cmc = CrossMaskConsistency(
+            embed_dim=8, min_overlap_ratio=_DEFAULTS["model"]["cmc_min_overlap_ratio"]
+        )
+        B, T = 4, 32
+        z1 = torch.zeros(B, T, 8)
+        z1[:, :20] = torch.randn(B, 20, 8)
+        z2 = torch.randn(B, T, 8)
+        overlap = torch.zeros(B, T, dtype=torch.long)
+        overlap[:, :12] = 1
+        _loss, info = cmc(z1, z2, overlap)
+        assert "cmc_overlap_ratio" in info, "the |Omega|/(B*T) key was renamed"
+        assert "cmc_gate_ratio" in info, "the |Omega|/|M1| key was renamed"
