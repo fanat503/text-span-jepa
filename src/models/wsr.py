@@ -274,11 +274,30 @@ class WorkspaceSharpnessRegularization(TrainingStateGuard):
         # Warmup
         warmup_factor = min(1.0, step / max(self.warmup_steps, 1))
         if warmup_factor < 1e-6:
-            zero = Q.new_tensor(0.0)
-            return zero, {
+            # SENTINEL PATH, full key set — the union of what BOTH modes
+            # report, because `mode` is fixed per run while `step` is not: the
+            # early exit used to drop `wsr_sharpness`, `wsr_grad_source` and
+            # six others, so `info[k]` raised KeyError for the first
+            # `wsr_warmup_steps` steps of every run.
+            #
+            # Nothing is substituted here: the sharpness is not "the
+            # orthonormality proxy standing in for a missing gradient", it is
+            # simply not computed, which is what `wsr_grad_source: "warmup"`
+            # records and why `wsr_gradient_substituted` is False rather than
+            # the True that the documented "unavailable" case would give.
+            return Q.new_tensor(0.0), {
                 "wsr_loss": 0.0,
-                "wsr_warmup": True,
+                "wsr_sharpness": 0.0,
+                "wsr_spectral_sharpness": 0.0,
+                "wsr_directional_sharpness": 0.0,
+                "wsr_grad_norm": 0.0,
+                "wsr_rho": self.rho,
                 "wsr_warmup_factor": 0.0,
+                "wsr_warmup": True,
+                "wsr_loss_current": 0.0,
+                "wsr_loss_perturbed": 0.0,
+                "wsr_grad_source": "warmup",
+                "wsr_gradient_substituted": False,
             }
 
         if self.mode == "gradient":
@@ -320,6 +339,10 @@ class WorkspaceSharpnessRegularization(TrainingStateGuard):
             ``{"lagged", "live", "unavailable"}``.  On ``"unavailable"``
             the caller must warn and flag ``info``, never present the proxy
             as the documented loss.
+
+            ``"warmup"`` is a fourth value, emitted by ``forward``'s
+            sentinel path rather than by this resolver: no gradient was looked
+            for because no sharpness was computed at all.
         """
         _lagged = getattr(self, "_lagged_gradient", None)
         if _lagged is not None:
@@ -460,6 +483,14 @@ class WorkspaceSharpnessRegularization(TrainingStateGuard):
             # sharpness; do not average it in with the others.
             "wsr_grad_source": grad_source,
             "wsr_gradient_substituted": grad_source == "unavailable",
+            # NaN, not 0.0: this mode never calls `loss_fn`, so there is no
+            # L(Q) / L(Q+Δ) pair to report.  A zero here would sit next to a
+            # real non-zero `wsr_sharpness` and invite the reader to conclude
+            # sharpness = perturbed − current = 0 — a wrong number derived
+            # from a set of numbers that all look measured.  NaN is still a
+            # real float, so `info[k]` holds and the gap is visible in a plot.
+            "wsr_loss_current": float("nan"),
+            "wsr_loss_perturbed": float("nan"),
         }
 
         return loss, info

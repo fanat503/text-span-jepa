@@ -1,0 +1,47 @@
+Five mechanisms: an early return must carry the same keys as a normal one
+
+gac, sta, puc, rdc and wsr each returned a SHORTER info dict from their
+warmup early-return path than from the path a later step takes. `info[k]`
+raised KeyError for exactly the first `*_warmup_steps` steps of a run — the
+steps a reader is most likely to be watching to see whether the mechanism
+came up. A defect of that shape is invisible to a suite that only ever
+drives a module past warmup, which is every existing test.
+
+Found by measurement, not by reading: .agent-notes/probe_keys.py drives all
+twelve modules at step 0 and at step 5000 and diffs the key sets. Seven
+were already stable. Two further splits of the same class turned up on
+other axes and are fixed too:
+
+  * puc_warmup and rdc_warmup existed ONLY on the early return — absent on
+    every later step, i.e. for ~99% of a run. gac/sta/wsr already reported
+    <mech>_warmup on both paths; now so do these.
+  * wsr mode='gradient' (the default) reported 10 keys, mode='sam' 12.
+    wsr_loss_current / wsr_loss_perturbed existed only in sam. A reader
+    written against sam KeyErrors on the default mode.
+
+The fix is a sentinel, never an absent key: a value that cannot be computed
+yet is reported as an explicit zero and flagged by the module's own
+`<mech>_warmup`. Constants that ARE knowable during warmup are reported for
+real. GAC becomes a single return — its starvation count is a pure function
+of the step's arguments, so only the loss and the training-state mutations
+are gated — which is the shape cmc.py:511-514 already argues for.
+
+Two choices worth naming. `wsr_grad_source` gains a fourth value,
+"warmup": "unavailable" would claim the orthonormality proxy stood in for a
+gradient, so `wsr_gradient_substituted` stays False — nothing was
+substituted, nothing was measured. And wsr_loss_current /
+wsr_loss_perturbed are NaN, not 0.0, in gradient mode: that mode never
+calls loss_fn, so a 0.0 beside a real non-zero `wsr_sharpness` would invite
+the reader to derive sharpness = perturbed - current = 0, a wrong number
+computed from numbers that all look measured.
+
+No value changes. .agent-notes/diff_values.py runs the same driver against
+`git show main:src/models/...` and the worktree in two processes and diffs
+every reported number and every buffer: post-warmup losses, pre-existing
+info values and training state are bit-identical. The only difference is
+added keys.
+
+Verified with `tools/rt.py tests/test_mechanism_wiring.py
+tests/test_sterility.py`: 76 passed. The new assertions were written first
+and watched fail with the exact KeyError; re-shrinking rdc.py reproduces 3
+failures, so the check is not vacuous. ruff and black clean.

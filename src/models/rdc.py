@@ -147,8 +147,27 @@ class RepresentationDriftCompensation(TrainingStateGuard):
         # Warmup
         warmup_factor = min(1.0, step / max(self.warmup_steps, 1))
         if warmup_factor < 1e-6:
+            # SENTINEL PATH, full key set.  Drift is not measured before
+            # warmup, so every drift-derived number is an explicit zero and
+            # `rdc_warmup` says why; the two that are pure configuration (the
+            # workspace width and eta) are reported for real.  These keys used
+            # to be ABSENT, so `info[k]` raised KeyError for the first
+            # `rdc_warmup_steps` steps of every run.
             zero = torch.tensor(0.0, device=z_current.device)
-            return zero, {"rdc_loss": 0.0, "rdc_warmup": True}
+            return zero, {
+                "rdc_loss": 0.0,
+                "rdc_ortho_drift_norm": 0.0,
+                "rdc_workspace_drift_norm": 0.0,
+                "rdc_total_drift_norm": 0.0,
+                "rdc_drift_ratio": 0.0,
+                "rdc_warmup_factor": warmup_factor,
+                "rdc_k_workspace": self.workspace_Q.size(1),
+                "rdc_theoretical_bound": 0.0,
+                "rdc_transient_bound": 0.0,
+                "rdc_stationary_bound": 0.0,
+                "rdc_eta": self.eta,
+                "rdc_warmup": True,
+            }
 
         # Get workspace projection
         Q = workspace_Q if workspace_Q is not None else self.workspace_Q
@@ -222,6 +241,10 @@ class RepresentationDriftCompensation(TrainingStateGuard):
             "rdc_transient_bound": transient_bound,
             "rdc_stationary_bound": stationary_bound,
             "rdc_eta": self.eta,
+            # Present on BOTH paths, like `gac_warmup` / `sta_warmup` /
+            # `puc_warmup`.  It used to exist only on the warmup return, which
+            # is the same key-set contract inverted.
+            "rdc_warmup": False,
         }
 
         return loss, info

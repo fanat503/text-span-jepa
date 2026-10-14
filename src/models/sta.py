@@ -265,12 +265,27 @@ class SpectralTransportAlignment(TrainingStateGuard):
         # Warmup
         warmup_factor = min(1.0, step / max(self.warmup_steps, 1))
         if warmup_factor < 1e-6:
-            zero = z.new_tensor(0.0)
-            return zero, {
+            # SENTINEL PATH, full key set.  Before the reference spectrum
+            # exists there is nothing to measure W1 against, so the spectral
+            # diagnostics are reported as explicit zeros and flagged by
+            # `sta_warmup`.  They used to be ABSENT, which made `info[k]`
+            # raise KeyError for exactly the first `warmup_steps` steps of a
+            # run — the steps a reader is most likely to be watching to find
+            # out whether STA came up.
+            #
+            # `sta_running_*` are read, not advanced: the buffers still hold
+            # their initial 0.0 because this path never touches them.
+            return z.new_tensor(0.0), {
                 "sta_loss": 0.0,
                 "sta_w1": 0.0,
-                "sta_warmup": True,
+                "sta_spectral_gap": 0.0,
                 "sta_warmup_factor": 0.0,
+                "sta_warmup": True,
+                "sta_running_w1": self.running_w1.item(),
+                "sta_running_spectral_gap": self.running_spectral_gap.item(),
+                "sta_max_eigenvalue": 0.0,
+                "sta_min_eigenvalue": 0.0,
+                "sta_condition_number": 0.0,
             }
 
         # Reference follows the interval cadence; CURRENT is recomputed every
