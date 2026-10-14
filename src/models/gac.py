@@ -163,10 +163,7 @@ class GradientAllocatedCapacity(TrainingStateGuard):
 
         # Warmup: don't apply GAC until gradients stabilize
         warmup_factor = min(1.0, step / max(self.warmup_steps, 1))
-
-        if warmup_factor < 1e-6:
-            zero = torch.tensor(0.0, device=z_pred.device)
-            return zero, {"gac_loss": 0.0, "gac_warmup": True}
+        in_warmup = warmup_factor < 1e-6
 
         # Ensure grad_norms is (D,) per-dimension
         # If grad_norms has extra batch/time dims, aggregate to per-dim mean
@@ -178,30 +175,44 @@ class GradientAllocatedCapacity(TrainingStateGuard):
             # Scalar broadcast to all dims
             gn = gn.expand(D)
 
-        # Update running gradient norms (EMA)
-        with torch.no_grad():
-            self._mutate_state(
-                lambda: self.running_grad_norms.mul_(self.ema_beta).add_(
-                    (1 - self.ema_beta) * gn,
-                ),
-            )
-
         # Identify starved dimensions: ||g_i|| < tau_grad
+        #
+        # The starvation COUNT is a pure function of this step's arguments, so
+        # it is evaluated on the warmup path too. Warmup exists to wait for the
+        # gradients to stabilise, so "how many dimensions are still starved?"
+        # is precisely the number the wait is being watched for; returning early
+        # hid it for the first `warmup_steps` steps of every run.
         starved_mask = (gn < self.tau_grad).float()  # (D,)
         n_starved = starved_mask.sum().item()
         starved_fraction = n_starved / D
 
-        # Exploration bonus: γ · Σ_i max(0, τ - ||g_i||) · ||z_i||²
-        # For starved dimensions, (τ - ||g_i||) > 0
-        grad_deficit = F.relu(self.tau_grad - gn)  # (D,)
-        dim_energy = (z_flat**2).mean(dim=0)  # (D,) mean over batch
+        if in_warmup:
+            # ONE return, so the key set cannot drift between branches. The loss
+            # and every TRAINING statistic are left untouched during warmup
+            # exactly as before — this stops the early exit from dropping the
+            # keys every later step reports, nothing else. `info[k]` now holds
+            # for every key GAC emits, on every step of a run.
+            loss = torch.zeros((), device=z_pred.device)
+        else:
+            # Update running gradient norms (EMA)
+            with torch.no_grad():
+                self._mutate_state(
+                    lambda: self.running_grad_norms.mul_(self.ema_beta).add_(
+                        (1 - self.ema_beta) * gn,
+                    ),
+                )
 
-        # GAC loss: sum over starved dimensions
-        loss = self.gamma * warmup_factor * (grad_deficit * dim_energy * starved_mask).sum()
+            # Exploration bonus: γ · Σ_i max(0, τ - ||g_i||) · ||z_i||²
+            # For starved dimensions, (τ - ||g_i||) > 0
+            grad_deficit = F.relu(self.tau_grad - gn)  # (D,)
+            dim_energy = (z_flat**2).mean(dim=0)  # (D,) mean over batch
 
-        # Diagnostics
-        with torch.no_grad():
-            self._mutate_state(self._update_running_diagnostics, starved_fraction)
+            # GAC loss: sum over starved dimensions
+            loss = self.gamma * warmup_factor * (grad_deficit * dim_energy * starved_mask).sum()
+
+            # Diagnostics
+            with torch.no_grad():
+                self._mutate_state(self._update_running_diagnostics, starved_fraction)
 
         info = {
             "gac_loss": loss.item(),
@@ -212,7 +223,7 @@ class GradientAllocatedCapacity(TrainingStateGuard):
             "gac_min_grad_norm": grad_norms.min().item() if D > 0 else 0.0,
             "gac_max_grad_norm": grad_norms.max().item() if D > 0 else 0.0,
             "gac_running_starved_fraction": self.running_starved_fraction.item(),
-            "gac_warmup": False,
+            "gac_warmup": in_warmup,
         }
 
         return loss, info
