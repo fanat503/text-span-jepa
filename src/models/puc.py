@@ -243,7 +243,30 @@ class PredictionUncertaintyCalibration(TrainingStateGuard):
         warmup_factor = min(1.0, step / max(self.warmup_steps, 1))
         if warmup_factor < 1e-6:
             zero = torch.tensor(0.0, device=z_pred.device)
-            return zero, {"puc_loss": 0.0, "puc_warmup": True, "puc_warmup_factor": warmup_factor}
+            # SENTINEL PATH, full key set.  The Oja state has not been seeded
+            # yet, so the eigenvalue-derived diagnostics are explicit zeros;
+            # the two that are pure configuration (the target entropy and the
+            # tracked-component count) are reported for real, and
+            # `puc_warmup` says why the rest are zero.  They used to be ABSENT,
+            # so `info[k]` raised KeyError for the first `puc_warmup_steps`
+            # steps of every run.
+            #
+            # `puc_carries_grad` is False and that is literally true: the
+            # warmup loss is a constant zero with no autograd edge.
+            return zero, {
+                "puc_loss": 0.0,
+                "puc_entropy": 0.0,
+                "puc_target_entropy": self.target_entropy,
+                "puc_entropy_deficit": 0.0,
+                "puc_overconfidence": 0.0,
+                "puc_warmup_factor": warmup_factor,
+                "puc_min_eigenvalue": 0.0,
+                "puc_max_eigenvalue": 0.0,
+                "puc_log_det": 0.0,
+                "puc_n_components": self.n_components,
+                "puc_carries_grad": False,
+                "puc_warmup": True,
+            }
 
         # --- Online covariance eigenvalue estimation via Oja's rule ---
         # Training only: the Oja state is a running estimate, not a cache
@@ -261,9 +284,14 @@ class PredictionUncertaintyCalibration(TrainingStateGuard):
             centered_d = z_flat - z_flat.mean(dim=0, keepdim=True)
             cov_b = centered_d.T @ centered_d / max(z_flat.size(0) - 1, 1)
             eigs_top = torch.linalg.eigvalsh(cov_b).flip(0)[: self.n_components]
-            eigenvalues = F.softplus(eigs_top) + 1e-6
+            eigenvalues = eigs_top.clamp_min(1e-6)
         else:
-            eigenvalues = F.softplus(self.running_eigenvalues - 5.0) + 1e-6  # ensure positive
+            # The eigenvalues themselves, clamped for numerical stability only.
+            # A softplus here squashes them, so `puc_entropy` stops being an
+            # entropy - it is printed in nats and compared against
+            # `target_entropy`, so the value must mean what its name says.
+            eigenvalues = self.running_eigenvalues.clamp_min(1e-6)
+
         # Differential entropy of Gaussian: H = 0.5 * sum(log(2πe * λ_i))
         # For tracked components:
         log_eigenvalues = torch.log(eigenvalues)
@@ -338,6 +366,11 @@ class PredictionUncertaintyCalibration(TrainingStateGuard):
             # the inert case is visible in a printed run instead of only in a
             # diff of this file. See the TASK-39 note in the header.
             "puc_carries_grad": bool(torch.is_tensor(final_loss) and final_loss.requires_grad),
+            # Present on BOTH paths, like `gac_warmup` / `sta_warmup` /
+            # `wsr_warmup`.  It used to exist only on the warmup return, which
+            # is the same key-set contract inverted: a key that vanishes after
+            # warmup is absent on every subsequent step of the run.
+            "puc_warmup": False,
         }
 
         return final_loss, info
