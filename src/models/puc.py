@@ -284,9 +284,14 @@ class PredictionUncertaintyCalibration(TrainingStateGuard):
             centered_d = z_flat - z_flat.mean(dim=0, keepdim=True)
             cov_b = centered_d.T @ centered_d / max(z_flat.size(0) - 1, 1)
             eigs_top = torch.linalg.eigvalsh(cov_b).flip(0)[: self.n_components]
-            eigenvalues = F.softplus(eigs_top) + 1e-6
+            eigenvalues = eigs_top.clamp_min(1e-6)
         else:
-            eigenvalues = F.softplus(self.running_eigenvalues - 5.0) + 1e-6  # ensure positive
+            # The eigenvalues themselves, clamped for numerical stability only.
+            # A softplus here squashes them, so `puc_entropy` stops being an
+            # entropy - it is printed in nats and compared against
+            # `target_entropy`, so the value must mean what its name says.
+            eigenvalues = self.running_eigenvalues.clamp_min(1e-6)
+
         # Differential entropy of Gaussian: H = 0.5 * sum(log(2πe * λ_i))
         # For tracked components:
         log_eigenvalues = torch.log(eigenvalues)
