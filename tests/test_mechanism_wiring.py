@@ -21,6 +21,7 @@ that take it are the first `warmup_steps` of a run, so the defect is untestable
 by any suite that only ever runs a step past warmup.
 """
 
+import pathlib
 import src
 import pytest
 import torch
@@ -41,10 +42,17 @@ from src.models.wsr import WorkspaceSharpnessRegularization
 
 # Provenance. An editable install on this machine points at a DIFFERENT clone
 # of this repo, and a stale __pycache__ produced traceback paths naming that
-# other tree — so a green run here can be a run against someone else's code.
+# other tree - so a green run here can be a run against someone else's code.
+#
+# The guard must key off the test file's OWN location, not a hardcoded worktree
+# path: this originally read `startswith(r"C:\dev\wt-keys")`, which was correct in
+# the one worktree it was written in and wrong everywhere else - it made
+# test_mechanism_wiring.py fail at COLLECTION on main, with an error that looked
+# like an environment problem rather than a stale absolute path.
+_HERE = pathlib.Path(__file__).resolve().parent.parent
 assert src.__file__.startswith(
-    r"C:\dev\wt-keys"
-), f"tests must exercise the worktree copy of src, got {src.__file__}"
+    str(_HERE)
+), f"tests must exercise the working-tree copy of src, got {src.__file__}"
 
 
 def _tiny_config() -> TextSpanJEPAConfig:

@@ -1,4 +1,3 @@
-
 """PUC's reported entropy must be the entropy of the eigenvalues it used.
 
 `puc_entropy` is printed in nats and compared against `target_entropy`, so a value
@@ -38,9 +37,9 @@ class TestEntropyIsTheEntropyOfTheEigenvalues:
         _loss, info = p(z, step=1)
         z_flat = z.reshape(-1, 24)
         expected = _expected(z_flat, p.n_components)
-        assert abs(info["puc_entropy"] - expected) < 1e-6, (
-            f"puc_entropy={info['puc_entropy']:.6f} but H(the eigenvalues)={expected:.6f}"
-        )
+        assert (
+            abs(info["puc_entropy"] - expected) < 1e-6
+        ), f"puc_entropy={info['puc_entropy']:.6f} but H(the eigenvalues)={expected:.6f}"
 
     def test_no_softplus_is_silently_reintroduced(self):
         """The regression this file exists for.
