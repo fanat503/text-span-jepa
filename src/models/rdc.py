@@ -163,7 +163,7 @@ class RepresentationDriftCompensation(TrainingStateGuard):
                 "rdc_warmup_factor": warmup_factor,
                 "rdc_k_workspace": self.workspace_Q.size(1),
                 "rdc_theoretical_bound": 0.0,
-                "rdc_transient_bound": 0.0,
+                "rdc_transient_term": 0.0,
                 "rdc_stationary_bound": 0.0,
                 "rdc_eta": self.eta,
                 "rdc_warmup": True,
@@ -223,11 +223,27 @@ class RepresentationDriftCompensation(TrainingStateGuard):
         # NOTE (audit R15): proxy estimates on EMA-smoothed eps with an
         # arbitrary T_eff cap — diagnostics, not certified bounds.
         T_eff = min(step, 10000)
-        transient_bound = eps_estimate * ((1 - self.eta) ** T_eff) * T_eff / math.sqrt(max(k, 1))
+        transient_term = eps_estimate * ((1 - self.eta) ** T_eff) * T_eff / math.sqrt(max(k, 1))
         # Stationary bound: ε(1-η)/(η·√k) — tight, independent of T
         stationary_bound = (
             eps_estimate * (1 - self.eta) / (max(self.eta, 1e-8) * math.sqrt(max(k, 1)))
         )
+        # `(1 - eta) ** T_eff` UNDERFLOWS to 0.0 for any realistic T_eff, so the
+        # transient term is 0.0 not because there is no transient but because it
+        # has decayed below float resolution. Two consequences, both fixed here:
+        #
+        # 1. `min(transient, stationary)` made `rdc_theoretical_bound` read 0.0
+        #    while the stationary contribution was still fully present - a bound of
+        #    0 on a parameter measuring 7626. Reporting 0 as an error bound when
+        #    the error is 7626 is the worst thing a diagnostic can do.
+        # 2. The two terms are ADDITIVE contributions to the same bound, not
+        #    alternatives, so `min` was the wrong reduction even before the
+        #    underflow.
+        #
+        # The sum is reported as `rdc_theoretical_bound`, and the transient part
+        # is named `_term` rather than `_bound` because it is one additive
+        # contribution, not the whole bound.
+        theoretical_bound = transient_term + stationary_bound
 
         info = {
             "rdc_loss": loss.item(),
@@ -237,8 +253,8 @@ class RepresentationDriftCompensation(TrainingStateGuard):
             "rdc_drift_ratio": drift_ratio,
             "rdc_warmup_factor": warmup_factor,
             "rdc_k_workspace": k,
-            "rdc_theoretical_bound": min(transient_bound, stationary_bound),
-            "rdc_transient_bound": transient_bound,
+            "rdc_theoretical_bound": theoretical_bound,
+            "rdc_transient_term": transient_term,
             "rdc_stationary_bound": stationary_bound,
             "rdc_eta": self.eta,
             # Present on BOTH paths, like `gac_warmup` / `sta_warmup` /

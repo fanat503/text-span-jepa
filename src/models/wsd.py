@@ -323,27 +323,30 @@ class WorkspaceSyncDrift(TrainingStateGuard):
 
         # Constructive steady-state bound (Reviewer R9 response):
         # The drift bound is: Δ(t) ≤ Δ(0)·exp(-λ·t) + ν_max/λ
-        # ν_max is the max rate of target Q change, observable as:
-        #   ν_max ≈ max(|Δ_drift| / Δt) from running statistics
-        # We estimate ν_max from the current drift and sync_interval:
+        #
+        # Of the five quantities this block used to report, FOUR were restatements
+        # of each other or of configuration, and none was ν_max:
+        #   ν_max_est     = running_drift / sync_interval   -- an estimate, under the
+        #                                                 assumption that drift over one
+        #                                                 interval is the MAXIMUM rate.
+        #                                                 Not a measurement of ν_max.
+        #   λ              = 1 / sync_interval             -- a config echo, NOT the
+        #                                                 penalty strength λ_WSD, which
+        #                                                 this module never receives.
+        #   steady_state   = ν_max_est / λ                -- the two definitions cancel
+        #                                                 the interval, so this was
+        #                                                 byte-identical to
+        #                                                 running_drift. Removed.
+        #   convergence    = 1 / λ                        -- equal to sync_interval.
+        #                                                 Removed; it is config.
+        # The one estimate kept is named for what it assumes, so a reader cannot
+        # mistake it for the theorem's ν_max.
         if self.running_drift.item() > 1e-8:
-            # ν_max ≈ current_drift / sync_interval (drift per step)
-            nu_max_est = self.running_drift.item() / max(self.sync_interval, 1)
-            # λ ≈ 1/sync_interval (EMA decay rate)
-            lambda_wsd = 1.0 / max(self.sync_interval, 1)
-            # Steady-state error: ν_max / λ (constructive, all terms observable)
-            steady_state_error = nu_max_est / max(lambda_wsd, 1e-8)
-            # Time constant: 1/λ steps to converge
-            convergence_time = 1.0 / max(lambda_wsd, 1e-8)
-            info["wsd_steady_state_error"] = steady_state_error
-            info["wsd_nu_max_estimate"] = nu_max_est
-            info["wsd_convergence_time"] = convergence_time
-            info["wsd_lambda_estimate"] = lambda_wsd
+            info["wsd_drift_per_step_estimate"] = self.running_drift.item() / max(
+                self.sync_interval, 1
+            )
         else:
-            info["wsd_steady_state_error"] = 0.0
-            info["wsd_nu_max_estimate"] = 0.0
-            info["wsd_convergence_time"] = 0.0
-            info["wsd_lambda_estimate"] = 0.0
+            info["wsd_drift_per_step_estimate"] = 0.0
 
         return drift_loss, info
 
