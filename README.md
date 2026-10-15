@@ -222,12 +222,17 @@ unaided:
 
 A fourth pattern worth knowing about before reading any diagnostic: **a number's
 stated meaning is not what the module computes, and the disagreement is invisible
-in the number itself.** Seven instances, five of them where the printed value is
-internally consistent — `wsd_steady_state_error ≡ wsd_running_drift` exactly (the
-`T` cancels in `ν/λ` with `ν = rd/T`, `λ = 1/T`), `wsr_spectral_sharpness` is
-character-identical to `wsr_sharpness`, `rdc_transient_bound` underflows to `0.0`
-past ~step 500 at the default `η = 0.01` and reads as a proof that drift vanishes.
-`THEORY_AND_PROOFS.md` lists all seven with the scripts that establish each.
+in the number itself.** Three of the worst instances were **removed from the code**
+rather than documented: `wsd_steady_state_error` was algebraically identical to
+`wsd_running_drift` (the `T` cancels in `ν/λ` with `ν = rd/T`, `λ = 1/T`),
+`wsr_spectral_sharpness` was byte-identical to `wsr_sharpness`, and
+`rdc_transient_bound` underflowed to `0.0` past ~step 500 while the drift it
+claimed to bound still read `3.687`. Worse than reading zero, `rdc_theoretical_bound`
+was `min(transient, stationary)` — so `min` returned the underflow and the reported
+bound became `0.0` on a parameter measuring thousands. Two additive contributions
+were being reduced with `min`; it is now their sum, and `rdc_theoretic_bound`
+tracks the drift (`0.129 → 0.348` across steps 1 → 10000). `THEORY_AND_PROOFS.md`
+lists the full set, each with the script that establishes it.
 
 **Counting convention.** Quote **12** when counting modules and **16** when
 counting numbered capabilities, and never either unqualified. Twelve is
