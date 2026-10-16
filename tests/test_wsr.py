@@ -152,7 +152,18 @@ class TestWSRSharpnessDecomposition:
         assert info["wsr_directional_sharpness"] >= 0
 
     def test_sharpness_bounds_total(self):
-        """Total sharpness ≤ spectral + directional (triangle inequality)."""
+        """Total sharpness ≤ spectral + directional (triangle inequality).
+
+        WAVE 20: `wsr_ambient_sharpness` is the theorem's real total
+        ρ_Q = ρ·||∇_Q L||_F/||Q||.  Before it existed the "total" this test
+        compared against parts WAS one of the parts (`wsr_sharpness` == the
+        spectral component in gradient mode), so the triangle check was
+        vacuous: spectral ≤ spectral + directional.
+
+        MUTATION VERDICT: revert the wave-20 wsr.py change and this test
+        fails with KeyError('wsr_ambient_sharpness') — the ambient total is
+        the only key the fix adds.
+        """
         wsr = WorkspaceSharpnessRegularization(embed_dim=64)
         for _ in range(10):
             Q = torch.randn(64, 8)
@@ -160,8 +171,62 @@ class TestWSRSharpnessDecomposition:
             Q.grad = torch.randn(64, 8)
 
             _loss, info = wsr(Q, step=1000)
-            total = info["wsr_spectral_sharpness"] + info["wsr_directional_sharpness"]
+            spc = info["wsr_spectral_sharpness"]
+            drn = info["wsr_directional_sharpness"]
+            amb = info["wsr_ambient_sharpness"]
+            total = spc + drn
             assert info["wsr_sharpness"] <= total + 1e-5
+            assert amb <= total + 1e-5, "the real total exceeds the sum of its parts"
+            # The corrected header theorem: ρ_Q² = ρ_spectral² + ρ_directional².
+            # The two parts lie in orthogonal complements of R^D, so this is
+            # exact in real arithmetic; the module computes it in float32,
+            # where 512-term Frobenius sums round at ~1e-7 relative.
+            assert abs(amb**2 - (spc**2 + drn**2)) <= 1e-5 * max(amb**2, 1.0), (
+                f"quadrature broken: amb^2={amb**2:.3e} vs " f"spc^2+drn^2={spc**2 + drn**2:.3e}"
+            )
+
+    def test_ambient_is_distinct_and_matches_its_own_formula(self):
+        """ρ_Q is a real, distinct total, verified against a float64 hand recomputation.
+
+        The probe gradient is required to have BOTH parts nonzero (checked
+        below) — with a purely off-manifold gradient, ambient == spectral and
+        every identity here would pass vacuously, which is exactly the trap
+        the old code sat in.
+
+        MUTATION VERDICT: revert the wave-20 wsr.py change and this test
+        fails with KeyError('wsr_ambient_sharpness') on the first read.
+        """
+        wsr = WorkspaceSharpnessRegularization(embed_dim=64, rho=0.05)
+        torch.manual_seed(11)
+        G = torch.randn(64, 8)
+        Q0, _ = torch.linalg.qr(torch.randn(64, 8))
+
+        # Precondition: the split has two genuinely nonzero parts.
+        P = Q0.double() @ Q0.double().T
+        assert (G.double() - P @ G.double()).norm().item() > 1e-3, "degenerate: off-span = 0"
+        assert (P @ G.double()).norm().item() > 1e-3, "degenerate: in-span = 0"
+
+        wsr.set_lagged_gradient(G)
+        _loss, info = wsr(Q0.clone(), step=1000)
+        assert info["wsr_grad_source"] == "lagged", "the probe must consume the real gradient"
+
+        # float64 recomputation of the header's own formulas.
+        G64, Q64 = G.double(), Q0.double()
+        P = Q64 @ Q64.T
+        qnorm = Q64.norm().item()  # ||Q||_F == sqrt(k)
+        ref = {
+            "wsr_ambient_sharpness": 0.05 * G64.norm().item() / qnorm,
+            "wsr_spectral_sharpness": 0.05 * (G64 - P @ G64).norm().item() / qnorm,
+            "wsr_directional_sharpness": 0.05 * (P @ G64).norm().item() / qnorm,
+        }
+        for key, expected in ref.items():
+            got = info[key]
+            assert abs(got - expected) < 1e-5, f"{key}: {got} != float64 reference {expected}"
+
+        # The point of wave 20: the total is NOT another name for a component.
+        assert (
+            info["wsr_ambient_sharpness"] != info["wsr_spectral_sharpness"]
+        ), "ambient still equals spectral — the reported total is a part again"
 
 
 class TestWSRGeneralizationBound:
@@ -317,6 +382,7 @@ class TestWSRIntegration:
         loss, info = wsr(Q, step=1000)
         assert loss.item() >= 0
         assert "wsr_sharpness" in info
+        assert "wsr_ambient_sharpness" in info
         assert "wsr_spectral_sharpness" in info
         assert "wsr_directional_sharpness" in info
 

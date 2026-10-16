@@ -222,17 +222,23 @@ unaided:
 
 A fourth pattern worth knowing about before reading any diagnostic: **a number's
 stated meaning is not what the module computes, and the disagreement is invisible
-in the number itself.** Three of the worst instances were **removed from the code**
+in the number itself.** Two of the worst instances were **removed from the code**
 rather than documented: `wsd_steady_state_error` was algebraically identical to
-`wsd_running_drift` (the `T` cancels in `ν/λ` with `ν = rd/T`, `λ = 1/T`),
-`wsr_spectral_sharpness` was byte-identical to `wsr_sharpness`, and
+`wsd_running_drift` (the `T` cancels in `ν/λ` with `ν = rd/T`, `λ = 1/T`), and
 `rdc_transient_bound` underflowed to `0.0` past ~step 500 while the drift it
-claimed to bound still read `3.687`. Worse than reading zero, `rdc_theoretical_bound`
-was `min(transient, stationary)` — so `min` returned the underflow and the reported
-bound became `0.0` on a parameter measuring thousands. Two additive contributions
-were being reduced with `min`; it is now their sum, and `rdc_theoretic_bound`
-tracks the drift (`0.129 → 0.348` across steps 1 → 10000). `THEORY_AND_PROOFS.md`
-lists the full set, each with the script that establishes it.
+claimed to bound still read `3.687`. Worse than reading zero,
+`rdc_theoretical_bound` was `min(transient, stationary)` — so `min` returned the
+underflow and the reported bound became `0.0` on a parameter measuring thousands.
+Two additive contributions were being reduced with `min`; it is now their sum,
+and `rdc_theoretical_bound` tracks the drift (`0.129 → 0.348` across steps
+1 → 10000). The third instance was **fixed rather than removed**:
+`wsr_spectral_sharpness` was a copy of the headline `wsr_sharpness`, and the
+header theorem's total `ρ_Q` was never reported at all — the module now reports
+`wsr_ambient_sharpness` as its own key, and the theorem holds in quadrature
+(`ρ_Q² = ρ_spectral² + ρ_directional²`), pinned by test; the headline still
+equals the spectral component in gradient mode, which is now a stated geometric
+fact rather than an accidental aliasing. `THEORY_AND_PROOFS.md` lists the full
+set, each with the script that establishes it.
 
 **Counting convention.** Quote **12** when counting modules and **16** when
 counting numbered capabilities, and never either unqualified. Twelve is
