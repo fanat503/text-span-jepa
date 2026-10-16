@@ -47,13 +47,18 @@ mechanical cause. The counts sum to 49.
 2. **One constant wearing a bound's name — 1.**
    `pcr.compute_cascade_capacity_bound` moves by a relative `7.5e-05` across a
    tenfold change in the quantity it names.
-3. **Exact duplicates — 10.** A second key carrying a quantity already present
-   under another name, often to the last bit: `jawp.bg_fraction`,
-   `jawp.rank_utilization`, `spc.spc_uniform_loss`, `spc.spc_band_losses`,
-   `swip.condition_number`, `swip.bg_variance_fraction`, `puc.puc_overconfidence`,
-   `gac.gac_running_starved_fraction`, `cmc.cmc_per_position_loss`,
-   `wsr.wsr_spectral_sharpness`. Plotting two of these gives a 45-degree line
-   that reads as a correlation.
+3. **Exact duplicates — 10, one since fixed.** A second key carrying a quantity
+   already present under another name, often to the last bit:
+   `jawp.bg_fraction`, `jawp.rank_utilization`, `spc.spc_uniform_loss`,
+   `spc.spc_band_losses`, `swip.condition_number`, `swip.bg_variance_fraction`,
+   `puc.puc_overconfidence`, `gac.gac_running_starved_fraction`,
+   `cmc.cmc_per_position_loss`, `wsr.wsr_spectral_sharpness`. Plotting two of
+   these gives a 45-degree line that reads as a correlation. **Wave-20 note
+   for the WSR case:** the aliasing is now *declared* — the module reports the
+   theorem's missing total as `wsr_ambient_sharpness`, so the pair
+   (`wsr_sharpness`, `wsr_spectral_sharpness`) still coincides in gradient
+   mode, but as stated geometry with a checkable third quantity, not as an
+   accident. Do not plot that pair.
 4. **Numbers that move and mislead — 16.** The dangerous ones, because a log
    line that looks alive is the one a reviewer trusts. `wsd_steady_state_error`
    is the running-drift EMA to `1.4e-17`. `rdc_transient_bound` reads `6.9e-37`
@@ -115,8 +120,9 @@ Every driver asserts provenance before running anything.
 
 ## The per-mechanism table
 
-Grades are in the generated table at `.agent-notes/inventory.txt`, regenerated
-from `.agent-notes/m_inventory.py`. Per-mechanism totals:
+Each row's weakest link is verifiable in `THEORY_AND_PROOFS.md`, which records
+the divergence, the measurement that establishes it, and the fix verdict for
+every named metric. Per-mechanism totals:
 
 | mechanism | metrics | MEANINGFUL | DEGENERATE | MIS / TAUT. | weakest link |
 |---|---:|---:|---:|---:|---|
@@ -131,8 +137,8 @@ from `.agent-notes/m_inventory.py`. Per-mechanism totals:
 | `sta` | 12 | 9 | 2 | 1 | `compute_davis_kahan_bound` tracks `W1`, not a gap |
 | `puc` | 11 | 5 | 3 | 3 | `puc_entropy` off by 179 nats; `puc_loss` near-constant |
 | `rdc` | 11 | 5 | 3 | 3 | all three bounds understate or restate the drift |
-| `wsr` | 13 | 9 | 3 | 1 | `wsr_spectral_sharpness` is identical to `wsr_sharpness` |
-| **total** | **153** | **104** | **23** | **26** | |
+| `wsr` | 14 | 10 | 3 | 1 | `wsr_spectral_sharpness` was identical to `wsr_sharpness` — fixed in wave 20: the header theorem's missing total `wsr_ambient_sharpness` is now reported, making the decomposition checkable; the headline still equals the spectral component by geometry, which the module now states instead of implying |
+| **total** | **154** | **105** | **23** | **26** | |
 
 `puc` and `rdc` are the weakest mechanisms by this measure — 5 of 11 each — and
 they are the two whose names promise a *bound*.
@@ -210,7 +216,7 @@ Each is a second key for a quantity already present, verified by identity:
 | `puc_puc_overconfidence` | `= deficit / target_entropy` | `\|diff\| = 0.0` at 5 decay levels |
 | `gac_running_starved_fraction` | EMA of `gac_starved_fraction` | same series, lagged |
 | `cmc_cmc_per_position_loss` | `cmc.py:476` and `cmc.py:481` are one expression | `\|diff\| = 0.0` at all 5 levels |
-| `wsr_spectral_sharpness` | `wsr.py:424` and `wsr.py:428` character-identical | `\|diff\| = 0.0` at all 6 levels |
+| `wsr_spectral_sharpness` | `wsr.py:424` and `wsr.py:428` character-identical | `\|diff\| = 0.0` at all 6 levels — **fixed in wave 20** (see below) |
 
 ### 4d. Numbers that move and mislead (16) — remove or rename
 

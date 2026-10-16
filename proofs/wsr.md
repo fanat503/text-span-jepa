@@ -77,11 +77,23 @@ This follows directly from the PAC-Bayes theorem (McAllester, 1999; Seeger, 2002
 
 **Statement:** The workspace sharpness decomposes as:
 
-$$\rho_Q = \rho_{\mathrm{spectral}} + \rho_{\mathrm{directional}}$$
+$$\rho_Q \leq \rho_{\mathrm{spectral}} + \rho_{\mathrm{directional}}$$
+
+> **CORRECTED (wave 20 / D-WSR-2):** the statement previously claimed the
+> linear **equality** `ρ_Q = ρ_spectral + ρ_directional`. The proof below
+> derives an inequality — the triangle inequality on orthogonal components —
+> and the equality is false in general (it holds only when one component is
+> zero). The two parts live in orthogonal complements, so the EXACT identity
+> is the quadrature form the proof itself already derives in step 2:
+> `ρ_Q² = ρ_spectral² + ρ_directional²`. The code now reports all three
+> quantities (`wsr_ambient_sharpness`, `wsr_spectral_sharpness`,
+> `wsr_directional_sharpness`) and `tests/test_wsr.py` pins both the
+> inequality and the quadrature identity over 10 random `(Q, ∇)` pairs.
 
 where:
 - $\rho_{\mathrm{spectral}} = \rho \cdot \|(I - QQ^\top)\nabla_Q L\|_F$ (off-manifold component)
 - $\rho_{\mathrm{directional}} = \rho \cdot \|Q^\top \nabla_Q L\|_F$ (on-manifold component)
+- $\rho_Q = \rho \cdot \|\nabla_Q L\|_F / \|Q\|_F$ (ambient total; never reported before wave 20)
 
 **Proof:**
 
@@ -98,7 +110,12 @@ where:
 
 **Connection to existing mechanisms:**
 - **STA** bounds $\rho_{\mathrm{spectral}}$ (prevents eigenvalue jumps that cause off-manifold drift)
-- **WSR** bounds $\rho_{\mathrm{directional}}$ (prevents $Q$ from rotating within the Grassmannian)
+- **WSR's executed loss** (`src/models/wsr.py`) is
+  $\eta \cdot \mathrm{warmup} \cdot \rho_{\mathrm{spectral}} / \sqrt{k}$ — the
+  off-manifold component, the one that moves the subspace. The bullet below
+  previously said "WSR bounds $\rho_{\mathrm{directional}}$", which contradicted
+  the module's own loss; corrected wave 20. $\rho_{\mathrm{directional}}$ is
+  reported by the module but not penalized (basis gauge, not subspace motion).
 - **Together**, STA + WSR provide **complete workspace stability**
 
 ---

@@ -79,17 +79,34 @@
 #
 #  Theorem (Grassmann Sharpness Decomposition):
 #  ─────────────────────────────────────────────
-#  The workspace sharpness decomposes into spectral and directional:
+#  The ambient Euclidean gradient of L w.r.t. Q splits into two ORTHOGONAL
+#  parts - one inside span(Q), one outside it - so the sharpness components
+#  add in QUADRATURE, not linearly.  (An earlier revision of this comment
+#  claimed the linear sum ρ_Q = ρ_spectral + ρ_directional; that is false in
+#  general - it would require the two parts to be parallel - and only ever
+#  held numerically when one part was ~0.)
 #
-#    ρ_Q = ρ_spectral + ρ_directional
+#    ρ_Q² = ρ_spectral² + ρ_directional²
 #
-#  where:
-#    ρ_spectral = ρ · ||(I - QQ^T) ∇_Q L||_F  (off-manifold component)
-#    ρ_directional = ρ · ||Q^T ∇_Q L||_F       (on-manifold component)
+#  where (every reported sharpness is additionally divided by ||Q||_F = √k,
+#  a constant on St(D,k), which leaves all three identities intact):
 #
-#  STA bounds ρ_spectral (prevents eigenvalue jumps).
-#  WSR bounds ρ_directional (prevents Q from rotating too much).
-#  Together, they provide COMPLETE workspace stability.  □
+#    ρ_Q           = ρ · ||∇_Q L||_F           (ambient total)
+#    ρ_spectral    = ρ · ||(I - QQ^T) ∇_Q L||_F  (off-manifold: moves the subspace)
+#    ρ_directional = ρ · ||Q^T ∇_Q L||_F         (on-manifold: basis gauge inside the span)
+#
+#  ρ_Q is reported as `wsr_ambient_sharpness`, ρ_spectral as
+#  `wsr_spectral_sharpness`, ρ_directional as `wsr_directional_sharpness`.
+#  In gradient mode the headline `wsr_sharpness` EQUALS ρ_spectral by
+#  construction (grad_Gr == (I - QQ^T) ∇), which is why the decomposition
+#  needed a separately reported total to be checkable at all.
+#
+#  The WSR loss below is η·warmup·ρ_spectral/√k: flatness is imposed on the
+#  off-manifold component, the one that actually moves the subspace.
+#  ρ_directional is reported but NOT penalized - moving Q within span(Q) is
+#  a basis gauge on the quotient St(D,k)/O(k), a relabeling of columns, not
+#  a motion of the subspace.  (An earlier revision said "WSR bounds
+#  ρ_directional", which contradicted this module's own loss.)  □
 #
 #  ═══════════════════════════════════════════════════════════════════════════
 #  HOW OTHER PAPERS CAN USE WSR
@@ -288,6 +305,7 @@ class WorkspaceSharpnessRegularization(TrainingStateGuard):
             return Q.new_tensor(0.0), {
                 "wsr_loss": 0.0,
                 "wsr_sharpness": 0.0,
+                "wsr_ambient_sharpness": 0.0,
                 "wsr_spectral_sharpness": 0.0,
                 "wsr_directional_sharpness": 0.0,
                 "wsr_grad_norm": 0.0,
@@ -447,9 +465,25 @@ class WorkspaceSharpnessRegularization(TrainingStateGuard):
         sharpness = self.rho * grad_norm / max(Q_norm.item(), self.eps)
 
         # Grassmann Sharpness Decomposition
-        # Spectral component: off-manifold gradient
+        #
+        # The ambient Euclidean gradient splits into two ORTHOGONAL parts -
+        # inside span(Q) and outside it - so its components add in quadrature,
+        # not linearly (this comment previously claimed a linear sum; see the
+        # header theorem).
+        #
+        # Ambient total: rho_Q = rho * ||grad_euclidean|| / ||Q||.  This is the
+        # quantity the decomposition is over; it was never reported before
+        # wave 20, so the theorem's decomposition had no observable left side.
+        ambient_sharpness = self.rho * euclidean_grad.norm() / max(Q_norm.item(), self.eps)
+        # Spectral (off-manifold) component: rho * ||(I - QQ^T) grad|| / ||Q||.
+        # `grad_grassmann` IS (I - QQ^T) euclidean_grad - that is exactly the
+        # projection _grassmann_gradient performed above - so this component
+        # coincides with the headline sharpness by GEOMETRY, not by aliasing:
+        # the headline sharpness of this mode is the spectral component.
         spectral_sharpness = self.rho * grad_norm / max(Q_norm.item(), self.eps)
-        # Directional component: on-manifold gradient
+        # Directional (on-manifold) component: rho * ||Q^T grad|| / ||Q||.
+        # ||Q (Q^T grad)||_F == ||Q^T grad||_F because Q has orthonormal
+        # columns, so this matches the header's rho_directional exactly.
         on_manifold_grad = Q @ (Q.T @ euclidean_grad)
         directional_sharpness = self.rho * on_manifold_grad.norm() / max(Q_norm.item(), self.eps)
 
@@ -472,6 +506,7 @@ class WorkspaceSharpnessRegularization(TrainingStateGuard):
         info = {
             "wsr_loss": loss.item(),
             "wsr_sharpness": sharpness.item(),
+            "wsr_ambient_sharpness": ambient_sharpness.item(),
             "wsr_spectral_sharpness": spectral_sharpness.item(),
             "wsr_directional_sharpness": directional_sharpness.item(),
             "wsr_grad_norm": grad_norm.item(),
@@ -565,7 +600,21 @@ class WorkspaceSharpnessRegularization(TrainingStateGuard):
         loss_tensor = Q.new_tensor(self.eta * warmup_factor * sharpness)
 
         # Decomposition
+        #
+        # In THIS mode the headline sharpness is the empirical loss increase
+        # max(L(Q+Δ) - L(Q), 0), while the spectral component below is its
+        # first-order prediction rho*||grad_Gr||/||Q|| (the perturbation Δ was
+        # a unit step along grad_Gr scaled by rho).  The two are different
+        # measurements of the same object and are BOTH reported under their
+        # own names; in gradient mode they coincide by construction instead.
+        #
+        # Ambient total: rho_Q = rho*||grad_euclidean||/||Q|| - the quantity
+        # the header theorem decomposes; never reported before wave 20.
+        ambient_sharpness = self.rho * euclidean_grad.norm() / max(Q.norm().item(), self.eps)
+        # Spectral (off-manifold): rho*||(I - QQ^T) grad||/||Q||; grad_norm
+        # is exactly that norm, since grad_grassmann == (I - QQ^T) grad.
         spectral_sharpness = self.rho * grad_norm / max(Q.norm().item(), self.eps)
+        # Directional (on-manifold): rho*||Q^T grad||/||Q||.
         on_manifold_grad = Q @ (Q.T @ euclidean_grad)
         directional_sharpness = self.rho * on_manifold_grad.norm() / max(Q.norm().item(), self.eps)
 
@@ -582,6 +631,7 @@ class WorkspaceSharpnessRegularization(TrainingStateGuard):
         info = {
             "wsr_loss": loss_tensor.item(),
             "wsr_sharpness": sharpness,
+            "wsr_ambient_sharpness": ambient_sharpness.item(),
             "wsr_spectral_sharpness": spectral_sharpness.item(),
             "wsr_directional_sharpness": directional_sharpness.item(),
             "wsr_grad_norm": grad_norm.item(),

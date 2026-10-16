@@ -954,6 +954,39 @@ reported. `wsr_spectral_sharpness` is the headline value under a second name, an
 as a part of it. Any "spectral vs directional" comparison in a log is comparing
 the total against one of its parts.
 
+**FIXED (wave 20) — the decomposition is now reported, and the theorem was
+restated in quadrature.** Two distinct defects were hiding in D-WSR-2:
+
+1. *The missing quantity.* The theorem's total `ρ_Q = ρ·‖∇_Q L‖_F` was never
+   computed by any code path — so the decomposition had no observable left side.
+   The module now reports it as **`wsr_ambient_sharpness`** in both modes (and
+   in the warmup sentinel dict). Measured with a lagged gradient whose in-span
+   and off-span parts are both nonzero: `ambient = 0.394467`,
+   `spectral = 0.370940`, `directional = 0.134193`, and
+   `‖ambient² − (spectral² + directional²)‖/ambient² = 7.3e-10` in float64 —
+   the identity holds, and `ambient ≠ spectral` so the total is not a fourth
+   name for an existing part.
+2. *A false identity.* The header theorem claimed the LINEAR sum
+   `ρ_Q = ρ_spectral + ρ_directional`. That is false in general: the two
+   components live in orthogonal complements of R^D (`(I−QQᵀ)∇` vs `QQᵀ∇`),
+   so they add in **quadrature** — `ρ_Q² = ρ_spectral² + ρ_directional²`. The
+   linear claim only ever held numerically when one part was ~0. The header now
+   states quadrature, and `tests/test_wsr.py::TestWSRBasic` pins both the
+   triangle inequality and the Pythagoras identity over 10 random (Q, ∇) pairs.
+
+The headline `wsr_sharpness` still equals the spectral component in gradient
+mode — that is now a *stated* geometric consequence (`grad_Gr == (I−QQᵀ)∇`,
+see `_grassmann_gradient`), not an aliasing accident, and the WSR loss is
+unchanged: `η·warmup·ρ_spectral/√k`, the off-manifold component, which is the
+one that moves the subspace. The header comment previously paired WSR with
+ρ_directional; that pairing contradicted the module's own loss and has been
+corrected there as part of this fix.
+
+MUTATION VERDICT for the two strengthened/added tests in `TestWSRBasic`:
+reverting the wsr.py change makes both fail immediately with
+`KeyError('wsr_ambient_sharpness')` — the ambient total is the only key the fix
+adds, and it is the quantity every assertion now names.
+
 **D-WSR-3 — the `mode='sam'` retraction does not return within `ρ`.** This is
 the open defect marked by the `strict=False` xfail at
 `tests/test_training_state_guards.py:508-533`. I measured it over 12 seeds
@@ -1070,7 +1103,7 @@ pattern, which does not describe PUC's default path).
 | D-RDC-2 | RDC | P | The `(1−η)^t` compounding factor is asserted, not derived; the **Result line reverts to a bound the steps abandoned** | `rdc.md:97-101, 148` |
 | D-RDC-3 | RDC | H/S | `ε` is an EMA proxy, `T` is capped at an arbitrary 10 000, and `η_rdc` is assumed to attenuate drift by exactly `(1−η)` per step | `rdc.py:203, 206` |
 | **D-WSR-1** | WSR | **S** | `wsr_loss` carries **no gradient** in either mode (measured `requires_grad = False`). Theorem 2's "bound minimizer" minimises nothing | `wsr.py:300-434, 500-534` |
-| **D-WSR-2** | WSR | **S** | `wsr_spectral_sharpness` is character-identical to `wsr_sharpness`. Theorem 3's actual spectral term is never computed | `wsr.py:424` vs `:428` |
+| **D-WSR-2** | WSR | **S** | `wsr_spectral_sharpness` is character-identical to `wsr_sharpness`. Theorem 3's actual spectral term is never computed — **fixed wave 20** (ambient total added, theorem in quadrature) | `wsr.py:424` vs `:428` |
 | **D-WSR-3** | WSR | H | `mode='sam'` retraction displaces the subspace by `√2·ρ`, exceeding `ρ` on 12/12 seeds; QR is not a retraction. **Open, escalated, not fixed** | `wsr.py:242-247` |
 | D-WSR-4 | WSR | P | Theorem 1 step 3 uses optimality of `Q̂` for `L_test`; `Q̂` minimises `L_train` | `wsr.md:42-43` |
 | D-WSR-5 | WSR | S | `sharpness` divides by `√(Dk)`; `ρ_Q` has no such divisor. Not comparable across `k` or `D` | `wsr.py:424` |
