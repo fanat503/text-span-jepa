@@ -83,11 +83,15 @@ guards.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import logging
 import math
+import re
+import statistics
 import sys
 import tempfile
+import yaml
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -1186,6 +1190,300 @@ def plot_baseline_comparison(
 
 
 # ═══════════════════════════════════════════════════════════════════
+#  Figure 5 — seed-variance band
+# ═══════════════════════════════════════════════════════════════════
+
+
+def _measured_seed(state: RunState) -> int | None:
+    """The seed this run actually used, read from its own dumped params.
+
+    `src/train.py` resolves the seed as `meta.seed`, else the legacy top-level
+    `seed`, else 42 (train.py:1395-1399), and dumps the resolved config next to
+    the CSV (`params-text-span-jepa.yaml`, train.py:1476-1478). Reading the dump
+    rather than trusting a filename convention is what makes the grouping in
+    `plot_seed_band` a measurement instead of a convention.
+    """
+    if not state.run_dir:
+        return None
+    dump = Path(state.run_dir) / RA.CONFIG_DUMP
+    if not dump.is_file():
+        return None
+    try:
+        dumped = yaml.safe_load(dump.read_text(encoding="utf-8")) or {}
+    except (OSError, yaml.YAMLError):
+        return None
+    if not isinstance(dumped, dict):
+        return None
+    meta_seed = (
+        (dumped.get("meta") or {}).get("seed") if isinstance(dumped.get("meta"), dict) else None
+    )
+    if meta_seed is not None:
+        return int(meta_seed)
+    top_seed = dumped.get("seed")
+    return int(top_seed) if top_seed is not None else None
+
+
+def _band_group_key(cfg: Config) -> str:
+    """Content identity of an experiment, ignoring how it is named and seeded.
+
+    Two runs are the same experiment when their resolved configs are equal
+    after removing the three keys a seed sweep is allowed to vary: the
+    top-level `seed`, `meta.seed`, and `logging.folder` (two seeds of one arm
+    must not write one CSV -- tests/test_config_system.py contract 8). Grouping
+    by content rather than by a name suffix means a seed twin cannot collide
+    by accident, and a genuinely different arm cannot collide by construction.
+    """
+    stripped = copy.deepcopy(cfg.merged)
+    stripped.pop("seed", None)
+    meta = stripped.get("meta")
+    if isinstance(meta, dict):
+        meta.pop("seed", None)
+    logging_block = stripped.get("logging")
+    if isinstance(logging_block, dict):
+        logging_block.pop("folder", None)
+    return json.dumps(stripped, sort_keys=True, default=str)
+
+
+#: The suffix `config/<...>_s3.yaml`-style seed twins carry. Only used for the
+#: legend display name; grouping never reads names.
+_BAND_SEED_SUFFIX = re.compile(r"^(?P<base>.+?)[-_](?:s|seed)\d+$")
+
+
+def _band_display_label(labels: Sequence[str]) -> str:
+    """The group's legend name: the shortest member label, seed suffix stripped."""
+    shortest = min(labels, key=len)
+    match = _BAND_SEED_SUFFIX.match(shortest)
+    return match.group("base") if match else shortest
+
+
+def plot_seed_band(
+    cfgs: Sequence[Config],
+    states: Mapping[str, RunState],
+    *,
+    out_dir: Path,
+    stem: str = "seed_band",
+    theme: PlotTheme = PUBLICATION,
+    vector_only: bool = False,
+    columns: Sequence[tuple[str, str]] = tuple(RA.CURVE_SERIES),
+    only: Sequence[str] | None = None,
+    max_series: int = MAX_SERIES,
+) -> Figure:
+    """Mean ± 1σ across the measured seeds of one experiment, per logged column.
+
+    Variance across seeds is the one thing a single-run curve cannot show, and
+    the one claim reviewers rightly discount without it. This figure exists so
+    the day three seeds of one arm are on disk, the band is drawn under the
+    same discipline as every other figure here -- from files, with provenance
+    -- rather than assembled by hand in a spreadsheet.
+
+    A group is the set of runs whose resolved configs are equal once `seed`,
+    `meta.seed` and `logging.folder` are removed (`_band_group_key`). A band is
+    drawn for a group only where ≥2 runs carry ≥2 DISTINCT measured seeds (each
+    read from that run's own params dump, `_measured_seed`); a member with no
+    recorded seed is excluded and named, because a run whose seed nobody knows
+    cannot enter a seed band. Members share a log grid by construction
+    (`log_freq` is part of the group identity), the band spans their common
+    prefix, and a member shorter than two rows blocks the band rather than
+    being silently dropped. A ±σ band over one seed would assert a spread
+    nobody measured, so a single-seed group is a manifest note, never a line.
+    """
+    kind = "seed-band"
+    wanted = set(only) if only else None
+
+    groups: dict[str, list[tuple[Config, RunState]]] = {}
+    missing: list[tuple[str, str, str]] = []
+    for cfg in cfgs:
+        if wanted is not None and cfg.rel not in wanted:
+            continue
+        state = states[cfg.rel]
+        if not state.has_log:
+            missing.append((cfg.label, state.reason or "no completed run", NOT_RUN))
+            continue
+        groups.setdefault(_band_group_key(cfg), []).append((cfg, state))
+
+    bands: list[dict[str, Any]] = []
+    for _, members in sorted(groups.items()):
+        seeds = [_measured_seed(state) for _, state in members]
+        kept = [
+            (cfg, state, seed) for (cfg, state), seed in zip(members, seeds) if seed is not None
+        ]
+        excluded = [cfg.label for (cfg, _), seed in zip(members, seeds) if seed is None]
+        if len({seed for _, _, seed in kept}) < 2:
+            distinct = sorted({seed for _, _, seed in kept})
+            label = _band_display_label([c.label for c, _ in members])
+            missing.append(
+                (
+                    label,
+                    (
+                        f"{len(members)} run(s), distinct measured seeds: "
+                        f"{distinct if distinct else 'none recorded in any params dump'}. A ±σ band "
+                        "over this would assert a spread nobody measured; run the arm with "
+                        "more distinct seeds."
+                    ),
+                    NOT_RUN,
+                )
+            )
+            continue
+        for seedless in excluded:
+            missing.append(
+                (
+                    seedless,
+                    (
+                        "seed not recorded in this run's params dump; excluded from the "
+                        "band -- a run whose seed nobody knows cannot enter a seed band"
+                    ),
+                    NOT_RUN,
+                )
+            )
+        base = _band_display_label([c.label for c, _ in members])
+        for column, unit in columns:
+            curves = []
+            for cfg, state, _ in kept:
+                curve = Curve.from_run(cfg, state, column, unit)
+                if curve is None:
+                    gate = RA.metric_cell(cfg, state, column)
+                    missing.append(
+                        (f"{cfg.label}/{column}", gate.why or "not measured", gate.render())
+                    )
+                elif not curve.is_curveable:
+                    missing.append(
+                        (
+                            f"{cfg.label}/{column}",
+                            f"{curve.n_points} logged row(s): a single point is a dot, not a band",
+                            NOT_RUN,
+                        )
+                    )
+                else:
+                    curves.append(curve)
+            if len(curves) < 2:
+                continue
+            length = min(c.n_points for c in curves)
+            if length < 2:
+                missing.append(
+                    (
+                        f"{base}/{column}",
+                        (
+                            "the shortest member run logged 1 row; a band needs a common "
+                            "prefix of ≥2 points, and no member is dropped to make one"
+                        ),
+                        NOT_RUN,
+                    )
+                )
+                continue
+            xs = curves[0].xs[:length]
+            if any(c.xs[:length] != xs for c in curves[1:]):
+                missing.append(
+                    (
+                        f"{base}/{column}",
+                        (
+                            "members log on different grids; refusing to interpolate -- an "
+                            "interpolated point is a point nobody measured"
+                        ),
+                        NOT_RUN,
+                    )
+                )
+                continue
+            per_point = list(zip(*(c.ys[:length] for c in curves)))
+            mean = [sum(v) / len(v) for v in per_point]
+            std = [statistics.stdev(v) for v in per_point]
+            seeds_used = sorted({seed for _, _, seed in kept})
+            bands.append(
+                {
+                    "label": base,
+                    "column": column,
+                    "unit": unit,
+                    "xs": xs,
+                    "mean": mean,
+                    "std": std,
+                    "n": len(curves),
+                    "seeds": seeds_used,
+                    "complete": all(c.complete for c in curves),
+                    "provenance": (
+                        f"mean±1σ over seeds {seeds_used} from "
+                        f"{[c.provenance for c in curves]}; rows 1-{length}"
+                    ),
+                }
+            )
+
+    if not bands:
+        if not missing:
+            reason = f"{kind}: no config has a logged curve, so nothing could be banded."
+        else:
+            reason = (
+                f"{kind}: no group of runs carries ≥2 distinct measured seeds, so no "
+                f"variance is measurable and no band could be drawn. No file was "
+                f"written -- a band over one seed is a spread nobody measured. "
+                f"{_summarise_missing(missing)}"
+            )
+        return Figure.refused(kind, stem, reason=reason, missing=missing)
+
+    labels = sorted({b["label"] for b in bands})
+    if len(labels) > max_series:
+        return Figure.refused(
+            kind,
+            stem,
+            reason=(
+                f"{kind}: {len(labels)} experiment groups have bandable seed sets, and a "
+                f"legend of {len(labels)} entries is not a publication figure. No file was "
+                f"written. Pass `only=[...]` to name the groups to plot."
+            ),
+            missing=missing,
+            reason_kind=UNREADABLE,
+        )
+
+    apply_theme(theme)
+    plt = _pyplot()
+    used_columns = [c for c, _ in columns if any(b["column"] == c for b in bands)]
+    height = max(2.0, 2.1 * len(used_columns))
+    fig, axes = plt.subplots(
+        len(used_columns), 1, figsize=(theme.figsize[0], height), sharex=True, squeeze=False
+    )
+
+    for ax, column in zip(axes[:, 0], used_columns):
+        here = [b for b in bands if b["column"] == column]
+        for band in here:
+            color = swatches(len(labels))[labels.index(band["label"])].color
+            lower = [m - s for m, s in zip(band["mean"], band["std"])]
+            upper = [m + s for m, s in zip(band["mean"], band["std"])]
+            ax.fill_between(band["xs"], lower, upper, color=color, alpha=0.22, linewidth=0)
+            ax.plot(
+                band["xs"],
+                band["mean"],
+                color=color,
+                linestyle="-" if band["complete"] else (0, (2, 2)),
+                label=f"{band['label']} (n={band['n']} seeds, ±1σ)"
+                + ("" if band["complete"] else " (partial)"),
+            )
+        ax.set_ylabel(_column_label(column) or dict(columns).get(column, ""))
+        ax.legend(loc="best", ncol=min(3, len(here)))
+
+    axes[-1, 0].set_xlabel("optimizer iteration")
+    _footnote(
+        fig,
+        theme,
+        f"{len(bands)} band(s) across {len(labels)} experiment group(s). Each band is the "
+        f"sample σ (ddof=1) across the seeds named in its legend, over the common log "
+        f"prefix of the member runs; the line is their mean. Seeds are read from each "
+        f"run's own params dump. Not drawn: {len(missing)} group/series with fewer than "
+        f"two distinct recorded seeds or no logged value.",
+    )
+    fig.canvas.draw()
+    paths = save_figure(fig, out_dir, stem, theme, vector_only)
+    plt.close(fig)
+
+    drawn = [
+        (
+            float(band["xs"][-1]),
+            float(band["mean"][-1]),
+            f"{band['label']}/{band['column']} mean",
+            band["provenance"],
+        )
+        for band in bands
+    ]
+    return Figure.made(kind, stem, paths, drawn, missing=missing)
+
+
+# ═══════════════════════════════════════════════════════════════════
 #  Manifest
 # ═══════════════════════════════════════════════════════════════════
 
@@ -1287,6 +1585,7 @@ def render_all(
         plot_baseline_comparison(
             cfgs, states, out_dir=out_dir, theme=theme, vector_only=vector_only
         ),
+        plot_seed_band(cfgs, states, out_dir=out_dir, theme=theme, vector_only=vector_only),
     ]
 
 
@@ -1505,7 +1804,7 @@ def cmd_verify(args) -> int:
     print(
         f"verify: PASS -- {GUARD_SELFTEST_ATTEMPTS} attempts to smuggle a number past the "
         "measured-value door were rejected, a Figure with a path and no data was "
-        "refused, all four figures refused to draw from configs with no runs and left "
+        "refused, all five figures refused to draw from configs with no runs and left "
         "nothing on disk, and a genuine measurement still produced a figure. The "
         "refusal is load-bearing, not decorative."
     )
