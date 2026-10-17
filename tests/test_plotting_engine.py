@@ -75,6 +75,7 @@ if str(REPO / "scripts") not in sys.path:
 
 import matplotlib.axes
 import matplotlib.figure
+import yaml
 
 import plotting_engine as PE
 import results_apparatus as RA
@@ -269,7 +270,7 @@ class TestRefusesToInvent:
         with watching_matplotlib() as spy:
             figures = PE.render_all(cfgs, states, params, out_dir=out_dir)
 
-        assert len(figures) == 4, "every figure must answer, not just the ones that could be drawn"
+        assert len(figures) == 5, "every figure must answer, not just the ones that could be drawn"
         assert spy.figures == 0, f"a Figure was constructed with no measurement: {spy.summary()}"
         assert spy.saves == 0, f"something was saved with no measurement: {spy.summary()}"
         assert spy.calls == [], f"a data artist was created with no measurement: {spy.calls}"
@@ -462,7 +463,7 @@ class TestRefusesToInvent:
         does not exist -- the campaign's real state, not a fixture's.
 
         This is the test that would go red if someone deleted the guard from one
-        plot function while leaving the others intact, because it calls all four.
+        plot function while leaving the others intact, because it calls all five.
         """
         cfgs = RA.resolve_configs()
         assert len(cfgs) > 1, "the config tree resolved to nothing; the test proves nothing"
@@ -705,6 +706,184 @@ class TestPublicationQuality:
 
 
 # ═══════════════════════════════════════════════════════════════════
+#  The seed band
+# ═══════════════════════════════════════════════════════════════════
+
+
+class TestSeedBand:
+    """`plot_seed_band`: variance only where ≥2 distinct measured seeds exist.
+
+    The seed is read from each run's own params dump (what `src/train.py`
+    resolved and wrote at train.py:1476), so every test here writes a real dump
+    into a real temporary run directory -- a seed the engine cannot read from
+    anywhere on disk is a seed the engine must refuse to band.
+    """
+
+    @staticmethod
+    def _seed_cfg(rel: str, seed: int, folder: str) -> RA.Config:
+        """Same experiment content as BASE_CONFIG, varying only seed + run dir."""
+        merged = {
+            **BASE_CONFIG,
+            "logging": {**BASE_CONFIG["logging"], "folder": folder},
+            "meta": {**BASE_CONFIG["meta"], "seed": seed},
+        }
+        return RA.Config(rel, merged, {})
+
+    @staticmethod
+    def _seeded_state(cfg: RA.Config, seed: int, run_dir: Path, n_rows: int = 8) -> RA.RunState:
+        """Rows whose loss column carries a seed-specific offset, so mean and
+        σ are both nonzero and both checkable against hand arithmetic."""
+        state = RA.RunState(cfg.label, cfg.epochs, cfg.run_dir)
+        state.run_dir = str(run_dir)
+        offset = 0.1 * seed
+        state.rows = [
+            [2.5 - 0.25 * r - offset] + [0.0] * (len(RA.CSV_COLUMNS) - 1) for r in range(n_rows)
+        ]
+        state.status = RA.STATUS_COMPLETE
+        state.epochs_done = cfg.epochs
+        return state
+
+    @classmethod
+    def _seed_run_dir(cls, tmp_path: Path, name: str, seed: int | None) -> str:
+        """A real run directory holding a real params dump, as the trainer leaves one."""
+        run_dir = tmp_path / name
+        run_dir.mkdir(parents=True, exist_ok=True)
+        if seed is not None:
+            (run_dir / RA.CONFIG_DUMP).write_text(
+                yaml.safe_dump({"meta": {"model_name": "text_span_jepa", "seed": seed}}),
+                encoding="utf-8",
+            )
+        return str(run_dir)
+
+    def _two_seed_fixture(self, tmp_path: Path, embed_dim: int = 64) -> tuple:
+        cfg_a = self._seed_cfg("config/_fixture/arm_s1.yaml", 1, "output/_fixture/arm_s1")
+        cfg_b = self._seed_cfg("config/_fixture/arm_s2.yaml", 2, "output/_fixture/arm_s2")
+        if embed_dim != 64:
+            for cfg in (cfg_a, cfg_b):
+                cfg.merged["model"]["embed_dim"] = embed_dim
+        dirs = {
+            cfg.rel: self._seed_run_dir(tmp_path, Path(cfg.rel).stem, seed)
+            for cfg, seed in ((cfg_a, 1), (cfg_b, 2))
+        }
+        states = {
+            cfg.rel: self._seeded_state(cfg, seed, Path(dirs[cfg.rel]))
+            for cfg, seed in ((cfg_a, 1), (cfg_b, 2))
+        }
+        return cfg_a, cfg_b, states
+
+    def test_band_over_two_distinct_seeds_is_drawn_with_checkable_arithmetic(self, tmp_path):
+        """Two seeds of one arm -> mean line + band, and the plotted mean is the mean.
+
+        MUTATION VERDICT: break `_measured_seed` (return None) and this test
+        fails -- the figure is refused instead of drawn. Break `_band_group_key`
+        (stop stripping seed keys) and the two runs fall into two n=1 groups,
+        refused the same way. Break the band arithmetic (mean over the wrong
+        axis, or σ with ddof=0) and the final-x assertion `0.60` fails: the
+        seeded loss rows end at 0.65 (offset 0.1) and 0.55 (offset 0.2), so the
+        hand-computed mean is (0.65+0.55)/2 = 0.60 exactly.
+        """
+        cfg_a, cfg_b, states = self._two_seed_fixture(tmp_path)
+        cfgs = [cfg_a, cfg_b]
+        figure = PE.plot_seed_band(cfgs, states, out_dir=tmp_path / "f")
+        assert not figure.refused_flag, figure.reason
+        assert figure.wrote_anything
+        loss_entries = [d for d in figure.drawn if d[2] == "arm/loss mean"]
+        assert len(loss_entries) == 1, f"one loss band expected, got {loss_entries}"
+        x, y, _, provenance = loss_entries[0]
+        assert x == pytest.approx(7 * 10), "last common log x is (n_rows-1)*log_freq"
+        assert y == pytest.approx(0.60), f"mean of 0.65 and 0.55, got {y}"
+        assert "seeds [1, 2]" in provenance, provenance
+        # a real vector file, as PublicationQuality demands of every factory
+        assert any(
+            p.suffix == ".pdf" and p.is_file() and p.stat().st_size > 0 for p in figure.paths
+        )
+
+    def test_two_runs_of_one_seed_are_refused_and_write_nothing(self, tmp_path):
+        """Same arm, two runs, one seed value: no spread is measurable.
+
+        MUTATION VERDICT: if the distinctness check on measured seeds is
+        dropped (band over any ≥2 runs), this test fails -- a figure gets
+        written where a refusal is asserted.
+        """
+        cfg_a = self._seed_cfg("config/_fixture/arm_s1.yaml", 42, "output/_fixture/arm_s1")
+        cfg_b = self._seed_cfg("config/_fixture/arm_s2.yaml", 42, "output/_fixture/arm_s2")
+        states = {}
+        for cfg in (cfg_a, cfg_b):
+            run_dir = self._seed_run_dir(tmp_path, Path(cfg.rel).stem, 42)
+            states[cfg.rel] = self._seeded_state(cfg, 42, Path(run_dir))
+        figure = PE.plot_seed_band([cfg_a, cfg_b], states, out_dir=tmp_path / "f")
+        assert figure.refused_flag
+        assert not figure.wrote_anything
+        assert "distinct measured seeds" in figure.reason
+        assert figure.missing, "the single-seed group must be named, not silently absent"
+
+    def test_no_recorded_seed_is_refused_not_guessed(self, tmp_path):
+        """Run dirs exist but hold no params dump: the seed cannot be attributed.
+
+        MUTATION VERDICT: if `_measured_seed` starts guessing (e.g. falling back
+        to the config's declared seed instead of the dump), this test fails --
+        a figure would be drawn from runs whose dump was never read.
+        """
+        cfg_a = self._seed_cfg("config/_fixture/arm_s1.yaml", 1, "output/_fixture/arm_s1")
+        cfg_b = self._seed_cfg("config/_fixture/arm_s2.yaml", 2, "output/_fixture/arm_s2")
+        states = {}
+        for cfg in (cfg_a, cfg_b):
+            run_dir = self._seed_run_dir(tmp_path, Path(cfg.rel).stem, None)  # no dump
+            states[cfg.rel] = self._seeded_state(cfg, 1, Path(run_dir))
+        figure = PE.plot_seed_band([cfg_a, cfg_b], states, out_dir=tmp_path / "f")
+        assert figure.refused_flag
+        assert not figure.wrote_anything
+        assert "none recorded" in figure.reason
+
+    def test_arms_that_differ_in_content_are_never_grouped(self, tmp_path):
+        """Same display base, different embed_dim: two experiments, not two seeds.
+
+        MUTATION VERDICT: if `_band_group_key` starts ignoring real config
+        content (e.g. grouping by display label), the two arms merge into one
+        group and a band is drawn across different experiments -- this test
+        fails on the refusal.
+        """
+        cfg_a = self._seed_cfg("config/_fixture/arm_s1.yaml", 1, "output/_fixture/arm_s1")
+        cfg_b = self._seed_cfg("config/_fixture/arm_wide_s2.yaml", 2, "output/_fixture/arm_wide_s2")
+        # Rebind, never mutate: make_config's shallow copy shares the `model`
+        # dict between configs, so mutating embed_dim in place would change it
+        # for BOTH arms and the test would pass for the wrong reason.
+        cfg_b.merged["model"] = {**cfg_b.merged["model"], "embed_dim": 96}
+        states = {}
+        for cfg, seed in ((cfg_a, 1), (cfg_b, 2)):
+            run_dir = self._seed_run_dir(tmp_path, Path(cfg.rel).stem, seed)
+            states[cfg.rel] = self._seeded_state(cfg, seed, Path(run_dir))
+        figure = PE.plot_seed_band([cfg_a, cfg_b], states, out_dir=tmp_path / "f")
+        assert figure.refused_flag
+        assert not figure.wrote_anything
+        assert (
+            "arm" in figure.reason and "arm_wide" in figure.reason
+        ), f"both single-seed groups must be named: {figure.reason[:200]}"
+
+    def test_member_without_recorded_seed_is_excluded_and_named(self, tmp_path):
+        """2 recorded seeds + 1 unrecorded run -> band over 2, exclusion declared.
+
+        MUTATION VERDICT: silently including the unrecorded run in the band
+        (seeds it never had) fails the n=2 assertion; dropping it silently
+        fails on the missing entry that must name it.
+        """
+        cfg_a = self._seed_cfg("config/_fixture/arm_s1.yaml", 1, "output/_fixture/arm_s1")
+        cfg_b = self._seed_cfg("config/_fixture/arm_s2.yaml", 2, "output/_fixture/arm_s2")
+        cfg_c = self._seed_cfg("config/_fixture/arm_s3.yaml", 3, "output/_fixture/arm_s3")
+        states = {}
+        for cfg, seed in ((cfg_a, 1), (cfg_b, 2), (cfg_c, None)):
+            run_dir = self._seed_run_dir(tmp_path, Path(cfg.rel).stem, seed)
+            states[cfg.rel] = self._seeded_state(cfg, seed or 1, Path(run_dir))
+        figure = PE.plot_seed_band([cfg_a, cfg_b, cfg_c], states, out_dir=tmp_path / "f")
+        assert not figure.refused_flag, figure.reason
+        loss_entries = [d for d in figure.drawn if d[2] == "arm/loss mean"]
+        assert len(loss_entries) == 1
+        assert "seeds [1, 2]" in loss_entries[0][3], loss_entries[0][3]
+        excluded = [m for m in figure.missing if m[0] == "arm_s3"]
+        assert len(excluded) == 1 and "seed not recorded" in excluded[0][1], figure.missing
+
+
+# ═══════════════════════════════════════════════════════════════════
 #  The manifest
 # ═══════════════════════════════════════════════════════════════════
 
@@ -724,7 +903,7 @@ class TestManifest:
         path = PE.write_manifest(figures, out_dir)
 
         payload = json.loads(path.read_text(encoding="utf-8"))
-        assert len(payload["figures"]) == 4
+        assert len(payload["figures"]) == 5
         for entry in payload["figures"]:
             assert entry["status"] == "REFUSED"
             assert entry["files"] == []
