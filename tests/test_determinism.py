@@ -109,7 +109,7 @@ def _seed_in_a_fresh_process(nodeid: str, hash_seed: int) -> dict:
     """Install `seed_for_node(nodeid)` in a second interpreter and report the result.
 
     The child is given this process's own `BASE_SEED`, so the comparison against
-    the in-process value is well defined even when the campaign is bisecting a
+    the in-process value is well defined even when the suite is bisecting a
     flake with `PYTEST_BASE_SEED` set.
     """
     env = dict(os.environ)
@@ -222,7 +222,7 @@ class TestFixtureIsLive:
     def test_torch_is_pinned_to_a_single_thread(self):
         """The fixture's second job, and the reason it exists as a fixture at all.
 
-        `tools/rt.py` also sets `OMP_NUM_THREADS=1`, so under the campaign runner
+        `tools/rt.py` also sets `OMP_NUM_THREADS=1`, so under the project test runner
         this assertion is not sufficient on its own; under a bare `pytest` -- which
         is what GitHub Actions runs -- the thread count comes from this fixture
         alone, and dropping `torch.set_num_threads(1)` would silently re-enable
@@ -246,7 +246,7 @@ class TestPerTestStream:
         assert live == _reference_fingerprint(seed)
 
     def test_observer_beta_sees_a_different_stream_from_alpha(self, request):
-        """The heart of the card: per-test streams, not one shared stream.
+        """The heart of the fix: per-test streams, not one shared stream.
 
         A single constant seed would make the suite *reproducible* but not
         *order-independent* -- every test would start from the same position, test

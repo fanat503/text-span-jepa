@@ -4,7 +4,7 @@
 
 Why this file exists
 --------------------
-The card behind it (`TASK-24`) found two facts:
+An audit that prompted this file found two facts:
 
 * `src/train.py` calls `seed_everything(seed)` with no way to pass anything
   else, and `seed_everything` took `deterministic` only as a Python argument
@@ -475,7 +475,7 @@ def child_runs():
 
 
 class TestEndToEndThreadCount:
-    """The card's own experiment, on this repo's model, in a subprocess.
+    """The motivating experiment, on this repo's model, in a subprocess.
 
     A subprocess because the thread count is a process-wide pool: measuring it
     in-process would be measuring whatever the previous test left behind. It
@@ -496,7 +496,7 @@ class TestEndToEndThreadCount:
     * WITHOUT determinism, two offered thread counts may or may not differ.
       That is a property of the host's BLAS kernel selection, not of this repo,
       so it is measured and printed rather than asserted. The measurement for
-      this host is in `.agent-notes/task-24.md`.
+      this host is printed by the test below.
     """
 
     def test_determinism_makes_two_thread_counts_agree_bitwise(self, child_runs):
@@ -510,7 +510,7 @@ class TestEndToEndThreadCount:
         assert one["sha"] == two["sha"], (
             "two runs of identical code, identical seed and identical data "
             "differed across the whole state dict once the thread count was "
-            "allowed to differ. This is the defect this card is about."
+            "allowed to differ. This is the defect this test file is about."
         )
 
     def test_the_experiment_actually_varied_the_thread_count(self, child_runs):
@@ -523,7 +523,7 @@ class TestEndToEndThreadCount:
             "is not testing what it claims to test on this host"
         )
         print(
-            "\n  [task-24] non-deterministic pair: "
+            "\n  [thread-count] non-deterministic pair: "
             f"1 thread sha={child_runs[False][1]['sha'][:16]} "
             f"2 threads sha={child_runs[False][2]['sha'][:16]} "
             f"differ={child_runs[False][1]['sha'] != child_runs[False][2]['sha']}"
@@ -534,7 +534,7 @@ class TestEndToEndThreadCount:
 
         `pip install -e .` maps `src` to a checkout that is not this one via a
         setuptools meta_path finder, and that finder wins whenever the running
-        script's own directory has no `src`. On a card about reproducibility,
+        script's own directory has no `src`. In a file about reproducibility,
         measuring the wrong checkout is the worst available failure, so the
         check sits in the assertion path rather than in a comment.
         """

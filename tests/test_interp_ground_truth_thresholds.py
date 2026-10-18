@@ -1,11 +1,11 @@
 # Copyright 2026 Slyatski Ilya
 # Licensed under the Apache License, Version 2.0
-"""TASK-14: the pass/fail thresholds in `ground_truth.py` must be able to fail.
+"""The pass/fail thresholds in `ground_truth.py` must be able to fail.
 
 What this file is for
 --------------------
 `src/interp/ground_truth.py` is the module whose stated job is catching
-exactly the failure modes this campaign found, and every one of its four
+exactly the failure modes this audit found, and every one of its four
 pass/fail decisions was a bare literal that could not fail:
 
     validate_polysemanticity   frac_monosemantic > 0
@@ -38,7 +38,7 @@ from src.interp import ground_truth as gt
 from src.interp.ground_truth import GroundTruthValidation, SyntheticStructuredModel
 
 # Read through `getattr` rather than importing directly: against a module that
-# has no calibrated thresholds at all (the pre-TASK-14 version) the test file
+# has no calibrated thresholds at all (the pre-calibration version) the test file
 # must still import and then fail on behaviour, instead of dying during
 # collection with an ImportError that proves nothing.
 _EFF_DIM_NULL_LOWER = getattr(gt, "_EFF_DIM_NULL_LOWER", None)
@@ -183,7 +183,7 @@ class TestGeometryThresholdsRejectTheNull:
     def test_the_old_windows_admitted_structure_free_data(self):
         """Why the old literals had to go: they are not merely loose.
 
-        This is the regression that motivated the card. It is asserted, not
+        This is the regression that motivated this file. It is asserted, not
         assumed, so the numbers in the module's threshold block stay honest.
         """
         admitted = {
@@ -323,7 +323,7 @@ class TestPolysemanticityThreshold:
             assert mean_psi <= _PSI_NULL_MAX_MEAN_PSI, mean_psi
 
     def test_broken_psi_fails_validation(self, monkeypatch):
-        """The card's headline defect: a completely broken PSI passed.
+        """The headline defect: a completely broken PSI passed.
 
         A PSI that raises on every dimension is indistinguishable, by its
         own output, from a perfect one. The validator has to notice anyway.

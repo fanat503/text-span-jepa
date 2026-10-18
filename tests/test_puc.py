@@ -218,7 +218,7 @@ class TestPUCDiagnostics:
 
 
 class TestPUCIsNotAConstant:
-    """TASK-39. The defect this class exists to make unrepeatable.
+    """The defect this class exists to make unrepeatable.
 
     With the entropy source set to the Oja EMA buffer, the loss is built from a
     `register_buffer` running estimate. Buffers have `requires_grad=False`, so
@@ -229,7 +229,7 @@ class TestPUCIsNotAConstant:
     loss.
 
     These tests assert the PROPERTY — a gradient edge exists — not a magnitude,
-    so they survive a refactor of the barrier. The card's own numbers were
+    so they survive a refactor of the barrier. The original numbers were
     False -> 0.1401 / requires_grad False, True -> 0.1037 / z.grad 1.4e-05.
     """
 
@@ -267,7 +267,7 @@ class TestPUCIsNotAConstant:
         return torch.cat(grads), float(loss_dict["loss_puc"])
 
     def test_default_config_puc_loss_carries_an_edge_to_the_encoder(self):
-        """THE card. Under the DEFAULT config, PUC must reach the encoder.
+        """The headline case. Under the DEFAULT config, PUC must reach the encoder.
 
         Compares the encoder gradient with PUC enabled at a non-zero weight
         against the same model with PUC off. If PUC's loss is a constant the two
@@ -300,7 +300,7 @@ class TestPUCIsNotAConstant:
         """The legacy path must keep working AND announce itself.
 
         tests/test_sterility.py pins that the buffer path stays grad-free, so it
-        cannot be deleted under this card. What can change is that selecting it
+        cannot be deleted by this change. What can change is that selecting it
         is no longer silent.
         """
         with pytest.warns(UserWarning, match="no autograd edge"):

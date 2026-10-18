@@ -121,7 +121,7 @@ def _make(name):
         # whether the guard blocks a mutation, so the input has to carry
         # something to mutate.
         #
-        # TASK-39: this fixture previously used randn and still passed, but only
+        # Note: this fixture previously used randn and still passed, but only
         # because the flag's default was the EMA-buffer path, whose entropy
         # estimate is `softplus(running_eigenvalues - 5.0)` on an initial buffer
         # of 1.0 -> softplus(-4) = 0.018 -> entropy -18.7 -> overconfidence

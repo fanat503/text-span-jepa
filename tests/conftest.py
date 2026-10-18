@@ -4,7 +4,7 @@
 
 Why this file exists
 --------------------
-`AGENTS.md` says "Tests must be deterministic", and 12 of the 21 test files
+The rule is "Tests must be deterministic", and 12 of the 21 test files
 contained no seeding call of any kind before this file existed. `src/interp/`
 draws from the global RNG at 28 sites and never imports `src/utils/seed.py`.
 Nothing enforced the rule; a suite like that is one test away from becoming

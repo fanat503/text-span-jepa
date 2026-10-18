@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0
 """Cross-micro-batch retention of `jepa._gac_z` and `jepa._cmc_pass["slots"]`.
 
-TASK-21. The card that motivated these tests claimed both attributes pin a
+The change that motivated these tests claimed both attributes pin a
 previous micro-batch's autograd graphs and asked for the graphs to be dropped
 so peak activation memory halves. Two things were established by measurement
 and are pinned here:
@@ -320,9 +320,9 @@ class TestEarlyRelease:
 
 
 class TestAttribution:
-    """Pins the measured attribution so the card is not re-run blind.
+    """Pins the measured attribution so the question is not re-litigated blind.
 
-    These assert the *ownership* of the retention, which is the thing the card
+    These assert the *ownership* of the retention, which is the thing the claim
     got wrong. They are cheap and deterministic.
     """
 
@@ -330,7 +330,7 @@ class TestAttribution:
         """With no other reference, dropping the stashes frees the graph.
 
         This is the property the early release relies on. It is also why the
-        card's remedy could not work in `train.py`: there, the locals pin the
+        claimed remedy could not work in `train.py`: there, the locals pin the
         graph first, so the attributes are never the last reference.
         """
         model = TextSpanJEPA(_tiny_config())

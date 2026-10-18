@@ -52,7 +52,7 @@ def _pair(seed=0, b=B, t=T, d=D):
 
 class TestDecompositionBudget:
     """A per-step diagnostic that decomposes the activation matrix 19 times is
-    the defect this card is about. Counting the calls is the regression guard;
+    the defect this test pins. Counting the calls is the regression guard;
     asserting on a time would be flaky on a shared box."""
 
     @staticmethod
@@ -297,7 +297,7 @@ class TestNumericalRankMatchesTorch:
 
 
 class TestDiagnosticsDoNotTouchTheGlobalRNG:
-    """The reason this card's obvious fix is not automatically safe.
+    """The reason the obvious fix is not automatically safe.
 
     A diagnostic is a read-only observer. If it draws from the training device's
     global generator, then the number of draws it makes becomes part of the

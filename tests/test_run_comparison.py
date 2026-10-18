@@ -6,7 +6,7 @@ Why this file exists
 --------------------
 `src/interp/run_comparison.py` is the one-command JEPA-vs-baseline interpretability
 pipeline. Its `load_model` is the only place in `src/interp/` that reads a
-training checkpoint, and for the whole of wave 1 **no test touched it**:
+training checkpoint, and until this file existed **no test touched it**:
 `git grep run_comparison tests/` returned nothing, so restoring the pre-fix
 `load_model` left the suite green.
 
@@ -19,7 +19,7 @@ The pre-fix reader was four per-submodule `.get()` reads:
 
 `src.train.save_checkpoint` writes `state["model"] = model.state_dict()` and
 nothing per-submodule, so all four reads resolved to `{}` and the loader was
-reading a format that had not been written since before the fidelity campaign.
+reading a format that had not been written since before the fidelity rework.
 Two things were structurally invisible to it:
 
 * every mechanism tensor. On the fixture below (all 16 mechanisms on, toy

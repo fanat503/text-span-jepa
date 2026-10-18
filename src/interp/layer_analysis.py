@@ -272,8 +272,7 @@ class LayerwiseProbe:
         # Layer uniformity: 1 - std(accuracies) / mean(accuracies)
         # KNOWN DEFECT, reported not fixed: this is MAXIMISED by making every
         # layer identical, which the module cannot distinguish from a real
-        # result. Changing the direction is a separate decision -- see
-        # .agent-notes/task-12.md and the card.
+        # result. Changing the direction is deliberately out of scope here.
         if accuracies and sum(accuracies) > 0:
             mean_acc = sum(accuracies) / len(accuracies)
             std_acc = (sum((a - mean_acc) ** 2 for a in accuracies) / len(accuracies)) ** 0.5

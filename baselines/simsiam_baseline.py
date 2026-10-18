@@ -242,8 +242,9 @@ class SimSiamBaseline(nn.Module):
         the view construction is this repo's, and a run of this arm is therefore
         NOT a reproduction of SimSiam as published. Wiring a real
         two-augmentation pipeline is a science change that re-measures this
-        repository's collapse thresholds -- see `.agent-notes/fairness.md`.
-        Stated here, at the signature, so an arm that is not the published
+        repository's collapse thresholds -- see decision D-014 in
+        `docs/decisions.md`. Stated here, at the signature, so an arm that is not
+        the published
         method cannot read as one.
         """
         p_a, p_b, z_a, z_b = self.forward(view_a, view_b)

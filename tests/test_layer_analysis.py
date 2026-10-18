@@ -13,7 +13,7 @@ different train/validation partitions of the same data, and
 
 What is pinned here
 -------------------
-1.  ONE split per call, shared by every layer (the card's defect).
+1.  ONE split per call, shared by every layer (the defect being pinned).
 2.  The split is a function of an explicit ``seed``, drawn from a PRIVATE
     ``torch.Generator``. The process-global RNG is never consumed, so this
     module is not a hidden order-dependence vector for the rest of the suite.
@@ -23,8 +23,8 @@ What is pinned here
     Both are differences of two probe accuracies, so drawing the two halves
     from different partitions measures the split, not the ablation.
 4.  The second unseeded per-layer draw -- the ``nn.Linear`` weight
-    initialisation -- is closed too, because measurement (see
-    ``.agent-notes/task-12.md``) shows it is the LARGER of the two noise
+    initialisation -- is closed too, because measurement (asserted by this
+    file) shows it is the LARGER of the two noise
     channels: freezing the split alone widened the seed-to-seed band on
     byte-identical layers from 0.104 to 0.158. The replacement reproduces
     ``nn.Linear.reset_parameters``'s law from a private generator, and that
@@ -33,7 +33,7 @@ What is pinned here
 Deliberately NOT pinned
 -----------------------
 ``layer_uniformity = 1 - std/mean`` is maximised by making all layers
-identical. The card reports this and explicitly makes the direction a
+identical. The documentation reports this and explicitly makes the direction a
 separate decision, so this file pins only the *formula*, and says so.
 """
 
@@ -103,7 +103,7 @@ def _distinct_splits(splits):
 
 
 # ═══════════════════════════════════════════════════════════════════
-# The card's defect: one split per call, shared across layers
+# The pinned defect: one split per call, shared across layers
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -267,7 +267,7 @@ class TestSeededAndPrivate:
 
 
 # ═══════════════════════════════════════════════════════════════════
-# The noise band the card names: identical layers, different answers
+# The noise band in question: identical layers, different answers
 # ═══════════════════════════════════════════════════════════════════
 
 
@@ -286,7 +286,7 @@ class TestProfileIsNotAmbientNoise:
         ), "the seed is being ignored, so the split is a constant"
 
     def test_reruns_of_the_same_seed_collapse_to_zero_width(self):
-        """The card's symptom: `layer_uniformity` moved by ~0.10 across 5
+        """The reported symptom: `layer_uniformity` moved by ~0.10 across 5
         seeds on byte-identical layers. Run-to-run at a fixed seed, the
         width must be exactly zero."""
         layers, labels = make_layers()
@@ -361,7 +361,7 @@ class TestSeededProbeInit:
         assert len(set(acc)) > 1, (
             "identical layers now score identically: the probe initialisation "
             "has been paired across layers, which is an estimand change and "
-            "needs a decision (see .agent-notes/task-12.md)"
+            "needs a decision -- the direction is out of scope for this file"
         )
 
 
@@ -414,7 +414,7 @@ class TestSplitHygiene:
 class TestUniformityFormula:
     """``layer_uniformity = 1 - std/mean``.
 
-    The card reports that this is MAXIMISED by making all layers identical and
+    This is reported as being MAXIMISED by making all layers identical and
     explicitly makes the direction a separate decision, so the formula is
     pinned and the direction is not endorsed. If you change this metric,
     change this test deliberately.
@@ -436,7 +436,7 @@ class TestUniformityFormula:
 
     def test_uniformity_falls_as_the_profile_spreads(self):
         """A restatement of the direction problem as an executable fact: the
-        metric rewards sameness. Reported, not fixed -- see the card."""
+        metric rewards sameness. Reported, not fixed."""
         assert self._uniformity([0.8, 0.8, 0.8, 0.8, 0.8, 0.8]) > self._uniformity(
             [0.8, 0.2, 0.8, 0.2, 0.8, 0.2]
         )

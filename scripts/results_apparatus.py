@@ -4,7 +4,7 @@
 
 Why this exists
 ---------------
-The campaign so far has been about correctness. The suite is green and 25 cards
+So far, this repository's work has been about correctness. The suite is green and 25 reviewed fixes
 closed real defects, and there is not one row of results, because training is
 forbidden on the machine the agents use and the GPU belongs to the owner. This
 module builds everything about a results section that can be built WITHOUT
@@ -621,7 +621,7 @@ def discover(cfg: Config, run_roots: Sequence[Path]) -> RunState:
 
 
 #: Config keys whose value changes what a run measures. Compared against the
-#: run's own `params-*.yaml` dump, because 25 cards have edited configs since the
+#: run's own `params-*.yaml` dump, because 25 changes have edited configs since the
 #: first runs were contemplated and a stale artifact silently re-labelled with
 #: the current config would be a result for a model nobody trained.
 DRIFT_KEYS = (
@@ -1249,8 +1249,8 @@ def emit_curves(cfgs: Sequence[Config], states: dict[str, RunState], out_dir: Pa
             print(f"  {NOT_RUN}  {rel}", file=sys.stderr)
         print(
             "\nA curve figure needs a run. Nothing was drawn, on purpose: empty axes "
-            "with a flat line read as a measurement, which is what this campaign "
-            "exists to prevent.",
+            "with a flat line read as a measurement, which is what these guards "
+            "exist to prevent.",
             file=sys.stderr,
         )
     return written

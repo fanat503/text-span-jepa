@@ -272,7 +272,7 @@ class CrossMaskConsistency(nn.Module):
             threshold is a test on the SECOND MASK'S RATIO, not on p². At the
             shipped `model.mask_ratio_start/end` = 0.15 → 0.35 ramp it opens at
             p ≈ 0.20 and is clear thereafter (measured |Ω|/|M1| ≈ 0.18 → 0.37
-            across the ramp; see `.agent-notes/cmc-measurements.md`).
+            across the ramp).
 
             What it therefore guards is the opposite end: a `second_mask_ratio`
             set far below the primary's, where the overlap collapses to a few

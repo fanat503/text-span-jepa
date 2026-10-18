@@ -95,8 +95,8 @@ class TestBenjaminiHochbergAgreement:
                             q <= alpha
                         ), f"n={n} alpha={alpha} p={p}: index {i} corrected={q} alpha={alpha} sig={sorted(significant)}"
 
-    def test_agreement_holds_at_exactly_the_card_repro(self):
-        """p = [0.03, 0.049] is the card's repro. Guard it verbatim."""
+    def test_agreement_holds_at_exactly_the_recorded_repro(self):
+        """p = [0.03, 0.049] is the recorded repro. Guard it verbatim."""
         r = _bh([0.03, 0.049], 0.05)
         # q_(1) = min(0.03*2/1, 0.049*2/2) = min(0.06, 0.049) = 0.049
         assert r["corrected"][0] == pytest.approx(0.049)
@@ -303,8 +303,8 @@ class TestBenjaminiHochbergOnRealPValues:
         summary = report["_summary"]
         assert summary["n_significant_bh"] == sum(1 for n in names if report[n]["significant_bh"])
 
-    def test_the_card_p_values_survive_the_report_unchanged(self, monkeypatch):
-        """The card's exact p-vector, driven through the public report.
+    def test_the_recorded_p_values_survive_the_report_unchanged(self, monkeypatch):
+        """The recorded p-vector, driven through the public report.
 
         Random data cannot reach this regime: `PairedPermutationTest` floors its
         p-value at 1/(n_permutations+1), and every metric with a real effect
@@ -312,7 +312,7 @@ class TestBenjaminiHochbergOnRealPValues:
         the window where `p_(1)*n/1 > alpha >= p_(2)*n/2` (measured over 9
         seeds x 6 metrics, all identical). Only the permutation test is stubbed
         here; the correction and the whole `MetricComparisonReport` body run
-        unstubbed, so this is the card's scenario end to end.
+        unstubbed, so this is the recorded scenario end to end.
         """
         pytest.importorskip("numpy")
         torch = pytest.importorskip("torch")
@@ -320,9 +320,9 @@ class TestBenjaminiHochbergOnRealPValues:
         import src.interp.statistical_tests as st
 
         names = ["a", "b"]
-        card_p = [0.03, 0.049]  # the card's repro, in report order
+        repro_p = [0.03, 0.049]  # the recorded repro, in report order
         real_compute = st.PairedPermutationTest.compute
-        cursor = iter(card_p)
+        cursor = iter(repro_p)
 
         def stub(values_a, values_b, n_permutations=10000, seed=42):
             out = real_compute(values_a, values_b, n_permutations=n_permutations, seed=seed)
@@ -337,13 +337,13 @@ class TestBenjaminiHochbergOnRealPValues:
             names, jepa, base, n_bootstrap=40, n_permutations=199, alpha=0.05
         )
 
-        for name, expected_p in zip(names, card_p):
+        for name, expected_p in zip(names, repro_p):
             row = report[name]
             assert row["p_value"] == pytest.approx(expected_p)
-            # the card's headline: p_value_bh must not read 0.06 beside True
+            # the headline: p_value_bh must not read 0.06 beside True
             assert row["p_value_bh"] == pytest.approx(0.049)
             assert row["significant_bh"] is True
             assert row["significant_bh"] == (row["p_value_bh"] <= 0.05)
         assert report["_summary"]["n_significant_bh"] == 2
         # the naive formula would have published 0.06 for metric "a"
-        assert _naive_p_times_n_over_rank(card_p)[0] > 0.05
+        assert _naive_p_times_n_over_rank(repro_p)[0] > 0.05

@@ -20,7 +20,7 @@
 # - No EMA target (same encoder for both paths)
 # - No decoder (pure latent prediction, no reconstruction)
 #
-# Honesty contract (added 2026-09-28, TASK-17): a run may only be reported
+# Honesty contract (added 2026-09-28): a run may only be reported
 # under the name of an ablation it actually performed.
 #   * a term the model did not report (renamed key), a term with no weight in
 #     the model config, or a flag with no mechanism behind it is a HARD
@@ -520,7 +520,7 @@ class AblationStudy:
         for name in ablations:
             if name == "full":
                 # Full model — just extract representations, no training needed.
-                # REPORTED, NOT FIXED (TASK-17): final_loss is 0 and
+                # REPORTED, NOT FIXED: final_loss is 0 and
                 # loss_history is empty, so "full" plots as a lossless model.
                 results[name] = {
                     "ablation": "full",

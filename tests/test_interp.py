@@ -1199,7 +1199,7 @@ class TestHeldOutProbeMetrics:
     full-batch Adam the total weight displacement a probe can undergo is
     `lr * max_epochs` = 0.03 at the shipped budgets, so the probes cannot fit
     anything and every assertion below would be vacuous. That is itself a
-    finding, reported in .agent-notes/task-11.md; the defaults are not changed
+    finding, reported in this docstring; the defaults are not changed
     here because the optimiser budget is a science decision.
     """
 
@@ -1680,7 +1680,7 @@ class TestHeldOutProbeMetrics:
     # ── the fourth sibling, already fixed elsewhere: do not regress ──────
 
     def test_workspace_validation_still_reports_a_heldout_probe_accuracy(self):
-        """`workspace_validation` was TASK-18's card and is already fixed.
+        """`workspace_validation` was fixed in an earlier pass and is not re-opened.
 
         Pinned here so a future rename of that key cannot quietly turn it back
         into an in-sample number without this file going red.

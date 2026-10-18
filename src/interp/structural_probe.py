@@ -320,7 +320,7 @@ class StructuralProbe(nn.Module):
         it is not reproducible across orderings. A tie-corrected
         ``average`` rank is the fix; it is a separate decision because it
         moves every structural-probe number in the repo, and none of them is
-        on this card.
+        in this change's scope.
 
         The bare ``except Exception: return 0.0`` is the same family of
         defect: a failed correlation is reported as "no structure" instead

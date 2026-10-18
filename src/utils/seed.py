@@ -17,7 +17,8 @@ different core count disagreeing from optimizer step 3 onward:
     parallel reduction over ``N`` elements sums in a different order at
     ``N=1`` than at ``N=8``. This is not noise that averages out over a run;
     it perturbs the weights, and a training loop feeds every perturbation
-    forward. Measured here (see ``.agent-notes/task-24.md``): 1 vs 2 threads,
+    forward. Measured here (the pair is re-run and printed by ``tests/test_seed.py``):
+1 vs 2 threads,
     same seed, same data, 10 steps -- steps 0-2 bitwise equal, step 3 onwards
     differing by 1.19e-07 to 2.38e-07, final ``qkv`` weight not bitwise equal.
 3.  **Deterministic algorithm selection** -- ``cudnn.benchmark`` picks the
@@ -46,7 +47,7 @@ Reachability
   anything else;
 * a config key -- **not reachable yet**, and deliberately not faked. See
   ``defaults.yaml`` under ``meta.seed`` for the exact one-line change that
-  would close it, and ``.agent-notes/task-24.md`` for the report. Declaring an
+  would close it. Declaring an
   unread key in ``defaults.yaml`` would silence the trainer's own typo
   warning and turn a loud "this did nothing" into a silent no-op, which is the
   defect class this repo treats as worse than a missing key.

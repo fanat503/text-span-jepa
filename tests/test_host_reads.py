@@ -19,7 +19,7 @@ recording the call sites. That counts the operations which WOULD synchronise
 on CUDA. It is exact for that purpose and needs no GPU.
 
 What this file does NOT establish: any wall-clock speedup. There is no CUDA
-on this host, so "faster" is not measurable here — see .agent-notes/task-21.md.
+on this host, so "faster" is not measurable here.
 """
 
 from __future__ import annotations
@@ -155,7 +155,7 @@ class TestSPCReadBatching:
         """Every remaining read must be a batched one, not a per-value `.item()`.
 
         A `.tolist()` reads a whole vector in one transfer; a bare `.item()`
-        reads one scalar and blocks. A per-value `.item()` is what this card
+        reads one scalar and blocks. A per-value `.item()` is what this file
         removed, so its return is a failure even though the total is small.
         """
         torch.manual_seed(0)
