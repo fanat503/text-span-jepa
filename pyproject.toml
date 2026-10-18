@@ -34,20 +34,14 @@ addopts = "-v --tb=short"
 line-length = 100
 target-version = "py39"
 lint.ignore = ["BLE001", "RUF059", "PLR0402", "S110", "S112", "RUF012", "RUF034", "B008", "I001", "F841", "RUF022"]
-# `.agent-notes/` holds campaign scratch: the throwaway probe scripts a worker
-# writes to take a measurement, plus the markdown reports. It is evidence, not
-# source. Linting it produced 175 errors on wave 3 - all of them in
-# `_probe_*.py` files that exist only to be run once - and reddened the gate for
-# a change set whose actual source was clean. The reports are the durable
-# artefact; the probes are not.
+# Local scratch is excluded from linting: one-shot measurement scripts and
+# working notes, not source. Linting them reddened the gate for a change set
+# whose actual source was clean.
 extend-exclude = [".agent-notes"]
 
 [tool.black]
 line-length = 100
 target-version = ["py39"]
-# `.agent-notes/` holds campaign scratch - the one-shot probe scripts a worker
-# writes to take a measurement and then reports in prose. It is evidence, not
-# source, and it is already excluded from ruff. Excluding it from black too, so
-# a worker's scratch file cannot fail CI's format check while the source is
-# clean. Black takes a single regex STRING here, not a list.
+# Same exclusion for black: a scratch file cannot fail CI's format check while
+# the source is clean. Black takes a single regex STRING here, not a list.
 extend-exclude = "agent-notes/"
