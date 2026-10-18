@@ -1,7 +1,7 @@
 # Theory and Proofs: What the Code Actually Satisfies
 
 **This document is an audit, not an endorsement.** It exists because the repo's
-own rule — stated in `AGENTS.md` and repeated in every proof document's banner —
+own rule — repeated in every proof document's banner —
 is that **`proofs/` holds design documents with audited gaps, not certified
 descriptions of the running code**. "Never 'fix code to match the proof' without
 an explicit human decision. The proof may be aspirational; the code may be the
@@ -710,7 +710,7 @@ consistent with A5 above.
 
 Whether `τ_grad = 1e-4` (`gac.py:127`) is calibrated against the gradient scale
 actually seen in training, which depends on `lambda_*` for the other eleven
-mechanisms. I did not run a training smoke test (the card forbids it), and a
+mechanisms. I did not run a training smoke test (out of scope for that review), and a
 single sample would not have settled it anyway.
 
 ---
@@ -729,7 +729,7 @@ log-det barrier `−½logdet(Σ+εI) + D/2·log(2πe σ_target²)` (Step 5). **T
 
 | # | Assumption | Verdict |
 |---|---|---|
-| A1 | The executed loss carries an autograd edge to `z_pred` | **HOLDS** (TASK-39's fix verified — see below) |
+| A1 | The executed loss carries an autograd edge to `z_pred` | **HOLDS** (the 2026-10-08 fix, verified — see below) |
 | A2 | The executed loss is the stated entropy-deficit formula | **FAILS** — see D-PUC-1 |
 | A3 | The risk constraint `E‖z−z_target‖² ≤ R` is formed | **FAILS — never formed.** `z_target` is accepted at `puc.py:223` and never read in the body |
 | A4 | `min_log_det` floors the log-det | **FAILS — accepted at `puc.py:99,108` and never referenced in `forward`.** Verified by source inspection |
@@ -787,7 +787,7 @@ inequality says. The minimax-optimality claim is therefore not established by
 this argument. This is a proof-internal gap, not a code divergence, and it would
 survive any amount of code auditing.
 
-**D-PUC-4 — the "no gradient" headline is half-retired, correctly.** TASK-39
+**D-PUC-4 — the "no gradient" headline is half-retired, correctly.** The 2026-10-08 fix
 flipped `use_differentiable_entropy` to `True` (`puc.py:100`). I verified the
 fixed path genuinely has the edge: `puc.py:263` is `torch.linalg.eigvalsh(cov_b)`
 on this batch's covariance, `cov_b` is built from a **non-detached** `z_flat`
@@ -954,7 +954,7 @@ reported. `wsr_spectral_sharpness` is the headline value under a second name, an
 as a part of it. Any "spectral vs directional" comparison in a log is comparing
 the total against one of its parts.
 
-**FIXED (wave 20) — the decomposition is now reported, and the theorem was
+**FIXED (PR #23) — the decomposition is now reported, and the theorem was
 restated in quadrature.** Two distinct defects were hiding in D-WSR-2:
 
 1. *The missing quantity.* The theorem's total `ρ_Q = ρ·‖∇_Q L‖_F` was never
@@ -1103,7 +1103,7 @@ pattern, which does not describe PUC's default path).
 | D-RDC-2 | RDC | P | The `(1−η)^t` compounding factor is asserted, not derived; the **Result line reverts to a bound the steps abandoned** | `rdc.md:97-101, 148` |
 | D-RDC-3 | RDC | H/S | `ε` is an EMA proxy, `T` is capped at an arbitrary 10 000, and `η_rdc` is assumed to attenuate drift by exactly `(1−η)` per step | `rdc.py:203, 206` |
 | **D-WSR-1** | WSR | **S** | `wsr_loss` carries **no gradient** in either mode (measured `requires_grad = False`). Theorem 2's "bound minimizer" minimises nothing | `wsr.py:300-434, 500-534` |
-| **D-WSR-2** | WSR | **S** | `wsr_spectral_sharpness` is character-identical to `wsr_sharpness`. Theorem 3's actual spectral term is never computed — **fixed wave 20** (ambient total added, theorem in quadrature) | `wsr.py:424` vs `:428` |
+| **D-WSR-2** | WSR | **S** | `wsr_spectral_sharpness` is character-identical to `wsr_sharpness`. Theorem 3's actual spectral term is never computed — **fixed in PR #23** (ambient total added, theorem in quadrature) | `wsr.py:424` vs `:428` |
 | **D-WSR-3** | WSR | H | `mode='sam'` retraction displaces the subspace by `√2·ρ`, exceeding `ρ` on 12/12 seeds; QR is not a retraction. **Open, escalated, not fixed** | `wsr.py:242-247` |
 | D-WSR-4 | WSR | P | Theorem 1 step 3 uses optimality of `Q̂` for `L_test`; `Q̂` minimises `L_train` | `wsr.md:42-43` |
 | D-WSR-5 | WSR | S | `sharpness` divides by `√(Dk)`; `ρ_Q` has no such divisor. Not comparable across `k` or `D` | `wsr.py:424` |
@@ -1156,7 +1156,7 @@ lists only successes:
   claim was retracted *in place*, correctly.
 - **WSR's Grassmann tangent projection** — the right manifold.
 - **The R11 sync fix** — STA's `W_1` is no longer identically zero.
-- **PUC's gradient** — the TASK-39 fix genuinely works; the autograd edge is
+- **PUC's gradient** — the 2026-10-08 fix genuinely works; the autograd edge is
   there (D-PUC-4).
 - **`proofs/pcr.md` and `proofs/spc.md`** are the reference pattern: they retract
   their unsupported claims in place, with reasons, rather than leaving them to be
@@ -1166,11 +1166,11 @@ lists only successes:
 
 ## Appendix: how to reproduce, and what was not done
 
-**Commit audited:** branch `agent/theory`, based on `main` at `6832d35`.
+**Commit audited:** `main` at `6832d35`.
 
-Every claim marked *measured* above was produced by a script in
-`.agent-notes/`, each of which asserts `src.__file__` starts at the worktree root
-before executing anything:
+Every claim marked *measured* above was produced by a one-shot verification
+script (not kept in the repository), each asserting `src.__file__` resolves to
+the worktree root before executing anything:
 
 | Script | Establishes |
 |---|---|
@@ -1187,13 +1187,13 @@ naming that other tree. Every script asserts the resolved path before running.
 
 **Not done, deliberately:**
 
-- **No training.** The card forbids it, and it would not have settled most of the
+- **No training.** Out of scope for that review, and it would not have settled most of the
   open questions anyway — these are code-vs-document disagreements, not
   empirical ones. Nothing in this document is a claim about how any run behaves.
-- **No edits to `src/`, `proofs/`, or any existing file.** Per the card.
+- **No edits to `src/`, `proofs/`, or any existing file.** By design.
   Several findings have obvious one-line fixes and none are applied: whether the
-  code or the proof is the intended science is the owner's call, per `AGENTS.md`.
-- **No re-derivation of the matrix counts**, per the card and `AGENTS.md`.
+  code or the proof is the intended science is the owner's call.
+- **No re-derivation of the matrix counts**, per the review's scope.
 - **No full test suite run.** The scripts import and call individual modules.
   A green suite would not have detected D-JAWP-1, D-SWIP-1 or D-WSR-2 — three of
   the findings here are precisely about numbers nothing asserts.

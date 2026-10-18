@@ -4,16 +4,16 @@ Scope: this document maps what the code in `src/models/` actually computes onto 
 established literature, and marks each item **NOVEL**, **RECOMBINATION** or
 **UNCLEAR**. It is written to audit standards, because the repo's own history is
 one of plausible-looking numbers that did not survive contact with the code (25
-audit cards). Verdicts below cite the executed line where the distinction matters.
+audit findings). Verdicts below cite the executed line where the distinction matters.
 
 **Headline result: not one of the twelve mechanism modules is defensible as novel
 in isolation.** Eight are recombinations whose parts are all published and
 individually unremarkable; three are recombinations of a published technique with
 a real defect attached; one (Spectral Gap) is not reachable from training at all.
 (The original wording of that sentence counted PUC as one of the three *because
-its gradient path was dead*. TASK-39 fixed the gradient path, so PUC is still in
+its gradient path was dead*. A later fix restored the gradient path, so PUC is still in
 the bucket — for a different reason, §3.14 — but "dead gradient path" is no
-longer one of the three defects. Corrected 2026-10-08, TASK-41.) The defensible
+longer one of the three defects. Corrected 2026-10-08.) The defensible
 contribution, if any, is the *coupling* — a
 single learned subspace `Q` on `St(D,k)`, maintained by retraction, that the
 prediction loss is restricted to and that eight other regularizers read as their
@@ -80,7 +80,7 @@ to `active_mechanisms()` and `GWP.summary()`, which print `Core: ['jawp']`.
 | 11 | CMC | `‖z_pred¹[t] − z_pred²[t]‖²` at positions masked in both masks, stop-grad on the primary | Consistency regularization (Mean Teacher, FixMatch/UDA); BYOL two-view prediction | RECOMBINATION |
 | 12 | GAC | `γ·relu(τ_grad − ‖g_i‖)·mean(z_i²)` on starved coordinates | Gradient-magnitude exploration bonuses (RL/ES); dormant-unit reactivation | RECOMBINATION |
 | 13 | STA | `η·W₁(sorted λ_current, sorted λ_EMA)` on covariance spectra | Spectral stability penalties; continuum-learning spectral anchoring | RECOMBINATION — with a design risk |
-| 14 | PUC | Batch-covariance `eigvalsh` (with autograd) or, behind a flag, an Oja EMA buffer; ReLU'd `−log det` barrier, gated on an entropy deficit | VICReg variance term; Barlow Twins; log-det diversity | RECOMBINATION — loss matches neither stated form (§3.14; the "dead gradient" verdict is **superseded**, TASK-39) |
+| 14 | PUC | Batch-covariance `eigvalsh` (with autograd) or, behind a flag, an Oja EMA buffer; ReLU'd `−log det` barrier, gated on an entropy deficit | VICReg variance term; Barlow Twins; log-det diversity | RECOMBINATION — loss matches neither stated form (§3.14; the "dead gradient" verdict is **superseded**, 2026-10-08) |
 | 15 | RDC | `η·mean‖(I−QQᵀ)(z_t − z_{t−1})‖²` | Continual-learning drift penalties; representation-stability regularization | RECOMBINATION |
 | 16 | WSR | `η·ρ·‖(I−QQᵀ)G‖_F/‖Q‖_F` (gradient mode), or a retracted SAM perturbation (sam mode) | SAM (Foret et al. 2021); manifold-SAM variants | RECOMBINATION — and see §5 |
 
@@ -241,7 +241,7 @@ owner's judgement** on whether WSD should track a residual-covariance subspace,
 in which case it duplicates part of WSD/STA's job, or a variance subspace, in which
 case it fights JAWP.
 
-> **Status update 2026-10-08 (TASK-41).** When this was written the conflict was
+> **Status update 2026-10-08.** When this was written the conflict was
 > "a separate, unrecorded issue" — true of `proofs/IMPLEMENTATION_STATUS.md`, and
 > still is of nothing else. It is now recorded there too, as cross-mechanism
 > pattern 5, with the two numbers that make it concrete: 50 of the 62 shipped
@@ -294,23 +294,23 @@ the header claims.
 ### 14. PUC — the executed loss does not match the theorem
 
 > **The "dead gradient" verdict in this section is SUPERSEDED. As written
-> 2026-09-28 it was measured and correct; TASK-39 changed the shipped default.
+> 2026-09-28 it was measured and correct; the 2026-10-08 fix changed the shipped default.
 > The measurement below is kept, dated and annotated rather than deleted,
 > because it is still the right measurement of the *other* branch — but the
 > `puc.py:79` it cites no longer says what it said then (`puc.py:100` is the
-> default now). Corrected 2026-10-08 by TASK-41. What is true now, in full:**
+> default now). Corrected 2026-10-08. What is true now, in full:**
 >
 > - The executed loss is still a ReLU'd log-det barrier gated on an entropy
 >   deficit, **not** the Lagrangian-dual object in the theorem. That half of the
 >   criticism stands, unchanged.
 > - `use_differentiable_entropy` defaulted to `False` when this was written, so
 >   the loss read an EMA buffer, had no autograd edge to `z_pred`, and was a
->   constant in `total_loss`. **TASK-39 flipped the default to `True`**
+>   constant in `total_loss`. **The 2026-10-08 fix flipped the default to `True`**
 >   (`src/models/puc.py:100`), so the training path now takes
 >   `eigvalsh` of this batch's covariance *with* autograd
 >   (`src/models/puc.py:261-264`) and the loss does reach the encoder.
 >   `src/models/jepa.py:537-542` passes no flag, so this is the branch a run
->   takes. Measured by that card: `max |encoder.grad(PUC on) − encoder.grad(PUC
+>   takes. Measured then: `max |encoder.grad(PUC on) − encoder.grad(PUC
 >   off)|` was exactly `0.0` before and `2.2e-08` after.
 > - The inert path still exists, still has no autograd edge, and is still what
 >   the numbers below measure — but it is no longer reachable from any config
@@ -339,7 +339,7 @@ So as wired *at the time of writing*, `PUC` contributed a constant to
 `total_loss` and could not influence training. Every regularization is gated in
 `TextSpanJEPA.validate()` and every config key carries a non-zero weight, so the
 wiring looked live; the gradient was what was missing. **RECOMBINATION, loss
-matches neither stated form; the gradient verdict is superseded by TASK-39.**
+matches neither stated form; the gradient verdict is superseded as of 2026-10-08.**
 
 ### 15. RDC — drift penalty decomposed by the workspace
 
@@ -455,7 +455,7 @@ Collected so a later draft cannot reintroduce them by accident.
    log-det barrier, not the Lagrangian-dual object. **The older, stronger
    version of this item — "with the shipped defaults its loss has
    `requires_grad=False`; it is a constant in the total" — was true and is
-   SUPERSEDED by TASK-39** (2026-10-08): the default is now the grad-carrying
+   SUPERSEDED (2026-10-08)**: the default is now the grad-carrying
    path. Do not restate it. The remaining true objection is the formula, §3.14.
 10. **Gradient-mode WSR is not sharpness minimization.** It minimizes the
     gradient norm, which is a stationarity objective.
@@ -499,7 +499,7 @@ CMC, GAC, STA, PUC, RDC, WSR, and Predictive Rank) are the frame around those tw
 Several are diagnostic rather than causal, and one fights the mechanism it
 corrects. Whether that frame reads as "a principled manifold
 framework" or as "twelve plausible-looking numbers" is precisely the question the
-25 previous audit cards were opened to answer — and for the mechanisms above, the
+25 audit questions were opened to answer — and for the mechanisms above, the
 answers are as recorded: **RECOMBINATION**, with PUC's loss additionally not
-matching its stated form (§3.14 — *not* "inert": that verdict was superseded by
-TASK-39, 2026-10-08) and WSR's SAM path additionally broken.
+matching its stated form (§3.14 — *not* "inert": that verdict was superseded on
+2026-10-08) and WSR's SAM path additionally broken.

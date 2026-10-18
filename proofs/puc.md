@@ -10,7 +10,7 @@
 > **The 2026-08-24 banner also said "the loss carries NO gradient
 > (buffer-based statistics)". That was true then and is not true of the
 > shipped default.** It read the Oja EMA **buffer**, which has no autograd
-> edge. TASK-39 flipped `use_differentiable_entropy`'s default to `True`
+> edge. The 2026-10-08 fix flipped `use_differentiable_entropy`'s default to `True`
 > (`src/models/puc.py:100`), so the default path builds its eigenvalues from
 > `eigvalsh` of **this batch's** covariance *with* autograd
 > (`src/models/puc.py:261-264`) and the returned scalar carries an edge to

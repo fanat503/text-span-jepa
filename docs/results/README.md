@@ -38,7 +38,7 @@ $PY = "C:\Users\Илья\AppData\Local\Programs\Python\Python310\python.exe"
 
 A results table whose empty cells look plausible is worse than no table, because
 the owner cannot tell a real result from a placeholder at a glance. That is the
-exact failure this campaign exists to prevent, and it is the failure a
+exact failure this project exists to prevent, and it is the failure a
 well-meaning agent produces when it helpfully fills in a plausible `0.83`.
 
 So every cell is one of exactly two things:

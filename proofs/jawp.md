@@ -7,8 +7,8 @@
 > theorems assume fixed k; the five verification tests named in the proof
 > are absent. Complementary-gate style fixes elsewhere do NOT apply here.
 >
-> **ADDENDUM (TASK-40 + TASK-41, 2026-10-08) — a second mechanism pulls this same
-> `Q` the other way.** Not in the 2026-08-24 matrix; first triaged under TASK-40.
+> **ADDENDUM (2026-10-08 cross-mechanism audit) — a second mechanism pulls this same
+> `Q` the other way.** Not in the 2026-08-24 matrix; first triaged in the 2026-10-08 audit.
 > Nothing in this loss was changed.
 >
 > **The antagonism is REAL and MEASURED.** WSD maximizes
@@ -35,7 +35,7 @@
 > configs: **51 resolve `use_wsd: true`, 50 with both flags true**, including
 > `defaults.yaml` and every leave-one-out ablation row. The antagonism is live.
 > It is not dominant only because the shipped `lambda_wsd: 0.01` sits ~42× below
-> the crossover. Full evidence: `proofs/wsd.md` and `.agent-notes/task-40.md`.
+> the crossover. Full evidence: `proofs/wsd.md`.
 >
 > **Two numbered capabilities here have no caller anywhere in `src/`.**
 > `detect_workspace_dimension` and `grassmann_retract` are counted in
@@ -206,7 +206,7 @@ X = U V^T. ∎
 Four numbered capabilities hang off `JAWPModule`. Two are called by the running
 model; two have **no caller anywhere in `src/`** (only `tests/`). Both are
 reachable only as manual calls, so nothing in a training run exercises them.
-This is the count mismatch in `AGENTS.md` made concrete: they are counted, and
+This is the count mismatch made concrete: they are counted, and
 they are never called.
 
 | capability | method | called from `src/` | what happens if wired |
@@ -239,10 +239,10 @@ is a decision for the owner, not a cleanup.
 **Recommendation.** Both should be wired, not deleted — neither is a dead
 formula (unlike PUC's headline loss). The minimal wiring is one call each in
 `src/models/jepa.py`, where `active_k` and `workspace_Q` are already in scope
-at `_jawp_loss` / the retraction block; `src/models/jepa.py` is outside TASK-40's
+at `_jawp_loss` / the retraction block; `src/models/jepa.py` is outside this audit's
 file boundary, so this is recorded rather than applied. The
-`AGENTS.md` / `README.md` count should either name them as caller-less or the
-callers should land first — TASK-41 owns that reconciliation.
+The caller count in `README.md` should either name them as caller-less or the
+callers should land first — that reconciliation is a separate change.
 
 ## Interaction with WSD: the same `Q`, the opposite subspace
 
@@ -268,7 +268,7 @@ This is an open science decision, not a bug: the two mechanisms optimise
 different quantities and either may be the intended science. Full evidence,
 data-dependence of the optima, and five resolution options with consequences
 are in [`wsd.md` — Interaction with JAWP](wsd.md#interaction-with-jawp-opposite-optima-one-parameter).
-TASK-40 changed no loss and no weight in either module.
+The audit changed no loss and no weight in either module.
 
 ## How Other Papers Can Use JAWP
 

@@ -33,7 +33,7 @@ source of the old "13 mechanisms" / "16 mechanisms" disagreement in this file.
 | 10–16 | WSD, CMC, GAC, STA, PUC, RDC, WSR | modules | [`wsd.py`](../src/models/wsd.py), [`cmc.py`](../src/models/cmc.py), [`gac.py`](../src/models/gac.py), [`sta.py`](../src/models/sta.py), [`puc.py`](../src/models/puc.py), [`rdc.py`](../src/models/rdc.py), [`wsr.py`](../src/models/wsr.py) |
 
 > **All six `jawp.py` line numbers in that table were re-derived on 2026-10-08
-> (TASK-41); every one of them had drifted by 84–85 lines.** A `file.py:NNN`
+> — every one of them had drifted by 84–85 lines.** A `file.py:NNN`
 > citation is a number in prose with the same failure mode as any other: it
 > stops being true the moment anything above it is inserted, and nothing
 > notices. If you edit `src/models/jawp.py`, re-derive the row.
@@ -129,7 +129,7 @@ contradicted the matrix's own JAWP row ("cited verification tests absent") and
 property test that pins what the document claims (JAWP, SPC, SWIP, CMC, STA, and
 GAC partially), **six** have none (CGN, PCR, WSD, PUC, RDC, WSR), and `wip.md`
 is **UNAUDITED** in the matrix and claims nothing that is tested.
-Verified 2026-10-08 (TASK-41):
+Verified 2026-10-08:
 
 | claim | pinned by | status |
 |---|---|---|

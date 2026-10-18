@@ -9,7 +9,7 @@ context management - across 176 matched settings (4 models × SWE-Bench
 Verified + Terminal-Bench 2.1 × five context-management tiers × four window
 budgets, plus planning/action-space ablations at the T4/128k default). The
 reason it is in this repo is that I am the harness it studies, and the session
-that produced this campaign failed in ways the paper predicted precisely.
+that produced this repository failed in ways the paper predicted precisely.
 
 Each rule below is a measured finding from the paper, followed by the failure
 it explains, followed by the rule. A rule with no failure behind it is
@@ -56,16 +56,16 @@ settings (56.3%) never call it, median invocation rate zero, equal-weight
 mean 0.540 calls/task at 32k falling to 0.007 at 128k, and T2 beats T1 by
 −0.36 pp on average (+0.40 SWE-Bench, −1.12 Terminal-Bench).
 
-**The failure it explains:** the campaign repeatedly built heavyweight
+**The failure it explains:** the development process repeatedly built heavyweight
 machinery whose invocation nobody measured. The clearest case is the CMC
 gate: a `min_overlap_ratio: 0.2` threshold shipped with no measurement of
 whether the gate ever OPENED - the metrics audit later found it effectively
-shut at the shipped ratios, and wave 16's fix was to emit `cmc_gate_ratio` /
+shut at the shipped ratios, and the fix was to emit `cmc_gate_ratio` /
 `cmc_gate_open` / `cmc_skip_reason` precisely so the invocation question
 becomes observable. The same pattern: elaborate multi-paragraph worker
 prompts whose structure the workers demonstrably did not follow (they kept
-returning artifacts into forbidden paths, which is why `.agent-notes/` ended
-up in `.gitignore`).
+returning artifacts into forbidden paths, which is why agent scratch
+directories are gitignored here).
 
 **Rule:** for every mechanism (mine or the model's), measure the invocation
 rate before trusting the effect: how many times did the gate open, the
@@ -84,9 +84,9 @@ deletes redundant post-edit verification: cost −30% / −32% on SWE-Bench for
 success-rate deltas of −2.0 / −0.4 pp. Planning "changes where trajectories
 stop."
 
-**The failure it explains:** the campaign maintained a growing task-ledger
-system (TASKS.md, plan.md, per-group boards, consolidation notes) through
-many waves - and the end-state cleanup deleted ALL of it (115 bookkeeping
+**The failure it explains:** the development process maintained a growing task-ledger
+system (a task ledger, plan files, per-group boards, consolidation notes) through
+many rounds - and the end-state cleanup deleted all of it (115 bookkeeping
 files) as reviewer-visible pollution. The ledger's lifetime value was the
 scheduling during the wave; its maintenance cost kept being paid long after
 the scheduling was done, and it was paid in the currency a reviewer reads.
@@ -150,7 +150,7 @@ reach significance under the paired McNemar test, and the authors state
 their conclusions there rest on consistent directions across models and
 budgets rather than on individually significant cells.
 
-**The failure it explains:** the campaign's most dangerous moments were
+**The failure it explains:** the development process's most dangerous moments were
 claims formed from one measurement - the "CMC is dead" verdict that a later
 audit had to retract (the threshold compares against the primary mask
 fraction `p`, not `p²`), and the "179-nat gap" being initially attributed

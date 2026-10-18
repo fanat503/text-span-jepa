@@ -8,9 +8,9 @@
 > Davis-Kahan bound is circular; adaptive tau and per-step resync are
 > unimplemented. Silent eig-failure now warns (fixed R15).
 >
-> **ADDENDUM (TASK-40 + TASK-41, 2026-10-08) — WSD and JAWP pull the SAME
+> **ADDENDUM (2026-10-08 cross-mechanism audit) — WSD and JAWP pull the SAME
 > parameter in OPPOSITE directions.** Not in the 2026-08-24 matrix; first triaged
-> under TASK-40. Nothing in either loss was changed.
+> in the 2026-10-08 audit. Nothing in either loss was changed.
 >
 > **The mechanism.** `Q_target` here is the **top-k** eigenvectors of an EMA of
 > the *target* covariance (`src/models/wsd.py:200-206`), and the loss maximizes
@@ -30,7 +30,7 @@
 > `jawk_predictive_relevance` collapses to **0.0000** — the workspace stops
 > being predictable.
 >
-> **Reachability — corrected against the code, and it matters.** TASK-40 first
+> **Reachability — corrected against the code, and it matters.** The audit first
 > reported that every runnable config ships `use_wsd: false`. **That was wrong.**
 > Re-measuring the deep-merge over all 62 configs: `defaults.yaml` sets
 > `use_wsd: true`, `use_jawp: true`, `lambda_wsd: 0.01`, and **51 of 62 configs
@@ -54,7 +54,7 @@
 > Two of the most consequential changes available on this seam are **invisible
 > to the entire required verify set**: flipping WSD to bottom-k, and removing
 > that `.data`, each leave all 105 verify-set tests passing. The five options
-> with their consequences are in `.agent-notes/task-40.md`. **The resolution is
+> with their consequences are recorded in this document. **The resolution is
 > the owner's science call.**
 
 ## Statement
@@ -125,7 +125,7 @@ Standard I-JEPA adjusts $\tau$ to control target update speed, but doesn't detec
 
 ## Interaction with JAWP: opposite optima, one parameter
 
-> **Status: OPEN — owner science call.** TASK-40 established the facts and
+> **Status: OPEN — owner science call.** The audit established the facts and
 > measured the magnitude. It deliberately changed no loss, no weight and no
 > `lambda_wsd`. Section added 2026-10-08.
 
@@ -244,7 +244,7 @@ evidence and a reader without the history would cite it.
 ### Which weights are actually shipped
 
 **Corrected.** An earlier version of this section said "every runnable config
-sets `use_wsd: false`". That is wrong, and a TASK-41 audit corrected it against
+sets `use_wsd: false`". That is wrong, and a later audit corrected it against
 the real deep-merge: **56 of 68 configs resolve `use_wsd: true`**, including
 `defaults.yaml` and every leave-one-out ablation row. So the antagonism is
 **live in the ablation grid the paper will run**, not latent. It is not dominant
@@ -274,8 +274,8 @@ MechanismBundle info['jawp_loss'].requires_grad = True
 `MechanismBundle` is constructed nowhere in `src/` outside `mechanisms.py`, so
 `TextSpanJEPA` is the live path and `mechanisms.py` is a divergent copy of the
 same wiring. Anyone using the documented bundle API gets a WSD loss that
-cannot train anything, with no warning. `mechanisms.py` is outside TASK-40's
-file boundary; recorded here and in `.agent-notes/task-40.md` for the owner.
+cannot train anything, with no warning. `mechanisms.py` is outside this audit's
+file boundary; recorded here for the owner.
 
 ### Options, with consequences
 
@@ -317,10 +317,10 @@ None of these was applied. Listed so the owner can choose.
    `lambda_wsd` in `defaults.yaml` below it with a comment citing this
    section, and add a regression test that fails when a config's
    `lambda_wsd` crosses the measured threshold. Cost: a new test file plus a
-   `defaults.yaml`/`config/**` edit, both outside TASK-40's boundary. Makes
+   `defaults.yaml`/`config/**` edit, both outside this audit's boundary. Makes
    the trap explicit without pre-empting the science call.
 
-**Not recommended by TASK-40, for the record:** option 3. It looks like the
+**Not recommended, for the record:** option 3. It looks like the
 cheap fix and it is the only one that turns a measured conflict into an
 undetectable no-op.
 
