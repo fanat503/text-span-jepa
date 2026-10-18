@@ -24,7 +24,7 @@ ablations used. That shape is a *rung of the scaling ladder*
 adopting it would have made every ablation row incomparable with the other 39
 shipped configs that train 768/12/12.
 
-Verified 2026-10-08 (TASK-41): all **40** files in this directory resolve to
+Verified 2026-10-08: all **40** files in this directory resolve to
 `embed_dim 768 / encoder_depth 12` after the deep merge — there is no second
 shape left in the grid. (This file said "29", which counted neither the current
 40 nor the pre-fix 30.)

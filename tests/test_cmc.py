@@ -653,7 +653,7 @@ def _shipped_cmc():
 class TestCMCRunsAtTheShippedDefaults:
     """CMC's loss must be nonzero at the configuration the repo ships.
 
-    THE MINIMUM ASSERTION THE CARD ASKS FOR. If this goes red, CMC is inert
+    THE MINIMUM ASSERTION REQUIRED HERE. If this goes red, CMC is inert
     under `defaults.yaml` and every ablation arm that relies on it is
     measuring nothing — which is precisely what the audit believed had already
     happened.

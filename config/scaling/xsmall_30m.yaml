@@ -35,7 +35,7 @@
 # and no config key can. `src/train.py` calls `seed_everything(seed)`, so the
 # intra-op thread count comes from whatever OMP/the launcher left, and the rung
 # is then only reproducible on a box with that same count. Measured
-# (`src/utils/seed.py`, `.agent-notes/task-24.md`): 1 vs 2 threads, same seed,
+# (`src/utils/seed.py`, `tests/test_seed.py`): 1 vs 2 threads, same seed,
 # same data, 10 steps -> steps 0-2 bitwise equal, steps 3-9 differ by up to
 # 2.4e-07, final `qkv` weight not bitwise equal. A capacity curve therefore
 # cannot be re-derived bit-for-bit on a different machine unless determinism is

@@ -7,7 +7,7 @@ four *methods of `JAWPModule`* (WIP, Spectral Gap, Grassmann Optimization,
 Predictive Rank), per the counting convention in [`README.md`](README.md) — are
 instances of a single optimization principle. (This file previously said "All 15
 mechanisms" in two places while the table immediately below listed 16 rows; the
-table was right and the sentence was not. Corrected 2026-10-08, TASK-41.)
+table was right and the sentence was not. Corrected 2026-10-08.)
 
 **Workspace-Conditioned Prediction (WCP):**
 > Predict $Y$ from $X$ using a representation that maximizes $I(Z_\mathcal{W}; Y)$ while preserving $I(Z_\mathcal{W}; f_{\mathrm{exo}})$, where $\mathcal{W} = \operatorname{span}(Q)$ is a learned subspace optimized on $\mathrm{St}(D,k)$.
@@ -68,7 +68,7 @@ where:
 
 ### For Paper
 - **Single claim**: "We introduce Workspace-Conditioned Prediction, a principled framework for text representation learning."
-- **Each mechanism is an instance**: Not 16 ad-hoc tricks, but 16 components of ONE optimization problem. (Was "13"; 13 was the *proof-document* count, not a mechanism count — corrected 2026-10-08, TASK-41.)
+- **Each mechanism is an instance**: Not 16 ad-hoc tricks, but 16 components of ONE optimization problem. (Was "13"; 13 was the *proof-document* count, not a mechanism count — corrected 2026-10-08.)
 - **Ablation hierarchy**: Removing mechanisms = relaxing constraints, with clear mathematical interpretation.
 
 ### For Reviewers
@@ -121,7 +121,7 @@ where $R_\mathrm{exogenous\_drift} = \eta_\mathrm{rdc} \cdot ||\Delta z_\perp||^
 WSR appears nowhere in it, and the four non-module capabilities (WIP, Spectral
 Gap, Grassmann Optimization, Predictive Rank) are not risk terms at all. (This
 line previously read "with all 15 mechanisms", which was true of neither the 12
-nor the 16. Corrected 2026-10-08, TASK-41; the missing WSR term is left missing
+nor the 16. Corrected 2026-10-08; the missing WSR term is left missing
 because inventing it would be designing a theorem, which is a human decision.)
 
 $$R_\mathrm{total} \leq \underbrace{R_{\mathcal{W}^*}}_{\text{JAWP}} + \underbrace{R_\perp}_{\text{SWIP}} + \underbrace{R_\mathrm{drift}}_{\text{WSD+STA}} + \underbrace{R_\mathrm{consistency}}_{\text{CMC}} + \underbrace{R_\mathrm{overconfidence}}_{\text{PUC}} + \underbrace{R_\mathrm{exogenous\_drift}}_{\text{RDC}} + \underbrace{R_\mathrm{bottleneck}}_{\text{PCR}} + \underbrace{R_\mathrm{spectral}}_{\text{SPC}} + \underbrace{R_\mathrm{routing}}_{\text{CGN}} + \underbrace{R_\mathrm{exploration}}_{\text{GAC}}$$

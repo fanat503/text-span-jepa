@@ -230,7 +230,7 @@ def write_train_log(directory: Path, n_rows: int = 8) -> Path:
 
 @pytest.fixture
 def nothing_measured():
-    """Five configs, none of which has a run. The state the whole campaign is in."""
+    """Five configs, none of which has a run. The repository's real state."""
     cfgs = [
         make_config("config/_fixture/full.yaml", "all_core"),
         make_config("config/_fixture/no_cgn.yaml", "no_cgn"),
@@ -380,7 +380,7 @@ class TestRefusesToInvent:
     def test_one_logged_row_is_not_a_curve(self, tmp_path):
         """A single point is a dot. Drawing a line through it invents the segment.
 
-        This is the failure the card calls out, one level down: the run happened,
+        This is the failure called out above, one level down: the run happened,
         so nothing here is NOT-RUN, and an engine that only checked "did we get a
         number" would draw a line. The refusal has to fire on shape, not on
         provenance.
@@ -460,7 +460,7 @@ class TestRefusesToInvent:
 
     def test_real_repository_with_no_runs_draws_nothing(self, tmp_path):
         """The same refusal against the actual 68-config tree and a run-root that
-        does not exist -- the campaign's real state, not a fixture's.
+        does not exist -- the repository's real state, not a fixture's.
 
         This is the test that would go red if someone deleted the guard from one
         plot function while leaving the others intact, because it calls all five.

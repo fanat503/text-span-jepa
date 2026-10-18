@@ -422,8 +422,8 @@ class SpectralPredictiveCoding(TrainingStateGuard):
         # Scalars the info dict reports are computed as 0-dim tensors and read
         # back in ONE batched `.tolist()` below, rather than one `.item()` per
         # scalar. `torch.stack(...).tolist()[i]` is bit-identical to the
-        # matching `.item()` for every float dtype (measured; see
-        # .agent-notes/task-21.md), so the reported numbers do not move.
+        # matching `.item()` for every float dtype (measured; asserted in
+        # tests/test_host_reads.py), so the reported numbers do not move.
         with torch.no_grad():
             # Band vectors: batched reads instead of one `.item()` per band.
             band_residuals = band_residuals_t.detach().tolist()

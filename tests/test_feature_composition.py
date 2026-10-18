@@ -4,8 +4,8 @@
 # FeatureInterferenceScore: the control set must be disjoint from the
 # treatment set, and the feature subsample must be seeded.
 #
-# Regression tests for the two defects measured in
-# docs/plans/2026-09-27-wave1-audit-findings-interp.md (I15):
+# Regression tests for the two defects measured in the feature
+# composition sweep:
 #   * `z_baseline = z` was the FULL dataset, so at N == n_top every sample was
 #     both treated and control and `mean_interference` collapsed to 1.4e-10
 #     (float round-off of x - x). At any other N the score was attenuated by

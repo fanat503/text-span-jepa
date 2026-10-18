@@ -411,8 +411,8 @@ class PredictiveCascadeRefinement(nn.Module):
             # promotes to the widest input (a widening for every pair here)
             # and `stack(...).tolist()[i]` is the exact Python float that
             # element's own `.item()` returns. Verified for fp32/fp64/bf16/fp16
-            # (.agent-notes/task-21.md). All the arithmetic below therefore
-            # still runs on the same float64 Python values as before.
+            # (asserted in tests/test_host_reads.py). All the arithmetic below
+            # therefore still runs on the same float64 Python values as before.
             flat = torch.stack(
                 [t for level in level_diag_t for t in level]
                 + [initial_residual_t, final_residual_t, ortho_offdiag_t]

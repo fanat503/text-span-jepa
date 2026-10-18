@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0
 #
 # Regression tests for the audited defects in src/interp/information_theory.py
-# and src/interp/disentanglement.py (wave-1 audit findings I4 / I5).
+# and src/interp/disentanglement.py.
 #
 # Every test here is tiny (N <= 1024, D <= 64) and seeded. They pin *properties*
 # of the metrics, not magic constants.

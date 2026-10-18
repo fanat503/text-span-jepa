@@ -276,7 +276,7 @@ class TestComputeAsymmetry:
         """The gather sits AFTER the head here and BEFORE it in the other arms.
 
         Pinned by source inspection because moving it is a behaviour change to a
-        training path and this card deliberately does not make it; the test
+        training path and this change deliberately does not make it; the test
         exists so that whoever does will see it break and update the header.
         """
         import inspect
@@ -569,7 +569,7 @@ class TestLoggedQuantityIsOneKind:
 
     @pytest.mark.parametrize("shape", SHAPES, ids=SHAPE_IDS)
     def test_all_three_arms_satisfy_one_definition_at_one_shape(self, shape):
-        """The headline case, stated as the card states it.
+        """The headline case, stated exactly as specified.
 
         One shape, all three arms, one definition. Printed as a table on failure
         because the failure mode is exactly a reader comparing three numbers and
@@ -669,7 +669,7 @@ class TestLoggedQuantityIsOneKind:
     # ---- the coupling that actually put the number in the log ----
 
     def test_train_py_logs_the_bare_call(self):
-        """Why the SIGNATURE default is what this card is about.
+        """Why the SIGNATURE default is the point of this test.
 
         `src/train.py` is not editable here, so the coupling is pinned from this
         side: it calls `model.get_num_params()` with no arguments. That is what

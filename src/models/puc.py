@@ -29,8 +29,8 @@
 # sketched in the theorem above. Full discrepancy matrix:
 # proofs/IMPLEMENTATION_STATUS.md.
 #
-# TASK-39 divergence, recorded here because proofs/** is not this file's to
-# edit (AGENTS.md: the proof is a design doc, not a spec). The batch-covariance
+# Divergence note, recorded here because proofs/** is not this file's to
+# edit (the proof is a design doc, not a spec). The batch-covariance
 # eigenvalues carry autograd; the Oja EMA buffer does not. So the loss only
 # influences training when ``use_differentiable_entropy`` is True, and the
 # default is True for exactly that reason. With it False the loss is a
@@ -364,7 +364,7 @@ class PredictionUncertaintyCalibration(TrainingStateGuard):
             # A zero loss without an edge is the gate being closed, which is fine;
             # a NON-ZERO loss without an edge is the inert EMA path. Reported so
             # the inert case is visible in a printed run instead of only in a
-            # diff of this file. See the TASK-39 note in the header.
+            # diff of this file. See the divergence note in the header.
             "puc_carries_grad": bool(torch.is_tensor(final_loss) and final_loss.requires_grad),
             # Present on BOTH paths, like `gac_warmup` / `sta_warmup` /
             # `wsr_warmup`.  It used to exist only on the warmup return, which

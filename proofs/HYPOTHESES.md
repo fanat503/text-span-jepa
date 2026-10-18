@@ -4,7 +4,7 @@ This file documents our hypotheses BEFORE running experiments. This follows
 the top-lab practice of pre-registering predictions to avoid HARKing
 (Hypothesizing After Results are Known).
 
-> **Status note, added 2026-10-08 (TASK-41). Twelve hypotheses (H1–H12); none
+> **Status note, added 2026-10-08. Twelve hypotheses (H1–H12); none
 > has been run.** Nothing below is edited, and nothing below should be: a
 > prediction edited after the fact is not a pre-registration. Two facts a
 > reader needs, recorded here rather than by rewriting the hypotheses:

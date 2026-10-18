@@ -473,7 +473,7 @@ class WorkspaceSharpnessRegularization(TrainingStateGuard):
         #
         # Ambient total: rho_Q = rho * ||grad_euclidean|| / ||Q||.  This is the
         # quantity the decomposition is over; it was never reported before
-        # wave 20, so the theorem's decomposition had no observable left side.
+        # PR #23, so the theorem's decomposition had no observable left side.
         ambient_sharpness = self.rho * euclidean_grad.norm() / max(Q_norm.item(), self.eps)
         # Spectral (off-manifold) component: rho * ||(I - QQ^T) grad|| / ||Q||.
         # `grad_grassmann` IS (I - QQ^T) euclidean_grad - that is exactly the
@@ -609,7 +609,7 @@ class WorkspaceSharpnessRegularization(TrainingStateGuard):
         # own names; in gradient mode they coincide by construction instead.
         #
         # Ambient total: rho_Q = rho*||grad_euclidean||/||Q|| - the quantity
-        # the header theorem decomposes; never reported before wave 20.
+        # the header theorem decomposes; never reported before PR #23.
         ambient_sharpness = self.rho * euclidean_grad.norm() / max(Q.norm().item(), self.eps)
         # Spectral (off-manifold): rho*||(I - QQ^T) grad||/||Q||; grad_norm
         # is exactly that norm, since grad_grassmann == (I - QQ^T) grad.

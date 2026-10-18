@@ -518,7 +518,7 @@ class JAWPModule(nn.Module):
             # promotes to the widest input, which is a widening for every pair
             # here, and `stack(...).tolist()[i]` is the exact Python float that
             # element's own `.item()` would return. Verified for fp32, fp64,
-            # bf16 and fp16 (.agent-notes/task-21.md).
+            # bf16 and fp16 (asserted in tests/test_host_reads.py).
             (
                 loss_workspace_v,
                 loss_predictor_focus_v,
@@ -630,8 +630,8 @@ class JAWPModule(nn.Module):
     #  in {1,2,3,6,12,24}, zero spread across 5 seeds, ~1.7 ms per call.
     #  So: WIRE, do not delete. The minimal wiring is one call in
     #  src/models/jepa.py, where active_k and workspace_Q are already in
-    #  scope. jepa.py was outside the file boundary of the task that measured
-    #  this (TASK-40, 2026-10-08), which is why it is recorded and not done.
+    #  scope. jepa.py was outside the ownership of the change that measured
+    #  this (2026-10-08), which is why it is recorded and not done.
     #  See proofs/jawp.md section "Unreached capabilities".
     #
     # ═══════════════════════════════════════════════════════════════════════

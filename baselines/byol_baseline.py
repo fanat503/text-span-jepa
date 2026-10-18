@@ -335,7 +335,8 @@ class BYOLBaseline(nn.Module):
         repo's, and a run of this arm is therefore NOT a reproduction of BYOL as
         published. Wiring a real two-augmentation pipeline is a science change
         that re-measures this repository's collapse thresholds -- see
-        `.agent-notes/fairness.md`. Stated here, at the signature, so an arm that
+        decision D-014 in `docs/decisions.md`. Stated here, at the signature, so an
+        arm that
         is not the published method cannot read as one.
 
         Returns:

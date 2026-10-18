@@ -146,7 +146,7 @@ class DCIMetrics:
         predictor over the full D-dimensional representation plus an intercept,
         and reports the mean **adjusted** R^2 across factors.
 
-        AUDIT NOTE (wave-1 finding I5). The previous implementation was
+        AUDIT NOTE. The previous implementation was
         ``R.max(dim=0).values.mean()`` — the maximum per-factor correlation,
         not a full-predictor R^2. Its noise floor is the maximum of D noisy
         correlations, which is large and decays only like 1/sqrt(N):
@@ -399,7 +399,7 @@ class ModularityScore:
     (the "deviation from perfect one-hot" the docstring describes) and 0.0 when
     it spreads importance uniformly across all K factors.
 
-    AUDIT NOTE (wave-1 finding I5). The previous implementation computed
+    AUDIT NOTE. The previous implementation computed
     ``1 - (sum p^2 - 1/K) / (1 - 1/K)``, which inverts that range: ideal
     one-hot scored 0 and maximally-mixed scored 1. Measured before the fix:
     ideal one-hot 0.240, partial mixture 0.256, uniform 0.349, polysemantic

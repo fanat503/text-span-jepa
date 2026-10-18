@@ -52,7 +52,7 @@
 # and is not made here; `val_depths` and `max_val_accuracy` are reported so the
 # selection score is visible next to the reported one.
 #
-# Also unfixed, and reported in .agent-notes/task-11.md: the threshold
+# Also unfixed, and deliberately left: the threshold
 # comparison is `test_accuracy >= min_accuracy`, where the accuracy is a float32
 # mean and the threshold is a Python float. An accuracy that is exactly 0.7 in
 # exact arithmetic comes out of that mean as 0.69999998, so it fails a

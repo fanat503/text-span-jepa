@@ -663,7 +663,7 @@ def run_full_comparison(
     # `sv_entropy_online` have a bootstrap-difference correlation of r=0.9999
     # -- one measurement reported twice -- while `collapsed_dim_ratio_online`
     # is identically 0.0 on both arms. Reporting three numbers from one
-    # spectrum as three findings is the multiplicity error this campaign keeps
+    # spectrum as three findings is the multiplicity error this codebase keeps
     # finding; the design block records it rather than the report implying it
     # is corrected.
 

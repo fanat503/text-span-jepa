@@ -79,7 +79,7 @@ This follows directly from the PAC-Bayes theorem (McAllester, 1999; Seeger, 2002
 
 $$\rho_Q \leq \rho_{\mathrm{spectral}} + \rho_{\mathrm{directional}}$$
 
-> **CORRECTED (wave 20 / D-WSR-2):** the statement previously claimed the
+> **CORRECTED (PR #23 / D-WSR-2):** the statement previously claimed the
 > linear **equality** `ρ_Q = ρ_spectral + ρ_directional`. The proof below
 > derives an inequality — the triangle inequality on orthogonal components —
 > and the equality is false in general (it holds only when one component is
@@ -93,7 +93,7 @@ $$\rho_Q \leq \rho_{\mathrm{spectral}} + \rho_{\mathrm{directional}}$$
 where:
 - $\rho_{\mathrm{spectral}} = \rho \cdot \|(I - QQ^\top)\nabla_Q L\|_F$ (off-manifold component)
 - $\rho_{\mathrm{directional}} = \rho \cdot \|Q^\top \nabla_Q L\|_F$ (on-manifold component)
-- $\rho_Q = \rho \cdot \|\nabla_Q L\|_F / \|Q\|_F$ (ambient total; never reported before wave 20)
+- $\rho_Q = \rho \cdot \|\nabla_Q L\|_F / \|Q\|_F$ (ambient total; never reported before PR #23)
 
 **Proof:**
 
@@ -114,7 +114,7 @@ where:
   $\eta \cdot \mathrm{warmup} \cdot \rho_{\mathrm{spectral}} / \sqrt{k}$ — the
   off-manifold component, the one that moves the subspace. The bullet below
   previously said "WSR bounds $\rho_{\mathrm{directional}}$", which contradicted
-  the module's own loss; corrected wave 20. $\rho_{\mathrm{directional}}$ is
+  the module's own loss; corrected in PR #23. $\rho_{\mathrm{directional}}$ is
   reported by the module but not penalized (basis gauge, not subspace motion).
 - **Together**, STA + WSR provide **complete workspace stability**
 

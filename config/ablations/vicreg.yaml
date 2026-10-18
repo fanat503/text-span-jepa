@@ -69,7 +69,7 @@
 # augmentation policy per paper, an independent second draw per step, and a
 # re-measurement of every collapse threshold in tests/test_ssl_baselines.py, all
 # of which were measured under the masked/clean pair. See
-# `.agent-notes/fairness.md`.
+# decision D-014 in `docs/decisions.md`.
 # Guard: TestTheTwoViewsAreNotThePublishedAugmentationPair.
 #
 # Guards: TestBaselineArmsAreCompleteAndComparable, TestEveryConfigRuns,

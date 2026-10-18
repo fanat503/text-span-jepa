@@ -371,7 +371,7 @@ class TestAblationGridComplete:
         )
 
     def test_all_mechanisms_length_is_stable(self):
-        """AGENTS.md 'counts must agree': grid, ALL_MECHANISMS, audit matrix."""
+        """Project rule 'counts must agree': grid, ALL_MECHANISMS, audit matrix."""
         assert len(ALL_MECHANISMS) == 12, (
             f"ALL_MECHANISMS is now {len(ALL_MECHANISMS)}: update the ablation "
             f"grid, the mechanisms.py header, GWP.N_MECHANISMS and "
@@ -1594,7 +1594,7 @@ class TestOnlyOneMaskRatioKnobIsLive:
     Wiring `data.mask_ratio` to win would mean changing the mask schedule of
     every arm in the repo, including every published run, on the strength of a
     key nobody had been reading. That is a science decision about what the
-    experiments were, and it is not this card's to make silently. Deleting the
+    experiments were, and it is not a decision this file may make silently. Deleting the
     decoy is behaviour-preserving -- measured above, no shipped run's ratio
     changes -- and it removes the trap instead of the ambiguity.
 

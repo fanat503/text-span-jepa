@@ -19,7 +19,7 @@
 # - Conditional MI estimation
 # - Representation entropy / information compression
 #
-# AUDIT NOTE (wave-1, finding I4/I5). Every estimator below that is a
+# AUDIT NOTE. Every estimator below that is a
 # *difference of two entropies* or a *ratio of two quantities in different
 # units* uses ONE consistent estimator for both terms. Mixing a histogram
 # estimator with a Gaussian estimator, or dividing nats/dim by nats, silently

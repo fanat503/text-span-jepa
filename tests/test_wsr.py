@@ -154,13 +154,13 @@ class TestWSRSharpnessDecomposition:
     def test_sharpness_bounds_total(self):
         """Total sharpness ≤ spectral + directional (triangle inequality).
 
-        WAVE 20: `wsr_ambient_sharpness` is the theorem's real total
+        The fix (PR #23): `wsr_ambient_sharpness` is the theorem's real total
         ρ_Q = ρ·||∇_Q L||_F/||Q||.  Before it existed the "total" this test
         compared against parts WAS one of the parts (`wsr_sharpness` == the
         spectral component in gradient mode), so the triangle check was
         vacuous: spectral ≤ spectral + directional.
 
-        MUTATION VERDICT: revert the wave-20 wsr.py change and this test
+        MUTATION VERDICT: revert the PR #23 wsr.py change and this test
         fails with KeyError('wsr_ambient_sharpness') — the ambient total is
         the only key the fix adds.
         """
@@ -193,7 +193,7 @@ class TestWSRSharpnessDecomposition:
         every identity here would pass vacuously, which is exactly the trap
         the old code sat in.
 
-        MUTATION VERDICT: revert the wave-20 wsr.py change and this test
+        MUTATION VERDICT: revert the PR #23 wsr.py change and this test
         fails with KeyError('wsr_ambient_sharpness') on the first read.
         """
         wsr = WorkspaceSharpnessRegularization(embed_dim=64, rho=0.05)
@@ -223,7 +223,7 @@ class TestWSRSharpnessDecomposition:
             got = info[key]
             assert abs(got - expected) < 1e-5, f"{key}: {got} != float64 reference {expected}"
 
-        # The point of wave 20: the total is NOT another name for a component.
+        # The point of the fix: the total is NOT another name for a component.
         assert (
             info["wsr_ambient_sharpness"] != info["wsr_spectral_sharpness"]
         ), "ambient still equals spectral — the reported total is a part again"

@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0
 """Resume safety of the CMC second-mask stream.
 
-TASK-02 gave `src/models/cmc.py` a private generator so the second mask would
+An earlier determinism fix gave `src/models/cmc.py` a private generator so the second mask would
 stop consuming the global torch RNG. It made that generator a module global, and
 a module global's POSITION is not a tensor, so it never reached `state_dict` and
 `src/train.py::_capture_rng_state` could not save it. `defaults.yaml` sets
@@ -115,7 +115,7 @@ class TestCMCMaskIsAPureFunctionOfStep:
             _draw(99 + s)
         assert _draw(20) == first, (
             "the mask for a given step is not reproducible, so a resumed run "
-            "diverges. This is the regression TASK-02 introduced."
+            "diverges. This is the regression that fix introduced."
         )
 
     def test_consecutive_steps_give_different_masks(self):
@@ -123,7 +123,7 @@ class TestCMCMaskIsAPureFunctionOfStep:
         assert _draw(0) != _draw(10)
 
     def test_the_default_path_does_not_touch_the_global_torch_stream(self):
-        """The original TASK-02 goal, which must survive the rewrite."""
+        """The original goal of that fix, which must survive the rewrite."""
         torch.manual_seed(4242)
         before = torch.random.get_rng_state()
         _draw(0)

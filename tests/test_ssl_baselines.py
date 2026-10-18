@@ -1083,7 +1083,7 @@ class TestTrainerContract:
     """What `src/train.py` requires of an arm, pinned from this side.
 
     The coupling is pinned from HERE even though `src/train.py` is now editable:
-    a card that owns a file tends to trust it, and the property that matters --
+    the owner of a file tends to trust it, and the property that matters --
     "this arm reaches its own loss, and only its own loss" -- is a property of
     the PAIR, so it belongs in a place neither owner can quietly rewrite. Same
     approach `tests/test_baseline_parity.py::test_train_py_logs_the_bare_call`
@@ -1480,7 +1480,7 @@ class TestTrainerContract:
         set -- and `tests/test_config_system.py::test_trainer_extra_known_matches_the_trainer`
         pins that set against its own copy, so a new exemption there fails a test
         this file does not own. A `model.target_momentum` read therefore needs
-        three coordinated edits in three files, none of them in this card.
+        three coordinated edits in three files, none of them here.
 
         So it is not read: each method hyperparameter already defaults to its
         published-paper value, and an arm built from `defaults.yaml` alone trains
@@ -1845,9 +1845,9 @@ class TestTheTwoViewsAreNotThePublishedAugmentationPair:
     All four papers define their objective over two AUGMENTED views of the same
     input, where the augmentation is what makes the pair different. Here one
     view is untouched. That is a real divergence from the published method and
-    it is not repairable inside this card -- see
-    `.agent-notes/fairness.md` for what a genuine two-augmentation pipeline
-    would require (a text augmentation policy per paper, a second independent
+    it is not repairable inside this file -- see
+    decision D-014 in `docs/decisions.md` for what a genuine two-augmentation
+    pipeline would require (a text augmentation policy per paper, a second independent
     draw per step, and a re-measurement of every collapse threshold in this
     file, which were all measured under the masked/clean pair).
 
@@ -1887,7 +1887,7 @@ class TestTheTwoViewsAreNotThePublishedAugmentationPair:
             "BYOL/Barlow Twins/VICReg/SimSiam are defined over two AUGMENTED "
             "views of the same input; this repo hands all four a masked/clean "
             "pair, so an arm that does not say so reads as the published method. "
-            "See .agent-notes/fairness.md."
+            "See decision D-014 in docs/decisions.md."
         )
 
     @pytest.mark.parametrize("name", sorted(ARMS))
@@ -1936,7 +1936,7 @@ class TestTheTwoViewsAreNotThePublishedAugmentationPair:
         assert torch.equal(seen["b"], clean), (
             f"{name} receives view_b that is not the trainer's clean input. If "
             "this now passes because a second augmentation was wired in, the "
-            "class docstrings and .agent-notes/fairness.md must be updated in the "
+            "class docstrings and decision D-014 in docs/decisions.md must be updated in the "
             "same commit -- these arms would then BE the published methods."
         )
         # And the shape of the divergence, stated as an assertion so it cannot
