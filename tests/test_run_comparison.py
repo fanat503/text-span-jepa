@@ -64,6 +64,8 @@ from src.models.jepa import TextSpanJEPA, TextSpanJEPAConfig
 from src.train import CheckpointLoadError, save_checkpoint
 from src.utils.torchio import safe_torch_load
 
+import yaml
+
 VOCAB = 64
 SEQ = 16
 EMBED = 32
@@ -73,32 +75,42 @@ EMBED = 32
 LEGACY_MODULE_PREFIXES = ("encoder.", "target_encoder.", "predictor.", "decoder.")
 
 
+def _toy_jepa_cfg_kwargs():
+    """The toy config as a plain kwargs mapping.
+
+    `load_model(ckpt_path, "jepa", model_cfg=<this dict>)` must reconstruct the
+    same model the `toy_width` fixture shrinks to; the fixture and the dict
+    share one source so they cannot drift apart.
+    """
+    return {
+        "vocab_size": VOCAB,
+        "max_seq_len": SEQ,
+        "embed_dim": EMBED,
+        "encoder_depth": 1,
+        "num_heads": 2,
+        "mlp_ratio": 2.0,
+        "predictor_embed_dim": 16,
+        "predictor_depth": 1,
+        "future_offsets": (1,),
+        "num_refine_steps": 1,
+        "use_jawp": True,
+        "use_cgn": True,
+        "use_pcr": True,
+        "use_spc": True,
+        "use_sta": True,
+        "use_wsd": True,
+        "use_puc": True,
+        "use_rdc": True,
+        "use_cmc": True,
+        "use_gac": True,
+        "use_wsr": True,
+        "use_swip": True,
+    }
+
+
 def _toy_jepa_config():
     """Every mechanism on, at toy width, so no module is `None`."""
-    return TextSpanJEPAConfig(
-        vocab_size=VOCAB,
-        max_seq_len=SEQ,
-        embed_dim=EMBED,
-        encoder_depth=1,
-        num_heads=2,
-        mlp_ratio=2.0,
-        predictor_embed_dim=16,
-        predictor_depth=1,
-        future_offsets=(1,),
-        num_refine_steps=1,
-        use_jawp=True,
-        use_cgn=True,
-        use_pcr=True,
-        use_spc=True,
-        use_sta=True,
-        use_wsd=True,
-        use_puc=True,
-        use_rdc=True,
-        use_cmc=True,
-        use_gac=True,
-        use_wsr=True,
-        use_swip=True,
-    )
+    return TextSpanJEPAConfig(**_toy_jepa_cfg_kwargs())
 
 
 def _toy_mlm(**_ignored):
@@ -112,6 +124,16 @@ def _toy_data2vec(**_ignored):
     )
 
 
+def _toy_jepa_from_kwargs(**_kwargs):
+    """Stub accepting (and ignoring) whatever model_cfg the loader passes.
+
+    The pre-model_cfg loader called `TextSpanJEPAConfig()` bare; with cfg
+    threading it passes the dumped kwargs. Either way this fixture wants the
+    toy shape, so accept the signature instead of asserting on it.
+    """
+    return _toy_jepa_config()
+
+
 @pytest.fixture
 def toy_width(monkeypatch):
     """Shrink only what `load_model` constructs. See the module docstring."""
@@ -119,7 +141,7 @@ def toy_width(monkeypatch):
     import baselines.mlm_baseline as mlm_mod
     import src.models.jepa as jepa_mod
 
-    monkeypatch.setattr(jepa_mod, "TextSpanJEPAConfig", _toy_jepa_config)
+    monkeypatch.setattr(jepa_mod, "TextSpanJEPAConfig", _toy_jepa_from_kwargs)
     monkeypatch.setattr(mlm_mod, "MLMBaseline", _toy_mlm)
     monkeypatch.setattr(d2v_mod, "Data2VecTextBaseline", _toy_data2vec)
 
@@ -799,3 +821,180 @@ class TestRefuseNonsenseCorpusByDefault:
         assert not (
             tmp_path / "comparison_results.json"
         ).exists(), "a report was written despite the refusal"
+
+
+class TestModelCfgThreading:
+    """`load_model` builds the width the run's dumped params describe.
+
+    The `toy_width` fixture above monkeypatches constructors because the loader
+    used to hardcode production width (768/12 at vocab 50304). With `model_cfg`
+    the loader mirrors `src.train.create_model`: the same top-level `model:`
+    section of the trainer's dumped params yaml (`params-text-span-jepa.yaml`)
+    drives both training and this comparison loader, so a checkpoint trained at
+    a non-default width restores without monkeypatching anything -- and a
+    checkpoint restored WITHOUT its cfg fails loudly with the flag to pass.
+    """
+
+    def test_jepa_round_trip_at_the_dumped_width_needs_no_monkeypatch(self, tmp_path):
+        source = TextSpanJEPA(_toy_jepa_config())
+        saved = _scramble(source)
+        path = _save(tmp_path, "jepa.pth.tar", source, "text_span_jepa")
+
+        loaded = load_model(path, "jepa", "cpu", model_cfg=_toy_jepa_cfg_kwargs())
+
+        max_abs_diff = _max_abs_diff(saved, loaded.state_dict())
+        assert max_abs_diff == 0.0, (
+            f"the cfg-shaped restore is not bit-exact: max |saved - loaded| = "
+            f"{max_abs_diff!r} over {len(saved)} tensors"
+        )
+
+    def test_mlm_kwargs_mirror_create_model_including_encoder_depth(self, tmp_path):
+        """`create_model` maps the dumped `encoder_depth` onto the encoder's
+        `depth=...`; the loader must accept cfg values and USE them -- a call
+        with cfg entries must construct what the checkpoint was trained at,
+        not silently fall back to production width."""
+        cfg = {
+            "vocab_size": VOCAB,
+            "max_seq_len": SEQ,
+            "embed_dim": EMBED,
+            "encoder_depth": 1,
+            "num_heads": 2,
+            "mlp_ratio": 3.0,
+            "drop_rate": 0.0,
+            "drop_path_rate": 0.0,
+        }
+        source = MLMBaseline(
+            vocab_size=VOCAB, max_seq_len=SEQ, embed_dim=EMBED, depth=1, num_heads=2, mlp_ratio=3.0
+        )
+        saved = _scramble(source)
+        path = _save(tmp_path, "mlm.pth.tar", source, "mlm")
+
+        loaded = load_model(path, "mlm", "cpu", model_cfg=cfg)
+
+        assert len(loaded.encoder.blocks) == cfg["encoder_depth"], (
+            "the encoder_depth from model_cfg did not reach the constructed "
+            "encoder: the loader fell back to its own hardcoded depth"
+        )
+        max_abs_diff = _max_abs_diff(saved, loaded.state_dict())
+        assert max_abs_diff == 0.0
+
+    def test_data2vec_head_layers_default_matches_create_model(self, tmp_path):
+        """`create_model` defaults `head_layers=2`; the bare constructor
+        defaults to 1. The loader omitted the kwarg, so a checkpoint written by
+        the trainer (two-Linear head) failed its strict restore on
+        `regression_head` -- with no hint that the loader, not the file, was
+        misbuilt. The loader's default must be create_model's."""
+        cfg = {
+            "vocab_size": VOCAB,
+            "max_seq_len": SEQ,
+            "embed_dim": EMBED,
+            "encoder_depth": 1,
+            "num_heads": 2,
+        }
+        source = Data2VecTextBaseline(
+            vocab_size=VOCAB, max_seq_len=SEQ, embed_dim=EMBED, depth=1, num_heads=2, head_layers=2
+        )
+        saved = _scramble(source)
+        path = _save(tmp_path, "d2v.pth.tar", source, "data2vec")
+
+        loaded = load_model(path, "data2vec", "cpu", model_cfg=cfg)
+
+        head_linears = [m for m in loaded.regression_head if isinstance(m, torch.nn.Linear)]
+        assert len(head_linears) == 2, (
+            f"regression_head has {len(head_linears)} Linear layers; create_model "
+            f"defaults head_layers to 2, so that is what a trainer checkpoint carries"
+        )
+        max_abs_diff = _max_abs_diff(saved, loaded.state_dict())
+        assert max_abs_diff == 0.0
+
+    def test_restore_without_its_cfg_faults_the_checkpointload_error_with_the_flag(self, tmp_path):
+        """A non-default checkpoint loaded WITHOUT its cfg must not surface as a
+        bare torch shape traceback: name the params dump and the CLI flags that
+        fix it."""
+        source = MLMBaseline(
+            vocab_size=VOCAB, max_seq_len=SEQ, embed_dim=EMBED, depth=1, num_heads=2
+        )
+        path = _save(tmp_path, "mlm.pth.tar", source, "mlm")
+
+        with pytest.raises(CheckpointLoadError) as excinfo:
+            load_model(path, "mlm", "cpu")
+        message = str(excinfo.value)
+        assert (
+            "--jepa_config" in message and "--baseline_config" in message
+        ), f"the mismatch error does not name the config flags: {message!r}"
+        assert (
+            "params" in message
+        ), f"the mismatch error does not point at the trainer's params dump: {message!r}"
+
+    def test_model_section_is_read_from_a_params_dump(self, tmp_path):
+        import src.interp.run_comparison as rc
+
+        dump = tmp_path / "params-text-span-jepa.yaml"
+        dump.write_text(
+            yaml.safe_dump({"model": {"embed_dim": 32, "encoder_depth": 1}, "data": {}}),
+            encoding="utf-8",
+        )
+
+        cfg = rc.model_cfg_from_dump(dump)
+
+        assert cfg == {
+            "embed_dim": 32,
+            "encoder_depth": 1,
+        }, f"the helper must return exactly the run's 'model:' section, got {cfg!r}"
+
+    def test_cfg_dump_without_a_model_section_is_refused(self, tmp_path):
+        import src.interp.run_comparison as rc
+
+        dump = tmp_path / "params.yaml"
+        dump.write_text(yaml.safe_dump({"data": {"dataset": "wikitext"}}), encoding="utf-8")
+
+        with pytest.raises(SystemExit) as excinfo:
+            rc.model_cfg_from_dump(dump)
+        assert "model" in str(excinfo.value)
+
+    def test_main_threads_the_dumped_cfg_into_load_model(self, tmp_path, monkeypatch):
+        """`--jepa_config`/`--baseline_config` reach `load_model` as the dump's
+        `model:` section."""
+        import src.interp.run_comparison as rc
+
+        dump = tmp_path / "params-text-span-jepa.yaml"
+        dump.write_text(yaml.safe_dump({"model": {"embed_dim": 32}}), encoding="utf-8")
+
+        monkeypatch.setattr(
+            rc.argparse.ArgumentParser,
+            "parse_args",
+            lambda self, _a=None: self.parse_known_args()[0],
+        )
+
+        seen = {}
+
+        def spy_load_model(ckpt_path, model_type="jepa", device="cpu", model_cfg=None):
+            seen[model_type] = model_cfg
+            return torch.zeros(1)
+
+        monkeypatch.setattr(rc, "load_model", spy_load_model)
+        monkeypatch.setattr(
+            "sys.argv",
+            [
+                "run_comparison",
+                "--jepa_ckpt",
+                "a",
+                "--baseline_ckpt",
+                "b",
+                "--jepa_config",
+                str(dump),
+                "--baseline_config",
+                str(dump),
+            ],
+        )
+
+        with pytest.raises(SystemExit) as excinfo:
+            rc.main()
+
+        assert "REFUSED" in str(excinfo.value), "the random-token refusal must still hold"
+        assert seen.get("jepa") == {
+            "embed_dim": 32
+        }, f"--jepa_config did not reach load_model as model_cfg: {seen!r}"
+        assert seen.get("mlm") == {
+            "embed_dim": 32
+        }, f"--baseline_config did not reach load_model as model_cfg: {seen!r}"

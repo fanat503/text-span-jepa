@@ -298,53 +298,117 @@ def _full_model_state(ckpt, ckpt_path):
     return ckpt["model"]
 
 
-def load_model(ckpt_path, model_type="jepa", device="cpu"):
+def load_model(ckpt_path, model_type="jepa", device="cpu", model_cfg=None):
     """Load model from checkpoint.
 
     `ckpt_path` must be a checkpoint written by `src.train.save_checkpoint`.
     Every branch restores the same complete module with `strict=True`, so a
     shape or architecture mismatch is loud rather than a partial restore.
+
+    `model_cfg` is the run's dumped `model:` section (the mapping
+    `src.train.create_model` reads from the trainer's
+    `params-text-span-jepa.yaml` dump). Without it the loader builds the
+    production defaults (embed_dim=768, encoder_depth=12, vocab 50304, seq
+    512), so a checkpoint trained at any other width faults its strict
+    restore; the error names `--jepa_config` / `--baseline_config`.
     """
     if model_type not in ("jepa", "mlm", "data2vec"):
         raise ValueError(f"Unknown model type: {model_type}")
 
+    model_cfg = dict(model_cfg or {})
     ckpt = safe_torch_load(ckpt_path, map_location=device)
     state = _full_model_state(ckpt, ckpt_path)
 
     if model_type == "jepa":
         from src.models.jepa import TextSpanJEPA, TextSpanJEPAConfig
 
-        config = TextSpanJEPAConfig()
+        # Mirror `create_model`: the cfg's own vocab/seq survive when the dump
+        # carries them, production constants otherwise.
+        config_kwargs = {"vocab_size": 50304, "max_seq_len": 512}
+        config_kwargs.update(model_cfg)
+        config = TextSpanJEPAConfig(**config_kwargs)
         model = TextSpanJEPA(config)
     elif model_type == "mlm":
         from baselines.mlm_baseline import MLMBaseline
 
         model = MLMBaseline(
-            vocab_size=50304,
-            max_seq_len=512,
-            embed_dim=768,
-            depth=12,
-            num_heads=12,
+            vocab_size=model_cfg.get("vocab_size", 50304),
+            max_seq_len=model_cfg.get("max_seq_len", 512),
+            embed_dim=model_cfg.get("embed_dim", 768),
+            # create_model maps the dumped key `encoder_depth` onto the
+            # encoder's `depth`; the loader must use the same key.
+            depth=model_cfg.get("encoder_depth", 12),
+            num_heads=model_cfg.get("num_heads", 12),
+            mlp_ratio=model_cfg.get("mlp_ratio", 4.0),
+            drop_rate=model_cfg.get("drop_rate", 0.1),
+            drop_path_rate=model_cfg.get("drop_path_rate", 0.0),
         )
     else:  # data2vec
         from baselines.data2vec_baseline import Data2VecTextBaseline
 
         model = Data2VecTextBaseline(
-            vocab_size=50304,
-            max_seq_len=512,
-            embed_dim=768,
-            depth=12,
-            num_heads=12,
+            vocab_size=model_cfg.get("vocab_size", 50304),
+            max_seq_len=model_cfg.get("max_seq_len", 512),
+            embed_dim=model_cfg.get("embed_dim", 768),
+            depth=model_cfg.get("encoder_depth", 12),
+            num_heads=model_cfg.get("num_heads", 12),
+            mlp_ratio=model_cfg.get("mlp_ratio", 4.0),
+            drop_path_rate=model_cfg.get("drop_path_rate", 0.0),
+            average_top_k_layers=model_cfg.get("average_top_k_layers", 8),
+            loss_beta=model_cfg.get("loss_beta", 0.0),
+            loss_scale=model_cfg.get("loss_scale", None),
+            ema_decay=model_cfg.get("ema_decay", 0.999),
+            ema_end_decay=model_cfg.get("ema_end_decay", 0.9999),
+            ema_anneal_end_step=model_cfg.get("ema_anneal_end_step", 100000),
+            # create_model defaults 2; the bare constructor defaults 1. A
+            # trainer checkpoint carries the two-Linear head.
+            head_layers=model_cfg.get("head_layers", 2),
         )
 
     # One call, one shape: encoder + target_encoder + predictor + decoder (+ the
     # mechanism buffers and, for data2vec, the regression head) all arrive in
     # `state`. The old per-module `.get()` reads missed every mechanism tensor
     # and the data2vec regression head entirely.
-    model.load_state_dict(state, strict=True)
+    try:
+        model.load_state_dict(state, strict=True)
+    except RuntimeError as exc:
+        from src.train import CheckpointLoadError
+
+        raise CheckpointLoadError(
+            f"The {model_type} checkpoint {ckpt_path} does not match the "
+            f"architecture this loader built "
+            f"(embed_dim={model_cfg.get('embed_dim', 768)}, "
+            f"encoder_depth={model_cfg.get('encoder_depth', 12)}, "
+            f"vocab={model_cfg.get('vocab_size', 50304)}, "
+            f"seq={model_cfg.get('max_seq_len', 512)}). Restore it with the "
+            f"run's dumped params (train.py writes params-text-span-jepa.yaml "
+            f"next to its logs): pass its 'model:' section through "
+            f"--jepa_config / --baseline_config. Underneath: {exc}"
+        ) from exc
     model.to(device)
     model.eval()
     return model
+
+
+def model_cfg_from_dump(path):
+    """The `model:` section of a run's dumped params yaml.
+
+    The trainer dumps its full args next to its logs
+    (`params-text-span-jepa.yaml`); `create_model` reads the top-level
+    `model:` section from that same mapping, so the comparison loader reads
+    the same thing. A file without that section is refused rather than
+    silently widening the model back to production defaults.
+    """
+    import yaml
+
+    with open(path, encoding="utf-8") as handle:
+        dump = yaml.safe_load(handle) or {}
+    if not isinstance(dump, dict) or not isinstance(dump.get("model"), dict):
+        raise SystemExit(
+            f"run_comparison: {path} has no top-level 'model:' mapping. Pass the "
+            f"params yaml train.py dumps (params-text-span-jepa.yaml)."
+        )
+    return dump["model"]
 
 
 def extract_representations(model, dataloader, max_batches=100, device="cpu", pool="mean"):
@@ -905,14 +969,41 @@ def main():
         "from the process run seed, so the run is reproducible per run and "
         "never draws from the process-global RNG.",
     )
+    parser.add_argument(
+        "--jepa_config",
+        type=str,
+        default=None,
+        help=(
+            "Optional params yaml train.py dumps (params-text-span-jepa.yaml). "
+            "Its top-level 'model:' section -- what src.train.create_model "
+            "trained on -- drives the construction, so a checkpoint trained at "
+            "a non-default width restores instead of faulting the strict load."
+        ),
+    )
+    parser.add_argument(
+        "--baseline_config",
+        type=str,
+        default=None,
+        help="Same as --jepa_config, for the baseline checkpoint's run.",
+    )
     args = parser.parse_args()
 
     # Load models
     print(f"Loading JEPA model from {args.jepa_ckpt}...")
-    jepa_model = load_model(args.jepa_ckpt, "jepa", args.device)
+    jepa_model = load_model(
+        args.jepa_ckpt,
+        "jepa",
+        args.device,
+        model_cfg=model_cfg_from_dump(args.jepa_config) if args.jepa_config else None,
+    )
 
     print(f"Loading {args.baseline_type} model from {args.baseline_ckpt}...")
-    baseline_model = load_model(args.baseline_ckpt, args.baseline_type, args.device)
+    baseline_model = load_model(
+        args.baseline_ckpt,
+        args.baseline_type,
+        args.device,
+        model_cfg=model_cfg_from_dump(args.baseline_config) if args.baseline_config else None,
+    )
 
     # Create dummy dataloader if no real data available
     # (In production, this loads the actual dataset)
