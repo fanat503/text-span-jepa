@@ -386,3 +386,64 @@ belongs with the owner's training plan.
 **Reverses if** a two-augmentation pipeline is wired in — then the arms become
 the published methods and the docstrings, configs and thresholds must all move
 in the same commit.
+
+---
+
+## D-015 Release tags are date snapshots, not a version ladder
+
+**Problem.** The repository carried 25 tags: `v0.2.0` … `v0.30.0` and
+`v1.0.0rc1` … `v1.0.0rc15`, none attached to a GitHub Release. They record
+development churn, not releases, and fifteen candidates for one version read as
+an abandoned release process.
+
+**Evidence from the field (checked 2026-10-20).** Meta's paper repositories do
+not tag at all (`facebookresearch/jepa` and `vjepa2` return no tags; `dinov2`
+likewise). OpenAI's `whisper` tags dated snapshots (`v20250625`, `v20240930`,
+…). SemVer with `rcN` candidates is the convention for libraries with a release
+cadence — `huggingface/transformers` (`v5.20.2`) and `vllm-project/vllm`
+(`v0.32.0`, `v0.32.0rc3`) — not for a paper artifact.
+
+**Decided.** Research snapshots use one annotated date tag, `vYYYYMMDD`, cut at
+the commit that accompanies a paper or a public artifact. No `rc` ladder and no
+0.x series. The 25 old tags were deleted locally and on the remote. The
+snapshot tag is cut when the artifact is frozen, not per commit; a GitHub
+Release is created with it only when there is an artifact to attach.
+
+**Reverses if** the repository starts shipping an installable package with a
+compatibility contract; then SemVer `vX.Y.Z` (patch for fixes, `rcN` before a
+minor or major) is the right scheme and this entry stops applying.
+
+---
+
+## D-016 Multi-seed cells report sample std and a t interval, with n attached
+
+**Problem.** A paper table that prints `0.713` for a metric measured on one run
+is a sample of size one presented as a result. The audit surface also had no
+aggregation of final metrics across seeds; `plot_seed_band` covered curves only.
+
+**Options.** (a) mean only; (b) mean ± population std (`ddof=0`);
+(c) mean ± sample std with the normal `1.96 · SEM` interval; (d) mean ± sample
+std with a two-sided Student-t interval, the sample size in every cell, `n=1`
+reporting no interval, and `n=0` reported as NaN.
+
+**Decided.** (d).
+
+**Why (b) and (c) lost.** Population std understates the uncertainty of a mean
+over seeds. The normal critical value is the wrong calibration for the small
+`n` a seed sweep actually has: at `n=2` the 95% t value is 12.706, not 1.96, and
+at `n=3` it is 4.303. A 2-seed paper printing a 1.96 interval would claim a
+precision its data cannot support.
+
+**Implementation.** `src/utils/seed_stats.py`: `summarize`, `aggregate_runs`
+(per-key `n`, missing keys lower `n` instead of aborting), `paired_delta`
+(positional pairing, equal lengths required), `format_summary`. Only the 95%
+level is implemented; another level raises rather than returning a
+differently-calibrated interval. `--seed` in `src/train.py` applies the CLI
+override through `src/utils/config_overrides.py`, where `seed=0` is honoured
+and the caller's config is not mutated.
+
+**Mutation verdict.** Population std fails the known-std test; a hard-coded
+1.96 fails the t-interval and table-boundary tests; dropping the finite filter
+fails the non-finite test; flipping the paired sign fails four paired tests;
+`if seed:` fails the `seed=0` test; a shallow copy fails the immutability test.
+All six were run and killed, with the files restored byte-exact.

@@ -24,6 +24,7 @@ import yaml
 
 from src.utils.logging import AverageMeter, CSVLogger
 from src.utils.seed import seed_everything, worker_init_fn
+from src.utils.config_overrides import apply_cli_overrides
 from src.utils.torchio import safe_torch_load
 
 logging.basicConfig(stream=sys.stdout, level=logging.INFO)
@@ -2046,6 +2047,15 @@ if __name__ == "__main__":
     )
     parser.add_argument("--output_dir", type=str, default=None, help="Override output directory")
     parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help=(
+            "Override meta.seed (wins over meta.seed and top-level seed). "
+            "For multi-seed sweeps; 0 is a valid seed."
+        ),
+    )
+    parser.add_argument(
         "--no_defaults",
         action="store_true",
         help="Skip merging defaults.yaml (use config as-is)",
@@ -2072,6 +2082,5 @@ if __name__ == "__main__":
                 defaults = yaml.safe_load(f)
             config = _deep_merge(defaults, config)
 
-    if args.output_dir is not None:
-        config.setdefault("logging", {})["folder"] = args.output_dir
+    config = apply_cli_overrides(config, seed=args.seed, output_dir=args.output_dir)
     main(config)

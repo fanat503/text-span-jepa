@@ -340,8 +340,38 @@ Configs live in `config/`, and every one of them is **deep-merged over
 - `wikitext/`, `tinystories/`, `kaggle/` — dataset and variant
 - `ablations/` — the ablation grid (46 arms)
 
-CLI: `--fname`, `--output_dir`, `--no_defaults`. Resume is `meta.load_checkpoint:
+CLI: `--fname`, `--output_dir`, `--seed`, `--no_defaults`. Resume is `meta.load_checkpoint:
 true`, which loads `<logging.folder>/checkpoint-latest.pth.tar`.
+
+### Multi-seed runs
+
+A single run is a sample of size one. `--seed` overrides `meta.seed` (and the
+legacy top-level `seed`) without editing the YAML; `0` is a valid seed:
+
+```powershell
+foreach ($s in 1..3) {
+  & $PY -m src.train --fname config/scaling/small_100m.yaml `
+    --seed $s --output_dir "runs/small_100m_s$s"
+}
+```
+
+Each run dumps its resolved config, including the seed it actually used, so
+`scripts/plotting_engine.py` draws a mean ± 1σ band for a group only when at
+least two distinct measured seeds exist. A single-seed group is listed in the
+manifest and never drawn as a zero-width band.
+
+For final scalar metrics, `src/utils/seed_stats.py` is the paper-table
+convention: sample std (`ddof=1`) and a two-sided Student-t 95% interval, with
+the sample size attached to every cell. `n=1` reports the mean and no interval;
+`n=0` is NaN, never zero.
+
+```python
+from src.utils.seed_stats import summarize, paired_delta, format_summary
+
+summarize([0.71, 0.73, 0.70])      # n, mean, sample std, t interval
+paired_delta(treatment, baseline)  # per-seed difference + wins/losses/ties
+format_summary(summarize(vals))    # "0.713 ± 0.015 (n=3, 95% CI ...)"
+```
 
 ## Parameter counts
 
