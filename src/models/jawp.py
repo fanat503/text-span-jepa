@@ -840,14 +840,13 @@ class JAWPModule(nn.Module):
         preservation_per_feature = (f_ws_energy / f_norms).clamp(0, 1)
         wip_score = preservation_per_feature.mean().item()
 
-        # Also compute background projection (what's NOT preserved)
-        f_bg_energy = f_norms - f_ws_energy
-        bg_fraction = (f_bg_energy / f_norms).clamp(0, 1).mean().item()
-
+        # `bg_fraction` used to be reported here as
+        # mean(clamp(1 - f_ws/f_n)) -- exactly 1 - wip_score, since
+        # preservation_per_feature is the same clamped ratio. One name per
+        # quantity: wip_score is the reported number (docs/METRICS.md 4c).
         wip_info = {
             "method": "wip_theorem",
             "wip_score": wip_score,
-            "bg_fraction": bg_fraction,
             "min_preservation": preservation_per_feature.min().item(),
             "max_preservation": preservation_per_feature.max().item(),
             "k": k,

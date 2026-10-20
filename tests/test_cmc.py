@@ -238,7 +238,7 @@ class TestCMCTheorems:
         overlap = torch.zeros(self.B, self.T, dtype=torch.long)
         overlap[:, 4:8] = 1
 
-        loss, _info = cmc(z1, z2, overlap)
+        loss, info = cmc(z1, z2, overlap)
 
         # The CMC loss IS the mean inconsistency at overlap positions
         # So by definition, mean(||z1-z2||² at overlap) = loss
@@ -249,6 +249,9 @@ class TestCMCTheorems:
         assert (
             abs(loss.item() - expected_loss.item()) < 1e-4
         ), f"CMC loss should equal mean inconsistency: {loss.item():.6f} vs {expected_loss.item():.6f}"
+        assert "cmc_per_position_loss" not in info, (
+            "cmc_per_position_loss was the same expression as cmc_loss; " "one name per quantity"
+        )
 
     def test_downstream_stability_bound(self):
         """Theorem 2: |f(z1) - f(z2)| ≤ ||w|| · √ε."""

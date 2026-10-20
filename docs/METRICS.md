@@ -47,18 +47,16 @@ mechanical cause. The counts sum to 49.
 2. **One constant wearing a bound's name — 1.**
    `pcr.compute_cascade_capacity_bound` moves by a relative `7.5e-05` across a
    tenfold change in the quantity it names.
-3. **Exact duplicates — 10, one since fixed.** A second key carrying a quantity
-   already present under another name, often to the last bit:
-   `jawp.bg_fraction`, `jawp.rank_utilization`, `spc.spc_uniform_loss`,
-   `spc.spc_band_losses`, `swip.condition_number`, `swip.bg_variance_fraction`,
-   `puc.puc_overconfidence`, `gac.gac_running_starved_fraction`,
-   `cmc.cmc_per_position_loss`, `wsr.wsr_spectral_sharpness`. Plotting two of
-   these gives a 45-degree line that reads as a correlation. **Note
-   for the WSR case:** the aliasing is now *declared* — the module reports the
-   theorem's missing total as `wsr_ambient_sharpness`, so the pair
-   (`wsr_sharpness`, `wsr_spectral_sharpness`) still coincides in gradient
-   mode, but as stated geometry with a checkable third quantity, not as an
-   accident. Do not plot that pair.
+3. **Exact duplicates — 10: four removed, one fixed earlier, five reclassified.**
+   The audit listed a second key for a quantity already present under another
+   name. On re-measurement, `jawp.bg_fraction`, `swip.condition_number`,
+   `swip.bg_variance_fraction`, and `cmc.cmc_per_position_loss` were genuine
+   second names and are removed; `wsr_spectral_sharpness` was fixed in PR #23;
+   the other five are not duplicates — see §4c for the measurement that
+   separates an exact complement (removed) from a normalized ratio, a lagged
+   EMA, an aggregate, and a **weighted** per-band loss that coincides with the
+   residual only at initialization. Do not plot any kept pair as if the two
+   series were independent measurements.
 4. **Numbers that move and mislead — 16.** The dangerous ones, because a log
    line that looks alive is the one a reviewer trusts. `wsd_steady_state_error`
    is the running-drift EMA to `1.4e-17`. `rdc_transient_bound` reads `6.9e-37`
@@ -128,12 +126,12 @@ every named metric. Per-mechanism totals:
 |---|---:|---:|---:|---:|---|
 | `jawp` | 30 | 23 | 1 | 6 | the spectral-gap branch: `k_mp`, `max_gap_ratio`, `mp_lower_bound` |
 | `cgn` | 11 | 8 | 1 | 2 | `compute_orthogonality_score` measures decisiveness |
-| `swip` | 13 | 9 | 2 | 2 | two exact duplicates in `compute_full_diagnostics` |
+| `swip` | 13 | 9 | 2 | 2 | both exact duplicates removed (§4c); `anisotropy_ratio` and `ws_variance_fraction` stay |
 | `pcr` | 12 | 8 | 4 | 0 | four config echoes plus a constant `cascade_capacity_bound` |
-| `spc` | 10 | 8 | 0 | 2 | one exact duplicate, one exact function |
+| `spc` | 10 | 8 | 0 | 2 | no duplicate: `band_losses = w_b * residual_b`; `uniform_loss` is the unweighted aggregate (§4c) |
 | `wsd` | 12 | 7 | 2 | 3 | the whole `nu/lambda` block is three names for one number |
-| `cmc` | 9 | 7 | 0 | 2 | `cmc_overlap_ratio` is `\|Omega\|/(B*T)` and the gate is shut at the shipped ratios |
-| `gac` | 9 | 6 | 2 | 1 | `gac_running_starved_fraction` is a smoothed copy |
+| `cmc` | 9 | 7 | 0 | 2 | `cmc_overlap_ratio` is `\|Omega\|/(B*T)` and the gate is shut at the shipped ratios; `cmc_per_position_loss` removed (§4c) |
+| `gac` | 9 | 6 | 2 | 1 | `gac_running_starved_fraction` is a deliberately smoothed series, kept (§4c) |
 | `sta` | 12 | 9 | 2 | 1 | `compute_davis_kahan_bound` tracks `W1`, not a gap |
 | `puc` | 11 | 5 | 3 | 3 | `puc_entropy` off by 179 nats; `puc_loss` near-constant |
 | `rdc` | 11 | 5 | 3 | 3 | all three bounds understate or restate the drift |
@@ -142,8 +140,11 @@ every named metric. Per-mechanism totals:
 
 The total here is one higher than the headline number above: `wsr_ambient_sharpness`
 was added in PR #23, after the audited commit, and is graded MEANINGFUL here. The
-headline table is the audit result at `f1d9ea3`; this table is the surface as it
-stands today.
+headline table is the audit result at `f1d9ea3`; the per-mechanism rows keep that
+audited surface so the totals stay traceable. Changes since: `wsr_spectral_sharpness`
+fixed (PR #23); `jawp.bg_fraction`, `swip.condition_number`,
+`swip.bg_variance_fraction`, and `cmc.cmc_per_position_loss` removed; the two
+`spc` keys re-graded as non-duplicates — see §4c.
 
 `puc` and `rdc` are the weakest mechanisms by this measure — 5 of 11 each — and
 they are the two whose names promise a *bound*.
@@ -206,22 +207,31 @@ the prediction error goes `0, 0.1, 0.5, 1.0`. A tenfold change in the input move
 it by a relative `7.5e-05`. Drop it from the metric table, or replace it with a
 quantity derived from the residuals it is supposed to summarise.
 
-### 4c. Exact duplicates (10) — remove the second name
+### 4c. Exact duplicates — what was removed, and what only looked like one
 
-Each is a second key for a quantity already present, verified by identity:
+The audit listed ten keys as exact duplicates. Each was re-measured and re-read
+for consumers before removal. Four were genuine and are gone; one
+(`wsr_spectral_sharpness`) was resolved in PR #23; the rest are not duplicates.
 
-| key | identity | measured |
+| key | finding, re-measured | status |
 |---|---|---|
-| `jawk_bg_fraction` | `= 1 - wip_score` | `\|diff\| <= 6.0e-08` over 8 random `(Q, z)` |
-| `jawk_rank_utilization` | `= min(effective_rank/k, 1)` | `\|diff\| = 0.0` at all 5 ranks |
-| `spc_spc_uniform_loss` | `= mean(spc_band_residuals)` | `\|diff\| = 0.0` at n_bands in {1,2,4,8,16} |
-| `spc_spc_band_losses` | identical to `spc_band_residuals`, elementwise | `\|diff\| = 0.0` on all 31 band entries |
-| `swip condition_number` | identical to `anisotropy_ratio` | `\|diff\| = 0.0` at 5 spectra |
-| `swip bg_variance_fraction` | `= 1 - ws_variance_fraction` | `\|diff\| <= 1.7e-07` at 5 spectra |
-| `puc_puc_overconfidence` | `= deficit / target_entropy` | `\|diff\| = 0.0` at 5 decay levels |
-| `gac_running_starved_fraction` | EMA of `gac_starved_fraction` | same series, lagged |
-| `cmc_cmc_per_position_loss` | `cmc.py:476` and `cmc.py:481` are one expression | `\|diff\| = 0.0` at all 5 levels |
-| `wsr_spectral_sharpness` | `wsr.py:424` and `wsr.py:428` character-identical | `\|diff\| = 0.0` at all 6 levels — **fixed in PR #23** (see below) |
+| `jawk_bg_fraction` | exactly `1 - wip_score`: preservation and background are the same clamped ratio, and no reader in `src/`, `tests/`, or plotting used the second name | **removed**; `wip_score` stays |
+| `swip.condition_number` | the same variable `cond` as `anisotropy_ratio` in `compute_full_diagnostics` | **removed**; `anisotropy_ratio` stays, and a test pins `ratio == eig[0] / (eig[-1] + eps)` |
+| `swip.bg_variance_fraction` | exactly `1 - ws_variance_fraction` by the eigenvalue partition | **removed**; `ws_variance_fraction` stays |
+| `cmc.cmc_per_position_loss` | the same expression as `cmc_loss` (`masked_sq.sum() / denom`), same units, no reader | **removed**; `cmc_loss` and `cmc_max_inconsistency` stay |
+| `jawp_rank_utilization` | `min(effective_rank / k, 1)` — a normalized transform, not the same unit as `effective_rank`, with boundedness tests | kept, reclassified |
+| `spc_spc_uniform_loss` | `mean(spc_band_residuals)` — an aggregate of a reported vector, i.e. the unweighted baseline the weighted total is compared against; no existing scalar carries it | kept, reclassified |
+| `spc_spc_band_losses` | **not identical**: `band_loss_b = weights[b] * residual_var_b`. The audit measured at initialization, where `softmax(0) * n_bands` makes every weight 1.0; after `adapt_weights_to_predictability()` the two diverge | kept; a test pins `band_losses == weights * residuals` with non-uniform weights |
+| `puc_puc_overconfidence` | `deficit / target_entropy` — a normalized ratio, a different unit from the nats-valued deficit; the timeline plot and three tests read it | kept, reclassified |
+| `gac_gac_running_starved_fraction` | a lagged EMA of `gac_starved_fraction` — a different series by construction, not a second name | kept, reclassified |
+| `wsr_spectral_sharpness` | fixed in PR #23 by reporting `wsr_ambient_sharpness` | fixed |
+
+Mutation verdicts (all killed; each file restored byte-exact): re-adding
+`bg_fraction` fails `test_wip_with_proxy_pca_features`; re-adding either SWIP
+name fails `test_full_diagnostics`; re-adding `cmc_per_position_loss` fails
+`test_consistency_bound`; dropping the weight from `band_loss_b` fails
+`test_band_losses_are_weighted_residuals_not_a_duplicate` **and**
+`test_weights_adapt_after_training`.
 
 ### 4d. Numbers that move and mislead (16) — remove or rename
 
