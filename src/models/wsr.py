@@ -235,19 +235,16 @@ class WorkspaceSharpnessRegularization(TrainingStateGuard):
         return grad_grassmann
 
     def _stiefel_retract(self, Q: torch.Tensor) -> torch.Tensor:
-        """Retract onto St(D,k) via QR decomposition.
+        """Retract onto St(D,k) via QR decomposition with the canonical sign fix.
 
-        .. warning::
-           KNOWN DEFECT (open, not fixed here — it changes what
-           ``mode='sam'`` computes, so it needs a human decision).  The
-           canonical-QR sign fix reads ``diag((Q R)[:k, :])``, but for a
-           (D, k) matrix with D > k that block is NOT triangular, so the
-           signs are effectively arbitrary: the retraction flips
-           individual COLUMNS instead of nudging the subspace by ρ.
-           Measured: for a random orthonormal Q and ρ = 0.05 the
-           retracted Q is ~4.0 away from Q in Frobenius norm instead of
-           ~0.05.  Pinned by ``tests/test_training_state_guards.py::…::
-           test_retraction_preserves_column_orientation`` (xfail).
+        For ``Q = Q_hat R`` (thin QR), scaling the columns of ``Q_hat`` by
+        ``sign(diag(R))`` -- and the rows of ``R`` likewise -- leaves
+        ``Q_hat R`` unchanged and makes ``R`` have a positive diagonal.  The
+        retracted point is then the unique element of the column-sign
+        equivalence class that lies near the input; without the fix, the sign
+        data taken from the wrong block (the k x k leading block of ``Q_hat``,
+        which is not triangular for a tall matrix) multiplies whole columns by
+        +/-1 and moves the point O(1) instead of O(rho).
 
         Args:
             Q: (D, k) approximately orthonormal matrix.
@@ -256,9 +253,10 @@ class WorkspaceSharpnessRegularization(TrainingStateGuard):
             (D, k) orthonormal matrix (nearest on St(D,k)).
 
         """
-        Q_retracted, _ = torch.linalg.qr(Q)
-        # Ensure positive diagonal (canonical QR)
-        signs = torch.sign(torch.diag(Q_retracted[: Q.size(1), :]))
+        Q_retracted, R = torch.linalg.qr(Q)
+        # Canonical QR: the signs come from R's diagonal, NOT from the leading
+        # block of Q_retracted (that block is not triangular when D > k).
+        signs = torch.sign(torch.diag(R))
         signs[signs == 0] = 1
         Q_retracted = Q_retracted * signs.unsqueeze(0)
         return Q_retracted

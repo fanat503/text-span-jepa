@@ -505,21 +505,21 @@ class TestWSRSamNoSilentSubstitute:
         for name, buf in wsr.named_buffers():
             assert torch.equal(buf, before[name]), f"wsr eval mutated {name}"
 
-    @pytest.mark.xfail(
-        reason=(
-            "OPEN DEFECT (not mine to decide): _stiefel_retract picks its "
-            "column signs from diag((Q R)[:k, :]) instead of diag(R). For a "
-            "generic orthonormal Q that block is not triangular, so the "
-            "signs are arbitrary and the retraction permutes/flips columns "
-            "rather than nudging the subspace by rho. mode='sam' therefore "
-            "still perturbs in a near-arbitrary direction even now that the "
-            "real dL/dQ is available. Fixing it changes what "
-            "wsr_mode='sam' computes, so it needs a human decision."
-        ),
-        strict=False,
-    )
     def test_retraction_preserves_column_orientation(self):
-        """Expected property: retract(Q + ε·tangent) stays within ε of Q."""
+        """Retract(Q + ρ·tangent) nudges Q by ρ and never flips a column.
+
+        The old code took its signs from the leading k x k block of Q instead
+        of diag(R); the block is not triangular for a tall matrix, so whole
+        columns came back multiplied by -1. Both the point moved O(1) away
+        (measured 1.087 vs 0.011 here) and diag(Q^T Q_ret) went to -1.
+
+        The subspace assertion is a BOUND, not an identity on purpose: a
+        retraction of Q + ρ·t must move span(Q) by O(ρ) -- t is tangent and
+        therefore orthogonal to Q, so the column space genuinely grows a
+        ρ-sized component. Asserting zero here would forbid the perturbation
+        mode='sam' exists to apply, and it is exactly what let the sign bug
+        pass this test before.
+        """
         from src.models.wsr import WorkspaceSharpnessRegularization
 
         wsr = WorkspaceSharpnessRegularization(embed_dim=32, rho=0.05)
@@ -528,9 +528,26 @@ class TestWSRSamNoSilentSubstitute:
         t = t - Q @ (Q.T @ t)
         t = t / t.norm()
         Q_ret = wsr._stiefel_retract(Q + 0.05 * t)
-        # Sign/rotation-invariant distance: same subspace means 0.
-        assert (Q @ Q.T - Q_ret @ Q_ret.T).norm().item() < 1e-3
+
+        # (1) The result is orthonormal: the retraction lands on St(D,k).
+        orth = Q_ret.T @ Q_ret - torch.eye(4)
+        assert orth.norm().item() < 1e-4, f"not orthonormal: ||Q^T Q - I|| = {orth.norm().item()}"
+
+        # (2) The subspace moved by the perturbation scale, not by an O(1) jump.
+        subspace = (Q @ Q.T - Q_ret @ Q_ret.T).norm().item()
+        assert (
+            subspace < 3 * wsr.rho
+        ), f"subspace moved {subspace}, far beyond the perturbation scale rho={wsr.rho}"
+
+        # (3) No column was flipped: elements moved by O(rho), not by +-1.
         assert (Q - Q_ret).abs().max().item() < 0.2
+
+        # (4) Orientation is preserved column-by-column. With flipped columns
+        #     these cosines are about -1; with the canonical QR they are +1.
+        cosines = torch.diag(Q.T @ Q_ret)
+        assert (
+            cosines > 0.5
+        ).all(), f"column orientation flipped: diag(Q^T Q_ret) = {cosines.tolist()}"
 
 
 # ═══════════════════════════════════════════════════════════════════════════
