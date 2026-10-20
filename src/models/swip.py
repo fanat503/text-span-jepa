@@ -415,12 +415,14 @@ class SWIPModule(nn.Module):
         else:
             alpha = 0.0
 
+        # One name per quantity: `condition_number` was the same variable as
+        # `anisotropy_ratio`, and `bg_variance_fraction` is 1 - ws by the
+        # eigenvalue partition. Both second names were removed; see
+        # docs/METRICS.md 4c.
         return {
             "effective_rank": eff_rank,
-            "condition_number": cond,
             "anisotropy_ratio": cond,
             "ws_variance_fraction": ws_signal / (total.item() + self.eps),
-            "bg_variance_fraction": bg_signal / (total.item() + self.eps),
             "spectral_gap": normalized_gap,
             "spectral_gap_raw": gap,
             "bg_snr": bg_snr,

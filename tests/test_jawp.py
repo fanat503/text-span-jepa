@@ -575,6 +575,7 @@ class TestWorkspaceInformationPreservation:
         assert 0.0 <= wip_score <= 1.0
         assert "method" in wip_info
         assert wip_info["method"] == "wip_theorem"
+        assert "bg_fraction" not in wip_info, "bg_fraction is 1 - wip_score; one name per quantity"
 
     def test_wip_theorem_contradiction_proof(self):
         """Verify WIP theorem: excluding predictive feature increases loss."""

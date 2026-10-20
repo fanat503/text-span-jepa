@@ -474,3 +474,35 @@ class TestSPCConfig:
         loss, info = spc(z, z + torch.randn(2, 768) * 0.1)
         assert loss.item() >= 0
         assert "spc_band_weights" in info
+
+
+class TestSPCMetricSemantics:
+    def test_band_losses_are_weighted_residuals_not_a_duplicate(self):
+        """`spc_band_losses` is w_b * residual_b, not a second copy of it.
+
+        docs/METRICS.md 4c once listed the two keys as an exact duplicate:
+        the audit measured them at initialization, where softmax(0) * n_bands
+        makes every weight exactly 1.0. With non-uniform weights they diverge,
+        so the pair carries two quantities -- the per-band residual variance
+        and its weighted contribution to the loss -- and both stay.
+        """
+        from src.models.spc import SpectralPredictiveCoding
+
+        spc = SpectralPredictiveCoding(embed_dim=32, n_bands=4, init="dct")
+        with torch.no_grad():
+            spc.log_band_weights.copy_(torch.tensor([-1.0, -0.5, 0.5, 1.0]))
+        z = torch.randn(8, 32)
+        loss, info = spc(z, z + torch.randn(8, 32) * 0.1)
+
+        w = torch.tensor(info["spc_band_weights"])
+        r = torch.tensor(info["spc_band_residuals"])
+        bl = torch.tensor(info["spc_band_losses"])
+        assert torch.allclose(
+            bl, w * r, rtol=1e-5, atol=1e-7
+        ), f"band_losses must be weights * residuals: {bl.tolist()} vs {(w * r).tolist()}"
+        assert not torch.allclose(
+            bl, r, rtol=1e-3, atol=1e-6
+        ), "weights are uniform, so this test cannot tell the two keys apart"
+        assert abs(loss.item() - bl.sum().item()) <= 1e-4 * max(
+            abs(loss.item()), 1e-6
+        ), "the reported total loss must be the sum of the per-band losses"

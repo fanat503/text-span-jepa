@@ -234,11 +234,21 @@ class TestSWIPDiagnostics:
         diag = swip.compute_full_diagnostics(z)
 
         assert "effective_rank" in diag
-        assert "condition_number" in diag
+        # One name per quantity (docs/METRICS.md 4c): `condition_number` used
+        # to carry the same variable as `anisotropy_ratio`, and
+        # `bg_variance_fraction` was exactly 1 - ws_variance_fraction. The
+        # second names are removed, and the kept names still carry the meaning.
+        assert "condition_number" not in diag, "condition_number duplicates anisotropy_ratio"
         assert "anisotropy_ratio" in diag
         assert "ws_variance_fraction" in diag
-        assert "bg_variance_fraction" in diag
+        assert (
+            "bg_variance_fraction" not in diag
+        ), "bg_variance_fraction is 1 - ws_variance_fraction"
         assert "spectral_gap" in diag
+        eigs = diag["eigenvalues"]
+        assert (
+            abs(diag["anisotropy_ratio"] - eigs[0] / (eigs[-1] + swip.eps)) < 1e-3
+        ), "anisotropy_ratio no longer equals the condition number it replaced"
         assert "bg_snr" in diag
         assert "power_law_alpha" in diag
         assert "eigenvalues" in diag

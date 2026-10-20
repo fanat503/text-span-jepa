@@ -482,7 +482,6 @@ class CrossMaskConsistency(nn.Module):
             # step where CMC did not run is distinguishable from a step where
             # it ran and found perfect agreement (`cmc_loss` is 0.0 on both).
             loss = torch.zeros((), device=device)
-            per_pos_loss = 0.0
             max_inconsistency = 0.0
         else:
             # Optionally stop gradient through primary prediction
@@ -498,9 +497,9 @@ class CrossMaskConsistency(nn.Module):
             loss = masked_sq.sum() / denom
 
             with torch.no_grad():
-                # Per-position mean loss (overlap only) and the WORST position,
-                # which is what the stability theorem wants and the mean is not.
-                per_pos_loss = (masked_sq.sum() / denom).item()
+                # The WORST position, which is what the stability theorem
+                # wants; the mean is already reported as `cmc_loss` above, so
+                # a second key for it (`cmc_per_position_loss`) was removed.
                 max_inconsistency = masked_sq.max().item()
 
                 alpha = 0.01
@@ -519,7 +518,6 @@ class CrossMaskConsistency(nn.Module):
             "cmc_gate_ratio": gate_ratio,
             "cmc_gate_open": skip_reason == "",
             "cmc_skip_reason": skip_reason,
-            "cmc_per_position_loss": per_pos_loss,
             "cmc_max_inconsistency": max_inconsistency,
             "cmc_skipped": bool(skip_reason),
             "cmc_running_consistency": self.running_consistency.item(),
