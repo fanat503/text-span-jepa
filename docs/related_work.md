@@ -397,22 +397,19 @@ Edelman & Lewen describe. The tangent projection
 `train.py:1433` now calls `project_tangent_gradient()` *before* the optimizer step
 so it is not a dead post-step write.
 
-**Wrong, and flagged in-tree.** `WorkspaceSharpnessRegularization._stiefel_retract`
-(`wsr.py:242-247`) takes the QR factor and then applies "canonical" sign
-normalization read from `diag(Q_retracted[:k, :])`. For a `(D, k)` matrix with
-`D > k` that leading block is **not triangular**, so the signs are arbitrary and
-the procedure flips individual columns instead of nudging the subspace by `ρ`. The
-module's own docstring records the measurement — retracted `Q` sits ~4.0 away
-from `Q` in Frobenius norm where `ρ = 0.05` should put it ~0.05 — and
-`tests/test_training_state_guards.py` pins it as `xfail`
-(`test_retraction_preserves_column_orientation`). A retraction with wrong sign
-selection is not a retraction; the defect is real, measured, and open pending an
-owner decision. **`wsr_mode: sam` therefore cannot be presented as a working
-SAM-on-the-Grassmann contribution.** In the same run `mode="sam"` is also
-degenerate for a second reason: `L_perturbed` and `L_current` are both computed
-under `torch.no_grad()` (`wsr.py:500-528`), so the returned scalar carries no
-gradient regardless. Measured: `wsr sam-mode requires_grad: False, sharpness
-0.0`. The shipped default is `wsr_mode: gradient`.
+**Was wrong; fixed 2026-10-20.** `WorkspaceSharpnessRegularization._stiefel_retract`
+took QR's "canonical" signs from `diag(Q_retracted[:k, :])`; for a `(D, k)`
+matrix with `D > k` that block is not triangular, so whole columns were
+multiplied by ±1 (measured at ρ=0.05: `diag(Qᵀ Q_ret) = -1`,
+`‖Q − Q_ret‖_F = 1.09`). The signs now come from `diag(R)` — the textbook
+convention — and the property test is no longer an xfail (elementwise move
+0.0108, positive column cosines). Note that the `√2·ρ` subspace distance the
+earlier version of this paragraph blamed on QR is geometry: the polar
+retraction measures the same value, because both preserve the column space of
+`Q + Δ`; see `docs/THEORY_AND_PROOFS.md` D-WSR-3. `mode='sam'` still returns a
+**detached** scalar (diagnostic only; no shipped config selects it — the
+default is `wsr_mode: gradient`), so it should not be presented as a training
+mechanism.
 
 **Sign-ambiguous, low severity.** The QR fallbacks in `jawp.py:312`, `pcr.py:307`
 and `spc.py:284` call `torch.linalg.qr(Q)` and keep `Q` without normalizing `R`'s
@@ -448,9 +445,10 @@ Collected so a later draft cannot reintroduce them by accident.
    background"** (`swip.py:110`) is an unsupported universal claim over a
    literature I have not exhaustively surveyed. Soften to "to our knowledge" or
    cut.
-8. **`wsr_mode: sam` cannot be presented as a working mechanism.** The retraction
-   sign selection is wrong (measured, `xfail`-pinned) and the loss carries no
-   gradient.
+8. **`wsr_mode: sam` is a diagnostic, not a trainable mechanism.** Its
+   retraction sign selection was fixed 2026-10-20 (see above), but the
+   returned scalar is still detached (`Q.new_tensor`), so it carries no
+   gradient; the shipped default is `wsr_mode: gradient`.
 9. **PUC's executed loss cannot be presented as the theorem.** It is a ReLU'd
    log-det barrier, not the Lagrangian-dual object. **The older, stronger
    version of this item — "with the shipped defaults its loss has

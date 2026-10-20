@@ -223,25 +223,36 @@ read-only" unenforceable by convention alone.
 
 ---
 
-## D-010 One `xfail` exists and is waiting on a human decision
+## D-010 `wsr_mode=sam`'s retraction sign selection was wrong — FIXED 2026-10-20
 
-**Problem.** The project rules forbid skip, xfail, `--no-verify`, and weakening
-tests. One xfail is present in the branch:
-`TestWSRSamNoSilentSubstitute::test_retraction_preserves_column_orientation`.
+**Problem.** `_stiefel_retract` applied a "canonical" QR sign correction read
+from `diag(Q_retracted[:k, :])`. For a `(D, k)` matrix with `D > k` that block
+is not triangular, so the signs were arbitrary: whole columns came back
+multiplied by -1. Measured at D=32, k=4, rho=0.05: `diag(Qᵀ Q_ret) = [-1,-1,-1,-1]`
+and `‖Q − Q_ret‖_F = 1.09`.
 
-**Context.** `wsr_mode=sam` selects column signs from a block that is not
-triangular for a `(D, k)` matrix with `D > k`, so the retraction flips
-individual columns: for a random orthonormal Q with `rho=0.05` the retracted Q
-lands 4.0 away in Frobenius norm instead of about 0.05. The test is real and
-currently unfixable without deciding what `wsr_mode=sam` should compute, which
-is a research decision rather than a bug fix.
+**Fixed.** The signs now come from `diag(R)` — the textbook canonical QR
+convention: scale the columns of `Q` and the rows of `R` by `sign(diag(R))`.
+The product `Q R` is unchanged and `R` gets a positive diagonal. The xfail is
+gone; the test asserts four invariants (orthonormality, a `3*rho` subspace
+bound, elementwise `max|Q − Q_ret| < 0.2`, and `diag(Qᵀ Q_ret) > 0.5`).
+Measured after the fix: elementwise max 0.0108, `diag = [1,1,1,1]`.
 
-**Status.** Left in place, uncommented, unskipped, and reported. Not touched
-silently, which is what the rules require.
+**Mutation verdict.** Reverting the sign source to the leading-block expression
+fails `test_retraction_preserves_column_orientation` (elementwise 0.86 > 0.2).
 
-**Needs:** a decision from the owner. The options are (a) fix the sign
-selection and un-xfail, (b) redefine `sam` to match what the code does, or (c)
-remove the mode and fail loudly if anyone selects it.
+**A second claim in `THEORY_AND_PROOFS.md` was wrong and is corrected there.**
+The `√2·rho` subspace distance is not an artifact of QR: the polar retraction
+produces the SAME subspace distance (0.070686921 vs 0.070686899) because both
+preserve the column space of `Q + Δ`. For `QᵀΔ = 0` the projector moves by
+`QΔᵀ + ΔQᵀ`, whose Frobenius norm is exactly `√2‖Δ‖`; the point distance is
+`rho` for both retractions (0.0499874). "QR is not a retraction" was wrong.
+
+**Still true, separate:** `mode='sam'` returns a detached scalar
+(`Q.new_tensor`), so it is a diagnostic, not a training signal. No shipped
+config selects it (`wsr_mode` defaults to `gradient`). Making `sam`
+differentiable costs a second forward through the loss; that is a design
+decision, not part of this fix.
 
 ---
 

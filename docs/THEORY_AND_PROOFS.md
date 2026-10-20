@@ -987,33 +987,31 @@ reverting the wsr.py change makes both fail immediately with
 `KeyError('wsr_ambient_sharpness')` — the ambient total is the only key the fix
 adds, and it is the quantity every assertion now names.
 
-**D-WSR-3 — the `mode='sam'` retraction does not return within `ρ`.** This is
-the open defect marked by the `strict=False` xfail at
-`tests/test_training_state_guards.py:508-533`. I measured it over 12 seeds
-(D=32, k=4, ρ=0.05):
+**D-WSR-3 — FIXED 2026-10-20: the `mode='sam'` retraction's sign selection.**
+The defect was the sign source: `_stiefel_retract` read
+`diag(Q_retracted[:k, :])`, a non-triangular block for a tall matrix, so whole
+columns were multiplied by ±1. Measured over 12 seeds (D=32, k=4, ρ=0.05):
+`‖Q − retract(Q + ρt)‖_F` was 3.4639…3.9997 and `diag(Qᵀ Q_ret)` was −1 on
+every column. The fix reads `sign(diag(R))` and scales the Q columns by it —
+the canonical QR convention — after which the same measurement gives
+`‖Q − Q_ret‖_F = 0.04999 ≈ ρ`, elementwise max 0.0108, and
+`diag(Qᵀ Q_ret) = +1`. The test is no longer an xfail; it asserts
+orthonormality, a `3ρ` subspace bound, elementwise `< 0.2`, and positive
+column cosines. Mutation verdict: restoring the leading-block sign source
+fails it (elementwise 0.86 > 0.2).
 
-```
-‖Q − retract(Q + ρt)‖_F        : 3.4639 … 3.9997   (all 12 seeds)
-‖QQᵀ − Q_r Q_rᵀ‖_F            : 0.0707              (all 12 seeds)
-seeds where the subspace moved more than ρ : 12/12
-```
-
-The diagnosis in the xfail is mechanistically right — the canonical-QR sign fix
-reads `diag(Q_retracted[:k, :])` (`wsr.py:244`), a non-triangular block, where it
-should read `diag(R)`. But **I should correct the severity description**: on these
-12 seeds the sign vector is essentially uniform (a global `±`), which is
-*harmless for the subspace* — the subspace distance stays at `0.0707` — while the
-Frobenius distance is near the maximum `2√k = 4.0`. The "flips individual
-COLUMNS … in a near-arbitrary direction" phrasing describes a failure mode these
-seeds do not exhibit.
-
-What *does* fail on all 12 seeds is the ρ-semantics: a correct polar/SVD
-retraction is nonexpansive in Frobenius, so `‖QQᵀ − R Rᵀ‖_F ≤ ‖ρt‖_F = ρ`. The
-measured `0.0707 = √2·ρ` exceeds that on every seed. **QR is not a retraction.**
-
-**Consequence for a reader:** in `mode='sam'`, `wsr_sharpness` is
-`L(Q_pert) − L(Q)` where `Q_pert` was displaced by up to `√2·ρ`, not `ρ`. The
-sharpness is not the sharpness the theorem defines.
+**Correction to what this entry used to claim.** It argued that the
+`√2·ρ = 0.0707` subspace distance showed "QR is not a retraction" and that a
+polar/SVD retraction would keep it `≤ ρ`. Both halves are wrong, by
+measurement: polar and QR return **identical** subspace distances
+(0.070686921 vs 0.070686899) because any column-space-preserving retraction
+lands on `span(Q + ρt)`; the point distance is `ρ` for both (0.0499874). The
+`√2` is the first-order chordal projector distance: for `QᵀΔ = 0`,
+`P(Q+Δ) − P(Q) ≈ QΔᵀ + ΔQᵀ`, whose Frobenius norm is `√2‖Δ‖`. The theorem's
+`‖Δ‖_F ≤ ρ` is an ambient tangent norm, which the step satisfies exactly, and
+`L(retract(Q+Δ)) − L(Q) = L(Q+Δ) − L(Q) + O(ρ²)` by retraction consistency.
+The measured sharpness is therefore the theorem's quantity to first order; the
+`√2` belongs to a different metric.
 
 **D-WSR-4 — Theorem 1's step 3 is unsound.** `wsr.md:42-43`:
 
@@ -1198,9 +1196,6 @@ naming that other tree. Every script asserts the resolved path before running.
   A green suite would not have detected D-JAWP-1, D-SWIP-1 or D-WSR-2 — three of
   the findings here are precisely about numbers nothing asserts.
 
-**Open, escalated, still the owner's decision:** D-WSR-3 (`_stiefel_retract`'s
-sign convention; `strict=False` xfail at
-`tests/test_training_state_guards.py:508`), and the WSD/JAWP opposition
+**Open, escalated, still the owner's decision:** the WSD/JAWP opposition
 (D-WSD-6 and the 2026-10-08 addenda), whose five resolution options are in
-`proofs/wsd.md:255-300`. Neither is a defect this document recommends fixing;
-both are decisions.
+`proofs/wsd.md:255-300`. (D-WSR-3 is now fixed — see the D-WSR-3 entry above.)
