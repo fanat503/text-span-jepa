@@ -379,7 +379,7 @@ model:
   sigreg_n_integration_points: 17
   sigreg_sigma: 1.0
 
-  # J-Space: Workspace metrics (Anthropic, 2026)
+  # J-Space: Workspace metrics (Gurnee et al., 2026)
   jspace_variance_threshold: 0.10
   jspace_k_workspace: 25
 

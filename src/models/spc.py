@@ -37,7 +37,7 @@
 #      but current losses conflate "hard to predict" with "noise"
 #    - Ansuini et al. (NeurIPS 2019): Representations become increasingly
 #      low-dimensional through layers — high-freq info lost first
-#    - Anthropic (2026): ~10% of variance in J-space — most info is
+#    - Gurnee et al. (2026): ~10% of variance in J-space — most info is
 #      in a small spectral band, not uniformly distributed
 #
 #  ═══════════════════════════════════════════════════════════════════════════

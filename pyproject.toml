@@ -34,14 +34,7 @@ addopts = "-v --tb=short"
 line-length = 100
 target-version = "py39"
 lint.ignore = ["BLE001", "RUF059", "PLR0402", "S110", "S112", "RUF012", "RUF034", "B008", "I001", "F841", "RUF022"]
-# Local scratch is excluded from linting: one-shot measurement scripts and
-# working notes, not source. Linting them reddened the gate for a change set
-# whose actual source was clean.
-extend-exclude = [".agent-notes"]
 
 [tool.black]
 line-length = 100
 target-version = ["py39"]
-# Same exclusion for black: a scratch file cannot fail CI's format check while
-# the source is clean. Black takes a single regex STRING here, not a list.
-extend-exclude = "agent-notes/"

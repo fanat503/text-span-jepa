@@ -1,7 +1,7 @@
 # Copyright 2026 Slyatski Ilya
 # Licensed under the Apache License, Version 2.0
 #
-# J-Space Metrics: Workspace formation grounded in Anthropic's Jacobian Lens
+# J-Space Metrics: Workspace formation grounded in the Jacobian Lens of Gurnee et al. (2026)
 #
 # Reference: Gurnee et al. (2026) arXiv:2607.15495
 # Key findings: LLMs have a privileged subspace (J-space) where
@@ -15,7 +15,7 @@ from torch import nn
 
 
 class JSpaceMetrics(nn.Module):
-    """J-Space workspace metrics grounded in Anthropic's Jacobian Lens paper."""
+    """J-Space workspace metrics grounded in the Jacobian Lens paper (Gurnee et al., 2026)."""
 
     def __init__(self, variance_threshold=0.10, k_workspace=25):
         super().__init__()

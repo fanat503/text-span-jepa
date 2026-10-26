@@ -6,7 +6,7 @@
 # Validates the JAWP workspace claim: that learned Q spans the same
 # subspace as the "true workspace" recovered by an SAE decomposition.
 #
-# Anthropic (Gurnee et al., 2026, arXiv:2607.15495): J-space is the
+# Gurnee et al. (2026, arXiv:2607.15495): J-space is the
 # subspace where SAE features with high downstream relevance concentrate.
 #
 # Procedure:

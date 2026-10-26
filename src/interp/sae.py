@@ -4,7 +4,7 @@
 # Sparse Autoencoder for mechanistic interpretability of JEPA representations
 # Architecture from Bricken et al. (2023) "Towards Monosemanticity"
 # TopK activation from Gao et al. (2024) "Scaling and Evaluating Sparse Autoencoders"
-# Dead feature resampling from Anthropic's dictionary learning
+# Dead feature resampling from Bricken et al. (2023), "Towards Monosemanticity"
 
 import math
 
@@ -98,7 +98,7 @@ class SparseAutoencoder(nn.Module):
         self.register_buffer("total_samples", torch.tensor(0, dtype=torch.long))
         self._steps_since_resample = 0
 
-        # Initialize: decoder columns on unit sphere (Anthropic pattern)
+        # Initialize: decoder columns on unit sphere (Bricken et al., 2023 convention)
         #
         # The laws are the stock ones, driven from a private generator instead
         # of the process-global stream: `nn.Linear.reset_parameters` is
@@ -118,7 +118,7 @@ class SparseAutoencoder(nn.Module):
             # activation readable as the magnitude of that contribution is the
             # column norm -- `dim=0`. Normalising over `dim=1` instead
             # constrains each *input coordinate* across all features, which is
-            # not a property the Anthropic pattern has any use for.
+            # not a property that convention has any use for.
             self.decoder.weight.data = F.normalize(self.decoder.weight.data, dim=0)
             nn.init.zeros_(self.decoder.bias)
 
@@ -183,7 +183,7 @@ class SparseAutoencoder(nn.Module):
     def resample_dead_features(self, generator=None):
         """Resample dead features that haven't fired recently.
 
-        From Anthropic's dictionary learning: dead features get
+        From Bricken et al. (2023): dead features get
         reinitialized from encoder weights of the most active features.
 
         Args:
@@ -308,7 +308,7 @@ class SAETrainer:
 
         self.optimizer.zero_grad()
         loss.backward()
-        # Gradient clipping (Anthropic pattern)
+        # Gradient clipping (standard practice)
         torch.nn.utils.clip_grad_norm_(self.sae.parameters(), 1.0)
         self.optimizer.step()
         self.scheduler.step()

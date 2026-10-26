@@ -2,7 +2,7 @@
 # Licensed under the Apache License, Version 2.0
 """QK-normalisation: per-head RMS normalisation of q and k before the dot product.
 
-From the RoboJEPA literature scan (docs/RESEARCH_BACKLOG.md item 1; arXiv
+From the RoboJEPA literature scan (arXiv
 2610.10515): "We found QK-normalization to be of particular importance for
 training stability when scaling the dataset size and the model size."
 
