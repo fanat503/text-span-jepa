@@ -380,10 +380,44 @@ finite-radius SAM-style diagnostic in the opt-in mode).
 | **BYOL** (Grill et al., NeurIPS 2020) | EMA target + predictor + stop-gradient, no negatives, no batch norm | Nothing structural. The repo's non-collapse strategy is VICReg + SIGReg + target centering, not BYOL's implicit bias. |
 | **SimSiam** (Chen & He, CVPR 2021) | Stop-gradient on the primary prediction in CMC (`cmc.py:460-463`) | Nothing structural. |
 | **SigLIP** (Zhai et al., 2023) | **Nothing.** There is no sigmoid pairwise loss, no logit scale, no negative set anywhere in `src/models/` or `src/train.py`. | This repo is on the no-negatives side entirely. There is no sigmoid-loss variant to compare against, so no claim of that kind can be made in either direction. |
-| **LeJEPA / SIGReg** (Balestriero & LeCun) | `SIGReg` implemented (`sigreg.py:33-121`); `WeakSIGReg`; `VISReg` | Shipped **off**: `lambda_sigreg: 0.0` in `defaults.yaml`. `VISReg` is an undocumented 2026 construction with no cited source — do not cite it. |
+| **LeJEPA / SIGReg** ([arXiv:2511.08544](https://arxiv.org/abs/2511.08544), preprint) | `SIGReg` implemented (`sigreg.py:33-121`); `WeakSIGReg`; `VISReg` | Shipped **off**: `lambda_sigreg: 0.0` in `defaults.yaml`. The preprint's SIGReg objective is prior art, not a result of this repository. `VISReg` is an undocumented 2026 construction with no cited source — do not cite it. |
 | **data2vec 2.0** (Baevski et al.) | Target centering + layer-norm on the target (`jepa.py:671-673`), tied token regression head (`decoder.py:1-6`) | The decoder is the one place this repo predicts in token space. |
 | **SAM** (Foret et al., ICLR 2021) | WSR's sharpness notion (§3.16) | Manifold-valued parameter instead of a flat parameter vector. |
 | **Absil, Edelman & Lewen (2008)**; **Edelman, Arias & Smith (1998)** | SVD retraction, tangent projection, principal angles, chordal Grassmann distance — used correctly in JAWP/PCR/SPC | Nothing. These are cited correctly in the source. See §5 for the one place a retraction is *not* correct. |
+
+### 4.1 Direct language and sequence precedents (checked 2026-10-26)
+
+The contribution cannot be framed as "the first JEPA for language" or as
+"JEPA improves GLUE" without qualification. The closest published work already
+contains both text-facing JEPA objectives and sequence-domain probes:
+
+| Work and status | Actual overlap | Consequence for Text-Span JEPA |
+|---|---|---|
+| [LLM-JEPA, ICLR 2026 Poster](https://openreview.net/forum?id=GbXKPo9QfH) | Adds latent prediction between naturally paired text/code views while retaining autoregressive language loss. | Direct language prior art, but it relies on paired views; distinguish our single-corpus span-masking setup and do not claim the first language JEPA. |
+| [C-JEPA, NeurIPS 2024 Spotlight](https://neurips.cc/virtual/2024/poster/95692) | Combines image JEPA with VICReg variance/covariance terms to address collapse and mean drift. | `lambda_variance`/`lambda_covariance` and the VICReg baseline already cover this family; their presence is not a novel anti-collapse contribution here. |
+| [T-JEPA, ICLR 2025](https://proceedings.iclr.cc/paper_files/paper/2025/file/93f01c8d9b355d7bbe3f353b44ccde66-Paper-Conference.pdf) | Predicts latent representations of masked feature subsets in tabular samples; reports learned regularization tokens to escape collapse. | Relevant to masked-target design and collapse diagnostics, but tabular tokens are not evidence that a text `[REG]` token will help. Any such port needs its own ablation. |
+| [TC-JEPA, ICML 2026 Poster](https://icml.cc/virtual/2026/poster/62927) | Conditions a visual JEPA predictor on image captions using sparse text-to-patch cross-attention. | Shows that side information can reduce target uncertainty; it is not a text-encoder or single-view language baseline. |
+| [TD-JEPA, ICLR 2026](https://proceedings.iclr.cc/paper_files/paper/2026/file/3d158f054ff0cb83397367234899db07-Paper-Conference.pdf) | Learns multi-step latent dynamics for offline, reward-free control. | Relevant to long-horizon prediction as an analogy, but its action/task-conditioned MDP guarantees do not transfer to static text pretraining. |
+
+Two especially close sequence/text results are not main-track conference papers
+and must be labelled accordingly. [ProteinJEPA (arXiv:2605.07554)](https://arxiv.org/abs/2605.07554)
+was presented in an ICML 2026 workshop program: it reports that masked-position
+MLM+JEPA, while retaining token-level MLM, is stronger than its all-position
+variant on a protein-sequence suite; JEPA-only often collapses. This motivates a
+masked-versus-all-target ablation, not a claim that protein results transfer to
+natural language. [Predict and Reconstruct (arXiv:2606.05173)](https://arxiv.org/abs/2606.05173)
+is a preprint on English Wikipedia and five GLUE tasks; it reports similar
+frozen linear-probe accuracy for hybrid and MLM encoders while finding geometric
+differences. It is direct prior art against a broad "latent prediction raises
+text probe accuracy" claim and should be compared, not silently omitted.
+
+SIGReg's closest theory paper, [LeJEPA (arXiv:2511.08544)](https://arxiv.org/abs/2511.08544),
+is also an arXiv preprint. This repository implements SIGReg but ships it with
+`lambda_sigreg: 0.0`; it is a relevant comparator, not evidence for this
+model's results. The practical novelty question therefore remains empirical:
+which *specific* span-prediction design improves a pre-registered downstream
+metric over compute-matched MLM/data2vec controls, with matched pooling and
+multi-seed uncertainty? This repository currently has no such measured result.
 
 ---
 
