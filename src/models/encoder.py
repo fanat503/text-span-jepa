@@ -32,9 +32,8 @@ class DropPath(nn.Module):
 class QKNorm(nn.Module):
     """QK-normalisation: RMS-normalise ``q`` and ``k`` per head, before the dot product.
 
-    Added from the RoboJEPA literature scan (docs/RESEARCH_BACKLOG.md item 1,
-    arXiv:2610.10515: "We found QK-normalization to be of particular importance
-    for training stability when scaling the dataset size and the model size.").
+    Based on RoboJEPA (arXiv:2610.10515), which reports that QK-normalization
+    is particularly important for training stability when scaling model and dataset size.
 
     WHY THIS IS NOT A DUPLICATE OF `norm_layer`
     -------------------------------------------

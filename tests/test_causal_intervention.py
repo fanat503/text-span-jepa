@@ -399,7 +399,8 @@ class TestPermutationNull:
             scales, res["probe_values"], 199, torch.Generator().manual_seed(0)
         )
         assert res["p_value"] == pytest.approx(expected_p)
-        assert res["spearman"] == pytest.approx(abs(res["predictability"]))
+        # `spearman` preserves association direction; predictability is its magnitude.
+        assert abs(res["spearman"]) == pytest.approx(res["predictability"])
 
     def test_constant_signal_is_not_significant(self, ids, direction):
         model = MockModel().eval()
@@ -533,32 +534,45 @@ class TestScaleMatchedComparison:
         # one intervened forward per direction per model, plus the null sample
         assert res["n_hook_calls"] == 2 * (1 + 8)
 
-    def test_a_null_tie_is_not_evidence(self):
-        """A tie in the discrete null must not be called a win on magnitude.
+    def test_a_null_tie_is_not_evidence(self, monkeypatch):
+        """Equal null evidence stays a tie even when observed effects differ.
 
-        Self-contained on purpose: the construction order (models, then ids, then
-        probe weight, then direction) fixes the draws, and `n_random_directions=1`
-        makes the null p-value coarse (0.5 or 1.0), which is what produces the
-        tie. The old rule `jepa_effect > base_effect` called this a JEPA win
-        purely on magnitude; a tie in the null is not evidence for either model.
+        This is a unit test of the verdict rule, not a stochastic collapse test:
+        the real effect and null calculations are covered above. Injecting the
+        sufficient statistics isolates the decision from backend-specific random
+        initialisation and makes the intended counterexample exact.
         """
-        seed_everything(0)
         a, b = MockModel().eval(), MockModel().eval()
-        ids = torch.randint(0, VOCAB, (2, SEQ))
-        w = nn.functional.normalize(torch.randn(EMBED_DIM), dim=0)
-        d = nn.functional.normalize(torch.randn(EMBED_DIM), dim=0)
+        comparison = CausalIntervention(a, b)
 
-        res = CausalIntervention(a, b).ablation_comparison(
+        def controlled_stats(model, _ids, directions, _probe, _layer, _null_dirs):
+            effect = 0.5 if model is a else 0.1
+            stats = {
+                name: {
+                    "effect": effect,
+                    "effect_z": 0.0,
+                    "effect_p": 0.5,
+                    "n_hook_calls": 1,
+                    "n_null_calls": 1,
+                }
+                for name in directions
+            }
+            return stats, 1
+
+        monkeypatch.setattr(comparison, "_ablation_stats", controlled_stats)
+        ids = torch.zeros((2, SEQ), dtype=torch.long)
+        direction = torch.zeros(EMBED_DIM)
+        res = comparison.ablation_comparison(
             ids,
-            {"d": d},
-            lambda h: (h @ w).mean(),
+            {"d": direction},
+            lambda h: h.mean(),
             layer_idx=0,
             n_random_directions=1,
             seed=0,
         )["d"]
 
-        # a 5x magnitude gap, yet the nulls tie
-        assert res["jepa_ablation_effect"] > 3 * res["baseline_ablation_effect"]
+        assert res["jepa_ablation_effect"] == 0.5
+        assert res["baseline_ablation_effect"] == 0.1
         assert res["jepa_effect_p"] == res["baseline_effect_p"]
         assert res["jepa_more_predictable"] is False
 

@@ -67,6 +67,3 @@ V0.*.txt
 FULL_MODEL_CODE_*.md
 AUDIT_REPORT_*.md
 
-# Local scratch, never source: one-shot measurement scripts and working notes.
-.agent-notes/
-

@@ -438,9 +438,13 @@ def _run_child(threads: int, deterministic: bool, seed: int = 7, steps: int = 4)
     env = {**os.environ, "OMP_NUM_THREADS": str(threads), "MKL_NUM_THREADS": str(threads)}
     if deterministic:
         env[DETERMINISTIC_ENV] = "1"
+        env.pop(NUM_THREADS_ENV, None)
     else:
         env.pop(DETERMINISTIC_ENV, None)
-    env.pop(NUM_THREADS_ENV, None)
+        # PyTorch wheels can ignore OMP_NUM_THREADS when their intra-op pool is
+        # initialized under a constrained runner. Exercise the project's
+        # supported override, which calls torch.set_num_threads explicitly.
+        env[NUM_THREADS_ENV] = str(threads)
     script = (
         f"REPO = {str(REPO)!r}\n"
         f"WORKTREE = {str(REPO)!r}\n"
@@ -518,7 +522,7 @@ class TestEndToEndThreadCount:
         would be two identical runs and its agreement would prove nothing."""
         assert child_runs[False][1]["threads"] == 1
         assert child_runs[False][2]["threads"] == 2, (
-            "a child launched with OMP_NUM_THREADS=2 ran on "
+            f"a child launched with {NUM_THREADS_ENV}=2 ran on "
             f"{child_runs[False][2]['threads']} threads, so the 1-vs-2 comparison "
             "is not testing what it claims to test on this host"
         )

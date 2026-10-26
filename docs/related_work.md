@@ -357,13 +357,16 @@ first-order sharpness proxy, which is the standard SAM approximation (Foret et
 al. 2021). Transplanting SAM to a manifold-valued parameter is a natural
 extension and is described as such in manifold-optimization work.
 
-Two honesty items. First, minimizing `‖grad_Gr L‖` is not the same objective as
-minimizing sharpness: it asks for `Q` to be a stationary point of the workspace
-loss, not for a flat neighbourhood. The gradient-mode term is a pull toward
-stationarity wearing SAM's name. Second, `mode="sam"` does not work — see §5.
+The two modes have different roles. The shipped `gradient` mode uses the
+one-step-lagged `dL/dQ` captured by the trainer and projects it through the live
+workspace `Q`; its loss therefore backpropagates to `Q`. It penalizes a
+first-order tangent-gradient norm (a stationarity surrogate), not finite-radius
+SAM sharpness. In `mode="sam"`, the module evaluates `L(Q+Δ)-L(Q)` under
+`no_grad` and returns a detached scalar; it is a diagnostic, not a training
+objective, and no shipped config selects it. See §5.
 
-**RECOMBINATION** (SAM) whose executed default is a different objective from its
-documented one.
+**RECOMBINATION** (a first-order stationarity penalty in the default mode; a
+finite-radius SAM-style diagnostic in the opt-in mode).
 
 ---
 

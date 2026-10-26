@@ -17,7 +17,7 @@
 #    2. Background directions (predictable but not workspace → not useful)
 #    3. Exogenous features (Pendharkar et al., 2026: JEPA discards these!)
 #
-#  Anthropic (July 2026, arXiv:2607.15495): only ~10% of activation variance
+#  Gurnee et al. (July 2026, arXiv:2607.15495): only ~10% of activation variance
 #  is in J-space.
 #  Pendharkar et al. (June 2026, arXiv:2606.30068): JEPA objectives
 #  leave exogenous control-relevant features near chance accuracy.
@@ -163,7 +163,7 @@
 #  One import, two extra lines. Works with any predictor architecture,
 #  any JEPA variant, any modality (text, image, video, audio).
 #  The only hyperparameter is k_end (workspace dimension).
-#  We recommend k_end = D // 10 (from Anthropic's J-space finding).
+#  We recommend k_end = D // 10 (from the J-space finding of Gurnee et al., 2026).
 #
 #  IMPORTANT: z_target must come from a frozen encoder (no_grad).
 #  JAWP detaches z_target internally to enforce this.

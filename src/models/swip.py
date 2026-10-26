@@ -131,7 +131,7 @@
 #    loss_swip = swip(z, workspace_Q=Q)
 #
 #  Hyperparameters:
-#    - k_workspace: workspace dimension (default D//10, from Anthropic J-space)
+#    - k_workspace: workspace dimension (default D//10, from Gurnee et al.'s J-space finding)
 #    - target_variance: background noise floor σ² (default 1.0)
 
 import math

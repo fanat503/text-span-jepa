@@ -29,7 +29,7 @@
 #    - TD-JEPA (ICLR 2026 Oral): multi-step prediction with SEPARATE
 #      encoders significantly outperforms single-step, precisely because
 #      it avoids this bottleneck
-#    - Anthropic (2026): only ~10% of activation variance is in J-space,
+#    - Gurnee et al. (2026): only ~10% of activation variance is in J-space,
 #      meaning 90% of information is lost through standard prediction
 #
 #  ═══════════════════════════════════════════════════════════════════════════

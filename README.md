@@ -349,16 +349,31 @@ A single run is a sample of size one. `--seed` overrides `meta.seed` (and the
 legacy top-level `seed`) without editing the YAML; `0` is a valid seed:
 
 ```powershell
+# Primary/reference configuration: three seeds.
 foreach ($s in 1..3) {
   & $PY -m src.train --fname config/scaling/small_100m.yaml `
     --seed $s --output_dir "runs/small_100m_s$s"
 }
+
+# Ablation arm: two seeds.
+foreach ($s in 1..2) {
+  & $PY -m src.train --fname config/ablations/no_cgn.yaml `
+    --seed $s --output_dir "runs/no_cgn_s$s"
+}
 ```
 
-Each run dumps its resolved config, including the seed it actually used, so
-`scripts/plotting_engine.py` draws a mean ± 1σ band for a group only when at
-least two distinct measured seeds exist. A single-seed group is listed in the
-manifest and never drawn as a zero-width band.
+**Seed-count target:** three runs for each primary/reference and baseline cell,
+two for each ablation cell. `src/utils/seed_stats.py` implements the final-cell
+sample standard deviation and Student-t interval once per-seed values are
+collected.
+
+**Important tooling limitation:** the loops above produce separate run folders,
+but the current `results_apparatus`/`plotting_engine` collectors do not discover
+arbitrary `--output_dir` siblings or aggregate them into a paper table. The
+seed-band plotter currently groups distinct seed-twin config records, while
+these loops do not create those records. Do not claim that this snippet
+reproduces seed bands or aggregate tables; a seed-manifest/collector integration
+is still needed before end-to-end multi-seed figures are reproducible.
 
 For final scalar metrics, `src/utils/seed_stats.py` is the paper-table
 convention: sample std (`ddof=1`) and a two-sided Student-t 95% interval, with

@@ -109,6 +109,40 @@ class TestWSRGrassmannGradient:
         assert norm < 1e-5, f"Q-aligned gradient should project to zero, got norm {norm}"
 
 
+class TestWSRTrainingSignal:
+    """Pin the distinction between the trainable surrogate and SAM diagnostic."""
+
+    def test_gradient_mode_backpropagates_through_live_workspace(self):
+        wsr = WorkspaceSharpnessRegularization(
+            embed_dim=2, rho=0.05, eta=1.0, warmup_steps=0, mode="gradient"
+        )
+        Q = nn.Parameter(torch.tensor([[1.0], [0.0]]))
+        # The same one-step-lagged gradient the trainer supplies after backward.
+        wsr.set_lagged_gradient(torch.tensor([[1.0], [1.0]]))
+
+        loss, info = wsr(Q, step=1)
+        assert info["wsr_grad_source"] == "lagged"
+        assert loss.requires_grad
+        loss.backward()
+        assert Q.grad is not None
+        assert Q.grad.norm().item() > 0.0
+
+    def test_sam_mode_returns_a_detached_diagnostic(self):
+        wsr = WorkspaceSharpnessRegularization(
+            embed_dim=2, rho=0.05, eta=1.0, warmup_steps=0, mode="sam"
+        )
+        Q = nn.Parameter(torch.tensor([[1.0], [0.0]]))
+        wsr.set_lagged_gradient(torch.tensor([[1.0], [1.0]]))
+
+        def loss_fn(q, _z_pred, _z_target):
+            return q[1, 0]
+
+        loss, info = wsr(Q, loss_fn, None, None, step=1)
+        assert info["wsr_grad_source"] == "lagged"
+        assert not loss.requires_grad
+        assert info["wsr_loss_perturbed"] > info["wsr_loss_current"]
+
+
 class TestWSRStiefelRetraction:
     """Tests for Stiefel retraction."""
 

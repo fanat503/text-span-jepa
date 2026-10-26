@@ -141,12 +141,21 @@ one another.
 
 ### What the paper still does not have
 
-No representation-quality number. `src/eval/probes.py` has a working
-`LinearProbe`, but nothing in `src/train.py` calls it, so **no run this repo can
-currently produce emits a downstream metric**. The paper's central claim is about
-representation quality, and that column cannot be filled by any config in
-`config/`. Wiring the probe in is a `src/train.py` change and belongs to that
-file's owner; it is flagged here rather than quietly papered over with a proxy.
+No representation-quality number, and **no primary downstream metric has
+been selected**. `src/eval/probes.py` contains a `LinearProbe`, but
+`train_probe.py` currently skips its `linear` branch, has no labeled benchmark
+loader, and writes no machine-readable probe result. No training loss, decoder
+accuracy, or geometry diagnostic is a substitute for downstream representation
+quality.
+
+For a general text-representation claim, the leading candidate is a frozen
+linear-probe suite on GLUE, reporting the canonical metric per task and a
+pre-registered task-balanced aggregate. If the intended contribution is instead
+sentence embeddings or retrieval, MTEB is a better task suite, but it is not a
+single linear-probe benchmark. The choice, pooling rule, official split use,
+model-selection protocol, and aggregate formula must be fixed before training;
+this is an owner decision. A separate post-training evaluator can produce the
+artifact without coupling evaluation to `src/train.py`.
 
 ---
 

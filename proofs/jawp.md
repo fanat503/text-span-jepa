@@ -62,7 +62,7 @@ This wastes predictor capacity on:
 3. **Exogenous features**: Pendharkar et al. (2026, arXiv:2606.30068) showed
    JEPA discards control-relevant features
 
-Anthropic (July 2026, arXiv:2607.15495): only ~10% of activation variance
+Gurnee et al. (July 2026, arXiv:2607.15495): only ~10% of activation variance
 is in J-space. This means ~90% of prediction capacity is wasted.
 
 ## Solution

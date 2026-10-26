@@ -248,11 +248,15 @@ preserve the column space of `Q + Δ`. For `QᵀΔ = 0` the projector moves by
 `QΔᵀ + ΔQᵀ`, whose Frobenius norm is exactly `√2‖Δ‖`; the point distance is
 `rho` for both retractions (0.0499874). "QR is not a retraction" was wrong.
 
-**Still true, separate:** `mode='sam'` returns a detached scalar
-(`Q.new_tensor`), so it is a diagnostic, not a training signal. No shipped
-config selects it (`wsr_mode` defaults to `gradient`). Making `sam`
-differentiable costs a second forward through the loss; that is a design
-decision, not part of this fix.
+**Mode semantics, verified.** The shipped `gradient` mode is a trainable
+first-order surrogate: the trainer captures a one-step-lagged `dL/dQ`, while
+the WSR projection still depends on the live workspace `Q`, so the loss
+backpropagates to the workspace. It penalizes tangent-gradient norm, not the
+finite-radius SAM objective. In contrast, `mode='sam'` evaluates
+`L(Q+Δ)-L(Q)` under `no_grad` and wraps the result in `Q.new_tensor`, so it is
+a diagnostic and carries no gradient. No shipped config selects it. Making
+SAM differentiable is a separate objective/design decision, not part of the QR
+sign fix.
 
 ---
 
