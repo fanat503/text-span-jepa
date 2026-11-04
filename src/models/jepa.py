@@ -728,6 +728,7 @@ class TextSpanJEPA(TrainingStateGuard):
         # h_online.sum() * 0.0 still requires grad through h_online.
         # Instead, create a proper zero loss that participates in the graph.
         _zero_loss = h_online.new_tensor(0.0, requires_grad=True)
+        wsr_z_pred = wsr_z_target = None  # inputs of the SAM-mode WSR loss
         if valid_mask.any():
             target_gathered, _, target_valid = TextSpanJPAPredictor._gather_masked(
                 h_target.detach(),
@@ -739,6 +740,7 @@ class TextSpanJEPA(TrainingStateGuard):
                 if self.jawp is not None:
                     span_preds_valid = span_preds[:, :min_cols][combined_valid]
                     target_gathered_valid = target_gathered[:, :min_cols][combined_valid]
+                    wsr_z_pred, wsr_z_target = span_preds_valid, target_gathered_valid
                     loss_span, jawp_info = self.jawp.compute_loss(
                         span_preds_valid,
                         target_gathered_valid,
@@ -852,7 +854,7 @@ class TextSpanJEPA(TrainingStateGuard):
         loss_rdc, rdc_info = self._rdc_loss(h_online, current_step)
 
         # WSR: sharpness penalty on the live workspace slice
-        loss_wsr, wsr_info = self._wsr_loss(h_online, current_step)
+        loss_wsr, wsr_info = self._wsr_loss(h_online, current_step, wsr_z_pred, wsr_z_target)
 
         total_loss = (
             self.config.lambda_span * loss_span
@@ -1113,12 +1115,22 @@ class TextSpanJEPA(TrainingStateGuard):
             ws_Q_rdc = self.jawp.workspace_Q[:, :k_active_rdc]  # live view
         return self.rdc(h_online, workspace_Q=ws_Q_rdc, step=current_step)
 
-    def _wsr_loss(self, h_online, current_step):
+    def _wsr_loss(self, h_online, current_step, z_pred=None, z_target=None):
         if self.wsr is None or self.jawp is None:
             return self._zero(h_online), {}
         k_active_wsr = int(self.jawp.active_k.item())
         ws_Q_wsr = self.jawp.workspace_Q[:, :k_active_wsr]  # live view: WSR shapes Q
-        return self.wsr(ws_Q_wsr, step=current_step)
+        if self.wsr.mode != "sam" or z_pred is None:
+            return self.wsr(ws_Q_wsr, step=current_step)
+        # SAM mode perturbs Q and compares the workspace prediction loss before
+        # and after; z_pred / z_target are detached so only Q receives gradient.
+        return self.wsr(
+            ws_Q_wsr,
+            loss_fn=lambda Q, zp, zt: F.mse_loss(zp @ Q, zt @ Q),
+            z_pred=z_pred.detach(),
+            z_target=z_target.detach(),
+            step=current_step,
+        )
 
     def get_num_params(self, non_embedding=False):
         """Total parameter count of the whole model.

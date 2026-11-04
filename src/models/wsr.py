@@ -560,42 +560,54 @@ class WorkspaceSharpnessRegularization(TrainingStateGuard):
         """
         _D, k = Q.shape
 
-        # Compute current loss
-        with torch.no_grad():
-            L_current = loss_fn(Q, z_pred, z_target).item() if loss_fn is not None else 0.0
+        # Current loss, kept in the autograd graph so that the sharpness term
+        # below back-propagates into Q (a loss built from .item() values is a
+        # constant and trains nothing).
+        L_current_t = loss_fn(Q, z_pred, z_target) if loss_fn is not None else Q.new_zeros(())
+        L_current = L_current_t.item()
 
-        # Get Euclidean gradient.  mode='sam' used to read Q.grad only, but
-        # src/train.py zero_grads with set_to_none=True after every step, so
-        # Q.grad was ALWAYS None here and the orthonormality proxy was
-        # silently substituted — for an orthonormal Q that proxy is exactly
-        # zero, so the documented L(Q+Δ)-L(Q) was never computed.
-        euclidean_grad, grad_source = self._resolve_euclidean_gradient(Q)
-        if grad_source == "unavailable":
-            self._report_missing_gradient(Q)
-            euclidean_grad = self._orthonormality_proxy(Q)
+        # Euclidean gradient dL/dQ.  With a loss_fn it is taken directly by
+        # autograd, exactly as in SAM, so no one-step-lagged copy is needed.
+        # Without one, fall back to the lagged/live gradient resolver.
+        if loss_fn is not None and Q.requires_grad:
+            (euclidean_grad,) = torch.autograd.grad(
+                L_current_t, Q, retain_graph=True, allow_unused=True
+            )
+            if euclidean_grad is None:
+                euclidean_grad = torch.zeros_like(Q)
+            euclidean_grad = euclidean_grad.detach()
+            grad_source = "autograd"
+        else:
+            euclidean_grad, grad_source = self._resolve_euclidean_gradient(Q)
+            if grad_source == "unavailable":
+                self._report_missing_gradient(Q)
+                euclidean_grad = self._orthonormality_proxy(Q)
 
         # Project onto Grassmann tangent space
         grad_grassmann = self._grassmann_gradient(Q, euclidean_grad)
         grad_norm = grad_grassmann.norm()
 
-        # Normalize and perturb
+        # Normalize and perturb.  The direction is a constant (detached), as in
+        # SAM; the perturbed point still depends on Q through Q + perturbation.
         if grad_norm > self.eps:
-            perturbation = self.rho * grad_grassmann / grad_norm
+            perturbation = (self.rho * grad_grassmann / grad_norm).detach()
             Q_perturbed = self._stiefel_retract(Q + perturbation)
         else:
-            Q_perturbed = Q.clone()
+            Q_perturbed = Q
 
-        # Compute perturbed loss
-        with torch.no_grad():
-            L_perturbed = (
-                loss_fn(Q_perturbed, z_pred, z_target).item() if loss_fn is not None else 0.0
-            )
+        # Perturbed loss, differentiable with respect to Q.
+        L_perturbed_t = (
+            loss_fn(Q_perturbed, z_pred, z_target) if loss_fn is not None else Q.new_zeros(())
+        )
+        L_perturbed = L_perturbed_t.item()
 
-        # Sharpness = loss increase under perturbation
-        sharpness = max(L_perturbed - L_current, 0.0)
+        # Sharpness = loss increase under perturbation.  The relu keeps the
+        # loss non-negative; its gradient is zero where the loss decreased.
+        sharpness_t = F.relu(L_perturbed_t - L_current_t)
+        sharpness = sharpness_t.item()
 
         # Loss
-        loss_tensor = Q.new_tensor(self.eta * warmup_factor * sharpness)
+        loss_tensor = self.eta * warmup_factor * sharpness_t
 
         # Decomposition
         #
