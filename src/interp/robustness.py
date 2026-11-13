@@ -251,7 +251,10 @@ def token_dropout(input_ids, intensity, pad_id=0, vocab_size=50304, generator=No
             reproducible for a run and the process-global stream is untouched.
     """
     gen = generator if generator is not None else rng.counter_generator("robustness.token_dropout")
-    mask = torch.rand_like(input_ids.float(), generator=gen) < intensity
+    random_values = torch.rand(
+        input_ids.shape, generator=gen, device=gen.device, dtype=torch.float32
+    ).to(input_ids.device)
+    mask = random_values < intensity
     return input_ids * (~mask).long() + pad_id * mask.long()
 
 
@@ -265,8 +268,18 @@ def token_substitution(input_ids, intensity, vocab_size=50304, generator=None):
         if generator is not None
         else rng.counter_generator("robustness.token_substitution")
     )
-    mask = torch.rand_like(input_ids.float(), generator=gen) < intensity
-    random_tokens = torch.randint_like(input_ids, 0, vocab_size, generator=gen)
+    random_values = torch.rand(
+        input_ids.shape, generator=gen, device=gen.device, dtype=torch.float32
+    ).to(input_ids.device)
+    mask = random_values < intensity
+    random_tokens = torch.randint(
+        0,
+        vocab_size,
+        input_ids.shape,
+        generator=gen,
+        device=gen.device,
+        dtype=input_ids.dtype,
+    ).to(input_ids.device)
     return input_ids * (~mask).long() + random_tokens * mask.long()
 
 
