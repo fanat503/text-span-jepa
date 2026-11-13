@@ -109,6 +109,25 @@ class TestWSRGrassmannGradient:
         assert norm < 1e-5, f"Q-aligned gradient should project to zero, got norm {norm}"
 
 
+class TestWSRTrainingSignal:
+    """The shipped gradient mode is a trainable surrogate of the sharpness."""
+
+    def test_gradient_mode_backpropagates_through_live_workspace(self):
+        wsr = WorkspaceSharpnessRegularization(
+            embed_dim=2, rho=0.05, eta=1.0, warmup_steps=0, mode="gradient"
+        )
+        Q = nn.Parameter(torch.tensor([[1.0], [0.0]]))
+        # The same one-step-lagged gradient the trainer supplies after backward.
+        wsr.set_lagged_gradient(torch.tensor([[1.0], [1.0]]))
+
+        loss, info = wsr(Q, step=1)
+        assert info["wsr_grad_source"] == "lagged"
+        assert loss.requires_grad
+        loss.backward()
+        assert Q.grad is not None
+        assert Q.grad.norm().item() > 0.0
+
+
 class TestWSRStiefelRetraction:
     """Tests for Stiefel retraction."""
 

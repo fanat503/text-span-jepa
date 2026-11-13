@@ -319,10 +319,13 @@ class GeometryDegradationTest:
                 # does not relabel the draws.
                 stream = i_level * 1_000_003 + trial
                 trial_gen = rng.generator_for(seed, "representation_geometry.noise", stream)
-                noisy = (
-                    representations
-                    + torch.randn_like(representations, generator=trial_gen) * noise_std
-                )
+                noise = torch.randn(
+                    representations.shape,
+                    generator=trial_gen,
+                    device=trial_gen.device,
+                    dtype=representations.dtype,
+                ).to(representations.device)
+                noisy = representations + noise * noise_std
                 geom = RepresentationGeometry.compute_all(noisy)
                 acc = probe_fn(noisy)
                 geom_list.append(geom)
